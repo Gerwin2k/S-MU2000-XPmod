@@ -35,6 +35,14 @@ void sh_port16_device::device_reset()
 
 u16 sh_port16_device::dr_r()
 {
+	// S-MU2000: 移植の突き合わせ用。MAME 側にも同じものを入れてある
+	if(::smu2000::g_port_trace && m_index == 2) {
+		const u16 ext = m_cpu->do_read_port16(m_index);
+		const u16 v = (~m_io & ~m_mask) ? u16((m_dr & m_io) | (ext & ~m_io)) : m_dr;
+		fprintf(::smu2000::g_port_trace, "R dr=%04x io=%04x mask=%04x ext=%04x -> %04x\n",
+		        m_dr, m_io, m_mask, ext, v);
+		return v;
+	}
 	if(~m_io & ~m_mask)
 		return (m_dr & m_io) | (m_cpu->do_read_port16(m_index) & ~m_io);
 	return m_dr;
@@ -43,6 +51,9 @@ u16 sh_port16_device::dr_r()
 void sh_port16_device::dr_w(offs_t, u16 data, u16 mem_mask)
 {
 	COMBINE_DATA(&m_dr);
+	if(::smu2000::g_port_trace && m_index == 2)
+		fprintf(::smu2000::g_port_trace, "W dr=%04x io=%04x data=%04x mask=%04x\n",
+		        m_dr, m_io, data, mem_mask);
 	m_dr &= ~m_mask;
 	if(m_io)
 		m_cpu->do_write_port16(m_index, m_dr & m_io, m_io);
@@ -56,6 +67,8 @@ u16 sh_port16_device::io_r()
 void sh_port16_device::io_w(offs_t, u16 data, u16 mem_mask)
 {
 	COMBINE_DATA(&m_io);
+	if(::smu2000::g_port_trace && m_index == 2)
+		fprintf(::smu2000::g_port_trace, "IO io=%04x data=%04x\n", m_io, data);
 	m_io &= ~m_mask;
 	if(m_io)
 		m_cpu->do_write_port16(m_index, m_dr & m_io, m_io);

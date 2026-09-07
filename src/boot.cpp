@@ -25,6 +25,9 @@ int main(int argc, char **argv)
 	const char *trace = nullptr;
 	bool with_reads = false;
 	const char *pctrace = nullptr;
+	const char *pchash = nullptr;
+	const char *porttrace = nullptr;
+	u64 pcskip = 0;
 	u64 pccount = 2000000;
 
 	for (int i = 2; i < argc; i++) {
@@ -32,6 +35,12 @@ int main(int argc, char **argv)
 			trace = argv[++i];
 		else if (!std::strcmp(argv[i], "--trace-pc") && i + 1 < argc)
 			pctrace = argv[++i];
+		else if (!std::strcmp(argv[i], "--hash-pc") && i + 1 < argc)
+			pchash = argv[++i];
+		else if (!std::strcmp(argv[i], "--trace-port") && i + 1 < argc)
+			porttrace = argv[++i];
+		else if (!std::strcmp(argv[i], "--pc-skip") && i + 1 < argc)
+			pcskip = std::strtoull(argv[++i], nullptr, 0);
 		else if (!std::strcmp(argv[i], "--pc-count") && i + 1 < argc)
 			pccount = std::strtoull(argv[++i], nullptr, 0);
 		else if (!std::strcmp(argv[i], "--reads"))
@@ -66,11 +75,18 @@ int main(int argc, char **argv)
 
 	mu.reset();
 
-	std::FILE *pf = nullptr;
+	std::FILE *pf = nullptr, *hf = nullptr;
 	if (pctrace) {
 		pf = std::fopen(pctrace, "w");
 		smu2000::g_pc_trace = pf;
 		smu2000::g_pc_trace_left = pccount;
+		smu2000::g_pc_skip = pcskip;
+	}
+	if (porttrace)
+		smu2000::g_port_trace = std::fopen(porttrace, "w");
+	if (pchash) {
+		hf = std::fopen(pchash, "w");
+		smu2000::g_pc_hash = hf;
 	}
 	std::printf("リセット後  PC=%08x\n", mu.cpu().pc());
 
@@ -82,6 +98,8 @@ int main(int argc, char **argv)
 		            (unsigned long long)mu.cpu().total_cycles(), mu.cpu().pc());
 	}
 
+	if (hf)
+		std::fclose(hf);
 	if (pf)
 		std::fclose(pf);
 	if (tf)

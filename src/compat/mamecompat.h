@@ -72,7 +72,9 @@ struct state_entry_dummy
 
 // デバッガのフック。デバッガを持たないので何もしない
 // MAME はここでデバッガに命令を見せていた。こちらは PC の追跡にだけ使う
-#define debugger_instruction_hook(pc) 	do { if (::smu2000::g_pc_trace) ::smu2000::pc_trace(pc); } while(0)
+#define debugger_instruction_hook(pc) \
+	do { if (::smu2000::g_pc_trace || ::smu2000::g_pc_hash) \
+	         ::smu2000::pc_trace(pc, regs_text()); } while(0)
 #define debugger_exception_hook(...)   do {} while(0)
 #define debugger_wait_hook(...)        do {} while(0)
 #define debugger_privilege_hook(...)   do {} while(0)
@@ -83,9 +85,12 @@ namespace smu2000 {
 extern bool g_verbose;   // 既定では黙る。デバッグ時だけ true にする
 
 // 移植の突き合わせ用。MAME の debugger の trace と同じものを出す
-extern std::FILE *g_pc_trace;
+extern std::FILE *g_pc_trace;      // 生の PC 列
 extern u64        g_pc_trace_left;
-void pc_trace(u32 pc);
+extern u64        g_pc_skip;       // 頭を飛ばす命令数
+extern std::FILE *g_pc_hash;       // ブロックごとに畳んだ値
+extern std::FILE *g_port_trace;    // ポート E（LCD 用）の出入り
+void pc_trace(u32 pc, const char *regs);
 }
 
 #define logerror(...)                                            \
@@ -349,8 +354,28 @@ public:
 	template <typename O> explicit devcb_base(O &) {}
 	template <typename O> devcb_base(O &, def_t d) : m_default(d) {}
 
-	// MAME は cb.bind().set(...) の形で繋ぐ。ここでは自分を返して受け流す
-	devcb_base &bind() { return *this; }
+	// MAME は cb.bind().set(...) の形で繋ぐ。取り込んだソースは
+	//   auto read_porte() { return m_read_port16[2].bind(); }
+	// のように auto で受けるので、参照を返すとコピーされて設定が捨てられる。
+	// 元を指す小さな仲介を返す
+	class binder
+	{
+	public:
+		explicit binder(devcb_base &t) : m_t(&t) {}
+		template <typename F> binder &set(F &&f) { m_t->set(std::forward<F>(f)); return *this; }
+		template <typename V> binder &set_constant(V v)
+		{
+			m_t->set([v]() { return R(v); });
+			return *this;
+		}
+		template <typename... X> binder &append(X &&...)     { return *this; }
+		template <typename... X> binder &set_inputline(X &&...) { return *this; }
+		binder &bind() { return *this; }
+	private:
+		devcb_base *m_t;
+	};
+
+	binder bind() { return binder(*this); }
 	// MAME の書き手は (offset, data, mem_mask) を全部受けるものと、
 	// data だけ受けるものの両方が許される。後者はここで合わせる
 	template <typename F> devcb_base &set(F &&f)
