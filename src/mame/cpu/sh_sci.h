@@ -52,6 +52,10 @@ public:
 	u8 scmr_r();
 
 	void do_rx_w(int state);
+
+	// S-MU2000: firmware が MIDI の受信を有効にしたか。
+	// 起動が終わるまで送りつけないための目印に使う
+	bool rx_enabled() const { return (m_scr & SCR_RE) != 0; }
 	void do_clk_w(int state);
 
 	u64 internal_update(u64 current_time);

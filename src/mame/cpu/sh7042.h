@@ -28,6 +28,8 @@ public:
 
 	template<int Port> auto read_adc() { return m_read_adc[Port].bind(); }
 	template<int Sci> void sci_rx_w(int state) {  m_sci[Sci]->do_rx_w(state); }
+	// S-MU2000: 組み立て側から SCI の状態を見るため
+	sh_sci_device *sci(int i) { return m_sci[i].lookup(); }
 	template<int Sci> void sci_clk_w(int state) { m_sci[Sci]->do_clk_w(state); }
 	template<int Sci> auto write_sci_tx() { return m_sci_tx[Sci].bind(); }
 	template<int Sci> auto write_sci_clk() { return m_sci_clk[Sci].bind(); }

@@ -271,6 +271,11 @@ void mu2000::reset()
 
 void mu2000::run_cycles(u64 n)
 {
+	// 前回はみ出した分を先に返す
+	if (m_overrun >= n) { m_overrun -= n; return; }
+	n -= m_overrun;
+	m_overrun = 0;
+
 	// MAME ではスケジューラがやっていたこと。周辺の予定を跨がないように区切る。
 	// MAME は予定の時刻ちょうどで CPU を止めてタイマを鳴らし、そのあと再開する。
 	// 周辺がレジスタ書き込みに反応して新しい予定を入れた場合は、CPU が
@@ -318,7 +323,13 @@ void mu2000::run_cycles(u64 n)
 				break;
 			continue;
 		}
-		n -= u64(done) < n ? u64(done) : n;
+		// 命令の途中では止まれないので、頼まれた数より少し多く走ることがある。
+		// 出た分は捨てずに次の呼び出しから引く（捨てると CPU が音より速くなる）
+		if (u64(done) >= n) {
+			m_overrun += u64(done) - n;
+			n = 0;
+		} else
+			n -= u64(done);
 	}
 }
 

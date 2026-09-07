@@ -98,9 +98,13 @@ void pc_hash(u32 pc, u64 regs);        // 畳み込みだけ。安い
 void pc_trace(u32 pc, const char *regs);
 }
 
-#define logerror(...)                                            \
-	do {                                                         \
-		if (::smu2000::g_verbose) std::fprintf(stderr, __VA_ARGS__); \
+// MAME の logerror は書式を自前で組み立てるので %s に std::string を渡せる。
+// 素の fprintf に流すと壊れるため（swp30 の describe() がこれ）、
+// util::string_format を通す
+#define logerror(...)                        \
+	do {                                     \
+		if (::smu2000::g_verbose)              \
+			::smu2000::log_fmt(__VA_ARGS__);     \
 	} while(0)
 
 // ---- メモリ空間 -------------------------------------------------------------
@@ -214,9 +218,13 @@ inline std::string string_format(const std::string &fmt, A... args)
 	return string_format(fmt.c_str(), args...);
 }
 
-// util::stream_format はデバッグ表示用。中身は要らないが呼び出しは残っている
+// util::stream_format は書式化して stream に流す。swp30 の describe() が
+// これで発音中のサンプル位置や形式を組み立てているので、空実装にはできない
 template <typename S, typename... A>
-inline void stream_format(S &, const char *, A...) {}
+inline void stream_format(S &out, const char *fmt, A... args)
+{
+	out << string_format(fmt, args...);
+}
 
 // util::sext(value, bits) : bits ビットの符号付き値として符号拡張する
 // util::make_bitmask<T>(n) : 下位 n ビットが立ったマスク

@@ -143,9 +143,12 @@ int main(int argc, char **argv)
 	const std::string dir = argv[1], mid = argv[2], wav = argv[3];
 	double seconds = 0.0;
 	const char *swptrace = nullptr;
+	double boot = -1.0;     // 負なら firmware が受信を有効にするまで待つ
 	for (int i = 4; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--trace-swp") && i + 1 < argc)
 			swptrace = argv[++i];
+		else if (!std::strcmp(argv[i], "--boot") && i + 1 < argc)
+			boot = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "-v"))
 			smu2000::g_verbose = true;
 		else
@@ -174,18 +177,38 @@ int main(int argc, char **argv)
 
 	mu.reset();
 
-	// 起動を待つ。実機も電源投入から数秒は音を受け付けない
-	const double boot = 8.0;
 	if (seconds <= 0.0)
 		seconds = (events.empty() ? 0.0 : events.back().time) + 3.0;
 
 	const u32 rate = 44100;
-	const size_t total = size_t((boot + seconds) * rate);
 	std::vector<s16> pcm;
+
+	// 起動を待つ。実機も電源投入から数秒は MIDI を受け付けない。
+	// 待たずに流すと曲頭のリセットや音色指定が捨てられ、全パートが
+	// 初期音色（ピアノ）で鳴り、発音数も足りなくなって音が抜ける。
+	// firmware が受信を有効にした時点を印にする
+	if (boot < 0.0) {
+		const size_t limit = size_t(30.0 * rate);
+		size_t i = 0;
+		for (; i < limit && !mu.midi_ready(); i++) {
+			s32 l = 0, r = 0;
+			mu.run_sample(l, r);
+			pcm.push_back(s16(std::clamp(l * 32768 / mu2000::DAC_FULL_SCALE, -32768, 32767)));
+			pcm.push_back(s16(std::clamp(r * 32768 / mu2000::DAC_FULL_SCALE, -32768, 32767)));
+		}
+		boot = double(i) / rate;
+		if (i >= limit) {
+			std::fprintf(stderr, "起動を待ったが MIDI 受信が有効にならなかった\n");
+			return 1;
+		}
+		std::printf("起動に %.2f 秒。ここから MIDI を流す\n", boot);
+	}
+
+	const size_t total = size_t((boot + seconds) * rate);
 	pcm.reserve(total * 2);
 
 	size_t next = 0;
-	for (size_t i = 0; i < total; i++) {
+	for (size_t i = pcm.size() / 2; i < total; i++) {
 		const double t = double(i) / rate - boot;
 		while (next < events.size() && events[next].time <= t) {
 			for (u8 b : events[next].bytes)
@@ -213,6 +236,10 @@ int main(int argc, char **argv)
 		            mu.swpm().m_dbg_awm_max, mu.swpm().m_dbg_meg_max, mu.swpm().m_dbg_adc_max),
 		std::printf("        MEG入力=%d  MELO=%d\n",
 		            mu.swpm().m_dbg_megin_max, mu.swpm().m_dbg_melo_max);
+
+	std::printf("CPU %llu サイクル / %zu サンプル = %.3f（あるべき値 %.3f）\n",
+	            (unsigned long long)mu.cpu().total_cycles(), total,
+	            double(mu.cpu().total_cycles()) / total, 28000000.0 / rate);
 
 	write_wav(wav, pcm, rate);
 	std::printf("書き出した: %s（%.1f 秒）\n", wav.c_str(), double(total) / rate);

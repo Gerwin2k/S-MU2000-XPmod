@@ -41,6 +41,10 @@ public:
 	// n サイクルぶん進める。周辺のイベントはこの中で挟む
 	void run_cycles(u64 n);
 
+	// MIDI IN A の受信が有効になったか。firmware が起動を終えた印。
+	// これを待たずに流すと、曲頭のリセットや音色指定が全部捨てられる
+	bool midi_ready() const { return m_cpu->sci(0)->rx_enabled(); }
+
 	// MIDI IN A に 1 バイト送る。実機と同じく 31250bps の直列で流れる
 	void midi_in(u8 byte) { m_midi_queue.push_back(byte); }
 	bool midi_idle() const { return m_midi_bit < 0 && m_midi_queue.empty(); }
@@ -104,6 +108,8 @@ private:
 
 	// 44.1kHz 1 サンプルあたりの CPU サイクル。端数は繰り越す
 	u64 m_cycle_debt = 0;
+	// 命令の途中で止まれず走りすぎた分。次の呼び出しから引く
+	u64 m_overrun = 0;
 
 	// MIDI IN A。バイトを 31250bps の直列に崩して RX 線に流す
 	void midi_step(u64 now);
