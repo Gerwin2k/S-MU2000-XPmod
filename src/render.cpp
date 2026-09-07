@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include <windows.h>
+
 namespace {
 
 void write_wav(const std::string &path, const std::vector<s16> &pcm, u32 rate)
@@ -156,6 +158,11 @@ int main(int argc, char **argv)
 	std::printf("CPU %llu サイクル / %zu サンプル = %.3f（あるべき値 %.3f）\n",
 	            (unsigned long long)mu.cpu().total_cycles(), total,
 	            double(mu.cpu().total_cycles()) / total, 28000000.0 / rate);
+
+	std::printf("実行ループ %llu 周（1 サンプルあたり %.2f 周）、"
+	            "タイマ %llu 回、周辺イベント %llu 回\n",
+	            (unsigned long long)mu.m_loops, double(mu.m_loops) / total,
+	            (unsigned long long)mu.m_timer_fires, (unsigned long long)mu.m_event_fires);
 
 	mu.print_swp_widths();
 

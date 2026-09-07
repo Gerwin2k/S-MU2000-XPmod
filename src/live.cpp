@@ -228,6 +228,8 @@ int main(int argc, char **argv)
 
 	u64 produced = 0;
 	u64 write_errors = 0;
+	// 1 枚を作るのにかかった時間。再生時間を超えた回数が間に合っていない回数
+	u64 late = 0, worst_ticks = 0;
 	// 生成にかけた時間を測る。実時間に対する割合が余力の目安になる
 	LARGE_INTEGER freq, t0, t1;
 	QueryPerformanceFrequency(&freq);
@@ -259,7 +261,10 @@ int main(int argc, char **argv)
 		}
 
 		QueryPerformanceCounter(&t1);
-		busy_ticks += u64(t1.QuadPart - t0.QuadPart);
+		const u64 one = u64(t1.QuadPart - t0.QuadPart);
+		busy_ticks += one;
+		if (one > worst_ticks) worst_ticks = one;
+		if (double(one) / freq.QuadPart > double(frames) / RATE) late++;
 
 		if (wav)
 			rec.insert(rec.end(), out, out + size_t(frames) * 2);
@@ -276,6 +281,9 @@ int main(int argc, char **argv)
 			std::printf("  %.0f 秒経過  MIDI %llu バイト  CPU 使用率 %.1f%%%s\n",
 			            audio, (unsigned long long)g_midi_bytes.load(), 100.0 * busy / audio,
 			            write_errors ? "  ※書き込み失敗あり" : "");
+			std::printf("     間に合わなかった枚 %llu、最悪 %.1f ms（1 枚は %.1f ms）\n",
+			            (unsigned long long)late, 1000.0 * worst_ticks / freq.QuadPart,
+			            1000.0 * frames / RATE);
 		}
 	}
 

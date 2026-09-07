@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+
 namespace {
 
 // MIDI は 31250bps。28MHz の CPU から見て 1 ビット = 896 サイクル
@@ -308,12 +309,14 @@ void mu2000::run_cycles(u64 n)
 	// abort_timeslice() でその場で戻ってくるので、ここで組み直す
 	int idle = 0;
 	while (n) {
+		m_loops++;
 		const u64 now = m_cpu->total_cycles();
 		m_machine.set_cycles(now);
 
 		// MAME のスケジューラが持っていたタイマ（SCI4 の送受信など）
 		const u64 tmr = m_machine.next_timer_cycles();
 		if (tmr <= now) {
+			m_timer_fires++;
 			m_machine.run_timers(now);
 			m_machine.set_cycles(now);
 			continue;
@@ -322,6 +325,7 @@ void mu2000::run_cycles(u64 n)
 		const u64 ev  = m_cpu->event_cycles();
 
 		if (ev && now >= ev) {
+			m_event_fires++;
 			m_cpu->event_tick();
 			if (m_cpu->event_cycles() == ev && ++idle > 2)
 				break;          // 予定が動かない。放っておくと止まる

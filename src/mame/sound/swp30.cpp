@@ -3156,7 +3156,9 @@ void swp30_device::meg_state::step()
 		m_memr_active[m_delay_2] = false;
 	}
 
-	u64 opcode = m_swp->m_program_cache.read_qword(m_pc);
+	// S-MU2000: MAME はプログラムをアドレス空間ごしに読んでいたが、実体は
+	// この m_program そのもの。1 秒に 3390 万回通る場所なので直に読む
+	const u64 opcode = m_program[m_pc];
 
 	int sm = BIT(opcode, 0x04, 6);
 	int sr = BIT(opcode, 0x0b, 7);
@@ -3300,13 +3302,14 @@ void swp30_device::meg_state::step()
 	case 1: {
 		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (BIT(opcode, 0x21) ? m_ram_index : 0) - m_sample_counter);
 		if(address != 0xffffffff)
-			m_swp->m_reverb_cache.write_word(address, revram_encode(m_ram_write));
+			// S-MU2000: リバーブ RAM も実体は素の配列。18bit ぶんで折り返す
+			m_swp->m_reverb_ram[address & 0x3ffff] = revram_encode(m_ram_write);
 		break;
 	}
 	case 2: {
 		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (BIT(opcode, 0x21) ? m_ram_index : 0) - m_sample_counter);
 		if(address != 0xffffffff) {
-			u16 val = m_swp->m_reverb_cache.read_word(address);
+			const u16 val = m_swp->m_reverb_ram[address & 0x3ffff];
 			m_memr_value[m_delay_2] = revram_decode(val);
 			m_memr_active[m_delay_2] = true;
 		}
@@ -3315,7 +3318,7 @@ void swp30_device::meg_state::step()
 	case 3: {
 		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (BIT(opcode, 0x21) ? m_ram_index : 0) - m_sample_counter + 1);
 		if(address != 0xffffffff) {
-			u16 val = m_swp->m_reverb_cache.read_word(address);
+			const u16 val = m_swp->m_reverb_ram[address & 0x3ffff];
 			m_memr_value[m_delay_2] = revram_decode(val);
 			m_memr_active[m_delay_2] = true;
 		}

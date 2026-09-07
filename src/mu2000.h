@@ -120,6 +120,13 @@ private:
 	// 命令の途中で止まれず走りすぎた分。次の呼び出しから引く
 	u64 m_overrun = 0;
 
+public:
+	// 速さの手掛かり。1 サンプルあたり実行ループを何周したか
+	u64 m_loops = 0, m_timer_fires = 0, m_event_fires = 0;
+	// 区間ごとの所要時間（QueryPerformanceCounter の刻み）
+	u64 m_t_cpu = 0, m_t_swpm = 0, m_t_swps = 0;
+private:
+
 	// MIDI IN A。バイトを 31250bps の直列に崩して RX 線に流す
 	void midi_step(u64 now);
 	std::deque<u8> m_midi_queue;

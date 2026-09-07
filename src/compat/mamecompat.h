@@ -618,7 +618,10 @@ public:
 		return m_timers.back().get();
 	}
 
-	// 次に鳴るタイマのサイクル数。予定がなければ ~0
+	// 次に鳴るタイマのサイクル数。予定がなければ ~0。
+	// 実行ループが毎周ここを通るので覚えた値を返す形も試したが、
+	// 速くならないうえに音が変わった（出力がビット単位で一致しなくなった）。
+	// 数え直す方が安い。タイマは 8 本しかない
 	u64 next_timer_cycles() const
 	{
 		u64 best = ~u64(0);
@@ -627,6 +630,7 @@ public:
 				best = t->expire_cycles();
 		return best;
 	}
+
 
 	// now までに来ているタイマを鳴らす
 	void run_timers(u64 now)
