@@ -16,12 +16,8 @@
 #include "emu.h"
 #include "sh2.h"
 
-#include "sh2fe.h"
-#include "sh_dasm.h"
 
-#include "cpu/drcumlsh.h"
 
-#include "endianness.h"
 
 #include <bit>
 
@@ -33,12 +29,9 @@ constexpr int SH2_INT_15 = 15;
 sh2_device::sh2_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock, int cpu_type, address_map_constructor internal_map, int addrlines, uint32_t address_mask)
 	: sh_common_execution(mconfig, type, tag, owner, clock, ENDIANNESS_BIG, internal_map)
 	, m_program_config("program", ENDIANNESS_BIG, 32, addrlines, 0, internal_map)
-	, m_decrypted_program_config("decrypted_opcodes", ENDIANNESS_BIG, 32, addrlines, 0)
-	, m_drcfe(nullptr)
 {
 	m_cpu_type = cpu_type;
 	m_am = address_mask;
-	m_isdrc = allow_drc();
 }
 
 sh2_device::~sh2_device()
@@ -289,12 +282,6 @@ void sh2_device::execute_one_f000(uint16_t opcode)
 
 void sh2_device::execute_run()
 {
-	if (m_isdrc)
-	{
-		execute_run_drc();
-		return;
-	}
-
 	if (m_cpu_off)
 	{
 		debugger_wait_hook();
@@ -350,17 +337,10 @@ void sh2_device::execute_set_input(int irqline, int state)
 
 			m_sh2_state->pending_nmi = 1;
 
-			if (m_isdrc)
-			{
-				sh2_exception("Set IRQ line", 16);
-			}
+			if (m_sh2_state->m_delay)
+				m_test_irq = 1;
 			else
-			{
-				if (m_sh2_state->m_delay)
-					m_test_irq = 1;
-				else
-					check_pending_irq("sh2_set_nmi_line");
-			}
+				check_pending_irq("sh2_set_nmi_line");
 		}
 	}
 	else
@@ -380,17 +360,10 @@ void sh2_device::execute_set_input(int irqline, int state)
 			LOG("SH-2 asserted irq #%d\n", irqline);
 			m_sh2_state->pending_irq |= 1 << irqline;
 
-			if (m_isdrc)
-			{
+			if (m_sh2_state->m_delay)
 				m_test_irq = 1;
-			}
 			else
-			{
-				if (m_sh2_state->m_delay)
-					m_test_irq = 1;
-				else
-					check_pending_irq("sh2_set_irq_line");
-			}
+				check_pending_irq("sh2_set_irq_line");
 		}
 	}
 }
@@ -433,47 +406,22 @@ void sh2_device::sh2_exception_internal(const char *message, int irqline, int ve
 {
 	debugger_exception_hook(vector);
 
-	if (m_isdrc)
-	{
-		m_sh2_state->evec = read_long(m_sh2_state->vbr + vector * 4);
-		m_sh2_state->evec &= m_am;
-		m_sh2_state->irqsr = m_sh2_state->sr;
+	m_sh2_state->r[15] -= 4;
+	write_long(m_sh2_state->r[15], m_sh2_state->sr);     /* push SR onto stack */
+	m_sh2_state->r[15] -= 4;
+	write_long(m_sh2_state->r[15], m_sh2_state->pc);     /* push PC onto stack */
 
-		/* set I flags in SR */
-		if (irqline > SH2_INT_15)
-			m_sh2_state->sr = m_sh2_state->sr | SH_I;
-		else
-			m_sh2_state->sr = (m_sh2_state->sr & ~SH_I) | (irqline << 4);
-
-//  printf("sh2_exception [%s] irqline %x evec %x save SR %x new SR %x\n", message, irqline, m_sh2_state->evec, m_sh2_state->irqsr, m_sh2_state->sr);
-	}
+	/* set I flags in SR */
+	if (irqline > SH2_INT_15)
+		m_sh2_state->sr = m_sh2_state->sr | SH_I;
 	else
-	{
-		m_sh2_state->r[15] -= 4;
-		write_long(m_sh2_state->r[15], m_sh2_state->sr);     /* push SR onto stack */
-		m_sh2_state->r[15] -= 4;
-		write_long(m_sh2_state->r[15], m_sh2_state->pc);     /* push PC onto stack */
+		m_sh2_state->sr = (m_sh2_state->sr & ~SH_I) | (irqline << 4);
 
-		/* set I flags in SR */
-		if (irqline > SH2_INT_15)
-			m_sh2_state->sr = m_sh2_state->sr | SH_I;
-		else
-			m_sh2_state->sr = (m_sh2_state->sr & ~SH_I) | (irqline << 4);
-
-		/* fetch PC */
-		m_sh2_state->pc = read_long(m_sh2_state->vbr + vector * 4) & m_am;
-	}
+	/* fetch PC */
+	m_sh2_state->pc = read_long(m_sh2_state->vbr + vector * 4) & m_am;
 
 	if (m_sh2_state->sleep_mode == 1)
 		m_sh2_state->sleep_mode = 2;
-}
-
-/////////
-// DRC
-
-const sh2_device::opcode_desc* sh2_device::get_desclist(offs_t pc)
-{
-	return m_drcfe->describe_code(pc);
 }
 
 // S-MU2000: ここから末尾までの 295 行を削除した。

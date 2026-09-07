@@ -93,8 +93,8 @@ enum
 	SH4_R8, SH4_R9, SH4_R10, SH4_R11, SH4_R12, SH4_R13, SH4_R14, SH4_R15, SH4_EA, SH4_SP
 };
 
-// S-MU2000: cpu_device をやめ、素のクラスにした
-class sh_common_execution
+// S-MU2000: cpu_device をやめ、互換層の device_t を継承する
+class sh_common_execution : public device_t
 {
 
 public:
@@ -156,6 +156,34 @@ public:
 
 	internal_sh2_state *m_sh2_state;
 
+	// MAME では device_state_interface が持っていた。周辺がログに出すのに使う
+	u32 pc() const { return m_sh2_state->pc; }
+
+	// S-MU2000: 経過サイクル。
+	// MAME は machine().time() から逆算していたが、こちらはホストの時計を持たない。
+	// CPU が自分で数え、周辺のタイマ（MTU / CMT）はこの値を基準に動く。
+	virtual void execute_run() = 0;
+
+	// 呼び出し側はこれで走らせる。要求より少し多く/少なく走ることがある
+	void run_cycles(int cycles)
+	{
+		m_sh2_state->icount = cycles;
+		m_cycles_this_run   = cycles;
+		execute_run();
+		m_total_cycles    += cycles - m_sh2_state->icount;
+		m_cycles_this_run  = 0;
+		m_sh2_state->icount = 0;
+	}
+
+	// 走行中に呼ばれても正しい値になる（MAME の total_cycles と同じ勘定）
+	u64 total_cycles() const
+	{
+		return m_total_cycles + (m_cycles_this_run - m_sh2_state->icount);
+	}
+
+	u64 m_total_cycles    = 0;
+	int m_cycles_this_run = 0;
+
 	virtual uint8_t read_byte(offs_t offset) = 0;
 	virtual uint16_t read_word(offs_t offset) = 0;
 	virtual uint32_t read_long(offs_t offset) = 0;
@@ -197,6 +225,10 @@ protected:
 
 	// S-MU2000: MAME のデバイス生成の引数を落とした
 	sh_common_execution() = default;
+
+	// MAME は DRC が生成したコードの近くに置くため drc_cache から取っていた。
+	// DRC を使わないので、ただのメンバでよい
+	internal_sh2_state m_sh2_state_storage{};
 
 	void ADD(uint32_t m, uint32_t n);
 	void ADDI(uint32_t i, uint32_t n);

@@ -22,7 +22,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cmath>
+#include <type_traits>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -55,7 +57,17 @@ using std::int8_t;   using std::int16_t;  using std::int32_t;  using std::int64_
 
 #define NAME(x) x
 #define save_item(...)      do {} while(0)
-#define state_add(...)      (*this)
+// state_add(...) はデバッガに見せるレジスタの登録。
+// .formatstr("%08X").callimport() のように連ねて呼ばれるので、受け流す器を返す
+struct state_entry_dummy
+{
+	template <typename... A> state_entry_dummy &formatstr(A &&...)  { return *this; }
+	template <typename... A> state_entry_dummy &callimport(A &&...) { return *this; }
+	template <typename... A> state_entry_dummy &callexport(A &&...) { return *this; }
+	template <typename... A> state_entry_dummy &noshow(A &&...)     { return *this; }
+	template <typename... A> state_entry_dummy &mask(A &&...)       { return *this; }
+};
+#define state_add(...)      (::state_entry_dummy{})
 
 namespace smu2000 {
 extern bool g_verbose;   // 既定では黙る。デバッグ時だけ true にする
@@ -157,15 +169,25 @@ constexpr u32 BIT(u64 v, int n)          { return u32((v >> n) & 1); }
 constexpr u64 BIT(u64 v, int n, int len) { return (v >> n) & ((u64(1) << len) - 1); }
 
 namespace util {
-// util::string_format は printf 形式。ログ用途にしか使われていない
+// util::string_format は printf 形式。ログ用途にしか使われていない。
+// MAME 版は std::string を %s に直接渡せるので、そこだけ真似ておく
+template <typename T> inline T          fmt_arg(T v)                  { return v; }
+inline                       const char *fmt_arg(const std::string &v) { return v.c_str(); }
+
 template <typename... A>
 inline std::string string_format(const char *fmt, A... args)
 {
-	char buf[512];
-	std::snprintf(buf, sizeof(buf), fmt, args...);
+	char buf[1024];
+	std::snprintf(buf, sizeof(buf), fmt, fmt_arg(args)...);
 	return std::string(buf);
 }
 inline std::string string_format(const char *fmt) { return std::string(fmt); }
+inline std::string string_format(const std::string &fmt) { return fmt; }
+template <typename... A>
+inline std::string string_format(const std::string &fmt, A... args)
+{
+	return string_format(fmt.c_str(), args...);
+}
 
 // util::stream_format はデバッグ表示用。中身は要らないが呼び出しは残っている
 template <typename S, typename... A>
@@ -185,6 +207,15 @@ constexpr s64 sext(u64 v, int bits)
 }
 }
 
+namespace smu2000 {
+template <typename... A>
+inline void log_fmt(A &&...args)
+{
+	if (!g_verbose) return;
+	std::fputs(util::string_format(std::forward<A>(args)...).c_str(), stderr);
+}
+}
+
 // ---- MAME のデバイス生成まわり ----------------------------------------------
 //
 // MAME のデバイスは machine_config に登録して生成する。ここでは実体を直接
@@ -196,9 +227,20 @@ constexpr s64 sext(u64 v, int bits)
 // （save_item と logerror はマクロで無効化済み）。
 class running_machine;
 
+class machine_config;
+
+// デバイス種別。tag での検索をしないので中身は空でよい
+struct device_type_dummy {};
+using device_type = const device_type_dummy *;
+
 class device_t
 {
 public:
+	device_t() = default;
+	// MAME の device_t(mconfig, type, tag, owner, clock)。
+	// 使うのは clock だけ。tag での結線はしないので owner も型も捨てる
+	device_t(const machine_config &, device_type, const char *, device_t *, u32 clock)
+		: m_clock(clock) {}
 	virtual ~device_t() = default;
 
 	u32 clock() const { return m_clock; }
@@ -210,15 +252,14 @@ public:
 	// MAME が呼ぶ初期化。実体側は素直に呼べばよい
 	virtual void device_start() {}
 	virtual void device_reset() {}
+	// サブデバイスの生成。こちらは実体を直に作るので中身は使わない
+	virtual void device_add_mconfig(machine_config &) {}
 
 private:
 	u32 m_clock = 0;
 	running_machine *m_machine = nullptr;
 };
 
-class machine_config;
-struct device_type_dummy {};
-using device_type = const device_type_dummy *;
 struct address_map_constructor {};
 struct address_map {};
 
@@ -233,6 +274,8 @@ public:
 	T &operator*()  const { return *m_target; }
 	operator T *()  const { return m_target; }
 	T *target() const { return m_target; }
+	// MAME は tag 解決前でも lookup() で実体を取れる。こちらは同じもの
+	T *lookup() const { return m_target; }
 	bool found() const { return m_target != nullptr; }
 	void set(T *p) { m_target = p; }
 	// MAME は tag（文字列）で結線するが、こちらは実体を直接渡すので何もしない
@@ -242,16 +285,138 @@ private:
 };
 template <typename T> using optional_device = required_device<T>;
 
+// required_device_array<T,N> は同種のサブデバイスをまとめて持つもの
+template <typename T, int N>
+class required_device_array
+{
+public:
+	template <typename... A> required_device_array(A &&...) {}
+	required_device<T> &operator[](int i) { return m_devs[i]; }
+	const required_device<T> &operator[](int i) const { return m_devs[i]; }
+private:
+	std::array<required_device<T>, N> m_devs;
+};
+template <typename T, int N> using optional_device_array = required_device_array<T, N>;
+
+// MAME のコールバック（devcb）。外部との入出力を関数で受ける。
+// MU2000 では LED ラッチやスイッチ走査、SCI の送信線がこれを通る。
+//
+// 実際の呼ばれ方を数えて型を決めた:
+//   読み  cb()                      引数なし
+//   書き  cb(offset, data, mem_mask) ポート
+//   線    cb(state)                  SCI の TX / CLK
+//
+// 未接続のときに返す値は MAME 同様に構築時に決める（ポートは 0xffff など）。
+template <typename R, typename... A>
+class devcb_base
+{
+public:
+	using fn = std::function<R(A...)>;
+	// void を配列やメンバに持てないので、その場合だけ char で場所取りする
+	using def_t = std::conditional_t<std::is_void_v<R>, char, R>;
+
+	devcb_base() = default;
+	template <typename O> explicit devcb_base(O &) {}
+	template <typename O> devcb_base(O &, def_t d) : m_default(d) {}
+
+	// MAME は cb.bind().set(...) の形で繋ぐ。ここでは自分を返して受け流す
+	devcb_base &bind() { return *this; }
+	template <typename F> devcb_base &set(F &&f) { m_fn = std::forward<F>(f); return *this; }
+	template <typename F> devcb_base &operator=(F &&f) { return set(std::forward<F>(f)); }
+	void resolve() {}
+	template <typename... X> void resolve_safe(X &&...) {}
+	bool isnull() const { return !m_fn; }
+
+	R operator()(A... a) const
+	{
+		if constexpr (std::is_void_v<R>) { if (m_fn) m_fn(a...); }
+		else                             { return m_fn ? m_fn(a...) : m_default; }
+	}
+
+	// 同じ型を N 個並べたもの（ポートのように複数ある場合）。
+	// MAME は array(*this) / array(*this, 既定値) で作る
+	template <int N> class array
+	{
+	public:
+		template <typename O> explicit array(O &) {}
+		template <typename O> array(O &, def_t d) { for (auto &e : m_a) e.set_default(d); }
+		devcb_base       &operator[](int i)       { return m_a[i]; }
+		const devcb_base &operator[](int i) const { return m_a[i]; }
+	private:
+		std::array<devcb_base, N> m_a;
+	};
+
+	void set_default(def_t d) { m_default = d; }
+
+private:
+	fn    m_fn;
+	def_t m_default{};
+};
+
+using devcb_read8   = devcb_base<u8>;
+using devcb_read16  = devcb_base<u16>;
+using devcb_read32  = devcb_base<u32>;
+using devcb_write8  = devcb_base<void, offs_t, u8,  u8>;
+using devcb_write16 = devcb_base<void, offs_t, u16, u16>;
+using devcb_write32 = devcb_base<void, offs_t, u32, u32>;
+using devcb_read_line  = devcb_base<int>;
+using devcb_write_line = devcb_base<void, int>;
+
 // 時間。周辺のタイマが型として使うだけで、実際の刻みは呼び出し側が管理する
 struct attotime
 {
-	static attotime from_ticks(u64, u32) { return {}; }
-	static attotime never() { return {}; }
-	static attotime zero() { return {}; }
+	// 内部はサンプルではなく「秒」。周辺は from_ticks / as_ticks でしか触らない
+	double t = 0.0;
+	bool   is_never = false;
+
+	static attotime from_ticks(u64 n, u32 hz) { attotime a; a.t = double(n) / double(hz); return a; }
+
+	// MAME では関数ではなく定数。書き方をそろえる
+	static const attotime never;
+	static const attotime zero;
+
+	u64  as_ticks(u32 hz) const { return u64(t * double(hz)); }
+	bool is_never_time() const  { return is_never; }
+
+	bool operator==(const attotime &o) const { return is_never == o.is_never && t == o.t; }
+	bool operator!=(const attotime &o) const { return !(*this == o); }
+	bool operator<(const attotime &o) const
+	{
+		if (is_never || o.is_never) return !is_never && o.is_never;
+		return t < o.t;
+	}
+	attotime operator+(const attotime &o) const { attotime a; a.t = t + o.t; return a; }
+	attotime operator-(const attotime &o) const { attotime a; a.t = t - o.t; return a; }
 };
 
+inline const attotime attotime::never = [] { attotime a; a.is_never = true; return a; }();
+inline const attotime attotime::zero  = attotime();
+
+// MAME のタイマ。今は型として要るだけで、時刻は呼び出し側が進める
+struct emu_timer
+{
+	attotime expire = attotime::never;
+	void adjust(const attotime &e) { expire = e; }
+	void adjust(const attotime &e, s32) { expire = e; }
+	void enable(bool) {}
+};
+
+// 割り込み線の番号。NMI だけ使う
+enum { INPUT_LINE_NMI = -1, INPUT_LINE_IRQ0 = 0 };
+
+// MAME はデバイス種別をグローバルな定数として持ち、生成時に渡す。
+// こちらは tag での検索をしないので中身は要らないが、名前は参照されるので用意する。
+// ヘッダ側の DECLARE で実体を作り、実装側の DEFINE は空にしておく
+#define DECLARE_DEVICE_TYPE(Type, ...)                 	inline const device_type_dummy Type##_obj{};       	inline const device_type Type = &Type##_obj;
+#define DECLARE_DEVICE_TYPE_NS(Type, ...) DECLARE_DEVICE_TYPE(Type)
 #define DEFINE_DEVICE_TYPE(...)
-#define DECLARE_DEVICE_TYPE(...)
+#define DEFINE_DEVICE_TYPE_NS(...)
+
+// MAME の finder。tag での結線はしないので、名前だけ通ればよい
+struct finder_base { static constexpr const char *DUMMY_TAG = nullptr; };
+
+// COMBINE_DATA: mem_mask の立っているビットだけ data で置き換える
+#define COMBINE_DATA(ptr) 	(*(ptr) = (*(ptr) & ~mem_mask) | (data & mem_mask))
 #define TIMER_CALLBACK_MEMBER(name) void name(s32 param)
 
 // ---- 割り込み線とエラー -----------------------------------------------------
@@ -282,6 +447,9 @@ public:
 	}
 
 	void reset_seed() { m_rand_seed = 0x9d14abd7; }
+
+	// MAME はデバッガの覗き見で副作用を止める。こちらにデバッガはない
+	bool side_effects_disabled() const { return false; }
 
 private:
 	u32 m_rand_seed = 0x9d14abd7;

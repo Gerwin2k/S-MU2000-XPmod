@@ -55,7 +55,8 @@ public:
 	u32 do_read_port32(int port) { return m_read_port32[port](); }
 	void do_write_port32(int port, u32 data, u32 ddr) { m_write_port32[port](0, data, ddr); }
 
-	u64 current_cycles() { return machine().time().as_ticks(clock()); }
+	// S-MU2000: 実時間ではなく CPU が数えたサイクルを返す
+	u64 current_cycles() { return total_cycles(); }
 
 	void set_internal_interrupt(int level, u32 vector);
 

@@ -29,7 +29,6 @@ public:
 
 
 protected:
-	class sh2_frontend;
 
 	sh2_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock, int cpu_type, address_map_constructor internal_map, int addrlines, uint32_t address_mask);
 	virtual ~sh2_device();
@@ -48,18 +47,14 @@ protected:
 	virtual void execute_run();
 	virtual void execute_set_input(int inputnum, int state);
 
-	// device_memory_interface overrides
-	virtual space_config_vector memory_space_config() const;
 
 	// device_state_interface overrides
 
-	// device_disasm_interface overrides
-	virtual std::unique_ptr<util::disasm_interface> create_disassembler();
 
 	virtual void sh2_exception(const char *message, int irqline);
 	virtual void sh2_exception_internal(const char *message, int irqline, int vector);
 
-	address_space *m_decrypted_program;
+	// m_decrypted_program は sh_common_execution が持つ
 
 	uint32_t m_test_irq;
 	int32_t m_internal_irq_vector;
@@ -85,7 +80,6 @@ private:
 	virtual const opcode_desc* get_desclist(offs_t pc);
 
 
-	address_space_config m_program_config, m_decrypted_program_config;
 
 
 	uint32_t m_cpu_off;
