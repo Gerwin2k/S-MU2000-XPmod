@@ -259,6 +259,21 @@ private:
 	public:
 		static const std::array<u32, 256> lfo_increment_table;
 
+		// S-MU2000: 命令をあらかじめ解いた形。
+		// step() は 1 サンプルにつき 384 回、2 個ぶんで毎秒 3390 万回走る。
+		// そのたびに 25 個ほどのビットを取り出していたので、
+		// プログラムが変わったときだけ解いておく
+		struct decoded {
+			u8   sm, sr, dm, dr, t;
+			u8   mmode, m1t, asel, rop, shift, clamp;
+			u8   dm_src, memop;
+			bool m1_expand, m2_from_m;
+			bool dr_from_r, no_noise;
+			bool memw, index, t_write, t_from_p, mem_use_index;
+		};
+		std::array<decoded, 0x180> m_decoded;
+		void decode_program();
+
 		swp30_device          *m_swp;
 		std::array<u64, 0x180> m_program;
 		std::array<s16, 0x180> m_const;

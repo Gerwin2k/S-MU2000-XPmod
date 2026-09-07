@@ -393,11 +393,11 @@ int main(int argc, char **argv)
 	int  frames = 1024;     // waveOut のときの 1 枚（23.2ms）
 	int  buffers = 3;
 	// WASAPI の待ち時間。0 を渡すと Windows の最小周期（この環境で 23.5ms）に
-	// なるが、それだと音源の山で間に合わず、25 秒に 1 回ほど枯渇する。
-	// 45ms あれば枯渇しない。詰めたいなら音源をもっと速くするしかない
-	int  latency_ms = 45;
+	// なるが、それだと音源の山で 25 秒に 1 回ほど枯渇する。30ms なら 0 回。
+	// これ以上詰めたければ音源をもっと速くするしかない
+	int  latency_ms = 30;
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
-	bool nomidi = false, use_waveout = false;
+	bool nomidi = false, use_waveout = false, single = false;
 	const char *wav = nullptr;
 	std::string dir;
 
@@ -411,6 +411,8 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) wav = argv[++i];
 		else if (!std::strcmp(argv[i], "--waveout")) use_waveout = true;
 		else if (!std::strcmp(argv[i], "--nomidi")) nomidi = true;
+		else if (!std::strcmp(argv[i], "--single"))
+			single = true;
 		else if (!std::strcmp(argv[i], "-v")) smu2000::g_verbose = true;
 		else if (dir.empty()) dir = argv[i];
 	}
@@ -432,6 +434,7 @@ int main(int argc, char **argv)
 	if (!mu.load_sintab(dir + "/standin/sin-table.bin"))
 		std::fprintf(stderr, "警告: %s\n", mu.error().c_str());
 
+	mu.set_threaded(!single);
 	mu.reset();
 
 	// 起動を待つ。実機と同じで、ここを待たないと音色指定が捨てられる

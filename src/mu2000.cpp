@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <immintrin.h>
+
 
 namespace {
 
@@ -58,7 +60,47 @@ mu2000::mu2000()
 	build_bus();
 }
 
-mu2000::~mu2000() = default;
+mu2000::~mu2000()
+{
+	set_threaded(false);
+}
+
+// スレーブを別スレッドで回す。1 サンプルの中では 2 個の SWP30 は
+// 互いに独立しているので、並べて走らせても出る音は変わらない
+void mu2000::set_threaded(bool on)
+{
+	if (on == m_slave_thread.joinable())
+		return;
+
+	if (!on) {
+		m_slave_quit = true;
+		m_slave_go++;
+		m_slave_thread.join();
+		m_slave_quit = false;
+		return;
+	}
+	m_slave_thread = std::thread([this] { slave_loop(); });
+}
+
+void mu2000::slave_loop()
+{
+	u64 seen = 0;
+	for (;;) {
+		// 合図を待つ。眠ると 44100 回/秒には間に合わないので回して待つ
+		while (m_slave_go.load(std::memory_order_acquire) == seen) {
+			if (m_slave_quit.load(std::memory_order_relaxed))
+				return;
+			_mm_pause();
+		}
+		seen = m_slave_go.load(std::memory_order_acquire);
+		if (m_slave_quit.load(std::memory_order_relaxed))
+			return;
+
+		m_slave_l = m_slave_r = 0;
+		m_swps.run_sample(m_slave_l, m_slave_r);
+		m_slave_done.store(seen, std::memory_order_release);
+	}
+}
 
 
 bool mu2000::load_program(const std::string &path)
@@ -401,10 +443,21 @@ void mu2000::run_sample(s32 &left, s32 &right)
 
 	run_cycles(cycles);
 
-	// マスタとスレーブを 1 サンプルずつ進める
+	// マスタとスレーブを 1 サンプルずつ進める。
+	// 別スレッドが空いていればスレーブをそちらに投げ、同時に走らせる
 	s32 lm = 0, rm = 0, ls = 0, rs = 0;
-	m_swpm.run_sample(lm, rm);
-	m_swps.run_sample(ls, rs);
+	if (m_slave_thread.joinable()) {
+		const u64 tag = m_slave_go.load(std::memory_order_relaxed) + 1;
+		m_slave_go.store(tag, std::memory_order_release);
+		m_swpm.run_sample(lm, rm);
+		while (m_slave_done.load(std::memory_order_acquire) != tag)
+			_mm_pause();
+		ls = m_slave_l;
+		rs = m_slave_r;
+	} else {
+		m_swpm.run_sample(lm, rm);
+		m_swps.run_sample(ls, rs);
+	}
 
 	// 2 個の SWP30 は MELO/MELI のシリアルで相互に結ばれている。
 	// スレーブの声は自分の DAC には出ず、この線でマスタのミキサに入る。

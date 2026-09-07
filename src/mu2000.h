@@ -19,7 +19,9 @@
 #include "mame/video/hd44780.h"
 
 #include <cstdio>
+#include <atomic>
 #include <deque>
+#include <thread>
 #include <string>
 
 class mu2000
@@ -49,6 +51,11 @@ public:
 	// MIDI IN A に 1 バイト送る。実機と同じく 31250bps の直列で流れる
 	void midi_in(u8 byte) { m_midi_queue.push_back(byte); }
 	bool midi_idle() const { return m_midi_bit < 0 && m_midi_queue.empty(); }
+
+	// スレーブの SWP30 を別スレッドで回すか。
+	// 2 個の SWP30 は 1 サンプルの中では互いに独立している（相手の出力は
+	// 前サンプルのものしか使わない）ので、並べて走らせても結果は変わらない
+	void set_threaded(bool on);
 
 	// 1 サンプル（44.1kHz 相当）ぶん進めて、DAC 出力を返す。
 	// 値は MAME 内部と同じ目盛りで、全振幅が DAC_FULL_SCALE。
@@ -119,6 +126,14 @@ private:
 	u64 m_cycle_debt = 0;
 	// 命令の途中で止まれず走りすぎた分。次の呼び出しから引く
 	u64 m_overrun = 0;
+
+	// スレーブ用のスレッド。合図は atomic の回し合いで、錠は使わない。
+	// 44100 回/秒の受け渡しなので、待つのは眠らずに回して待つ
+	std::thread m_slave_thread;
+	std::atomic<u64> m_slave_go{0}, m_slave_done{0};
+	std::atomic<bool> m_slave_quit{false};
+	s32 m_slave_l = 0, m_slave_r = 0;
+	void slave_loop();
 
 public:
 	// 速さの手掛かり。1 サンプルあたり実行ループを何周したか

@@ -3130,6 +3130,38 @@ void swp30_device::meg_state::call_revram_decode(void *ms)
 
 // S-MU2000: ここにあった 374 行を削除 — MEG の DRC 生成（インタプリタ経路を使うので不要）
 
+// S-MU2000: 命令をあらかじめ解いておく。プログラムが変わったときだけ呼ぶ。
+// 取り出すビットの位置は step() が使っていたものと同じ
+void swp30_device::meg_state::decode_program()
+{
+	for(u32 pc = 0; pc != 0x180; pc++) {
+		const u64 opcode = m_program[pc];
+		decoded &d = m_decoded[pc];
+		d.sm        = BIT(opcode, 0x04, 6);
+		d.sr        = BIT(opcode, 0x0b, 7);
+		d.dm        = BIT(opcode, 0x27, 6);
+		d.dr        = BIT(opcode, 0x30, 7);
+		d.t         = BIT(opcode, 0x38, 3);
+		d.mmode     = BIT(opcode, 0x16, 2);
+		d.m1t       = BIT(opcode, 0x14, 2);
+		d.asel      = BIT(opcode, 0x18, 2);
+		d.rop       = BIT(opcode, 0x1a, 2);
+		d.shift     = BIT(opcode, 0x1c, 2);
+		d.clamp     = BIT(opcode, 0x1e, 2);
+		d.dm_src    = BIT(opcode, 0x2d, 3);
+		d.memop     = BIT(opcode, 0x24, 2);
+		d.m1_expand = BIT(opcode, 0x13);
+		d.m2_from_m = BIT(opcode, 0x12);
+		d.dr_from_r = BIT(opcode, 0x37);
+		d.no_noise  = BIT(opcode, 0x0a);
+		d.memw      = BIT(opcode, 0x3d);
+		d.index     = BIT(opcode, 0x3e);
+		d.t_write   = BIT(opcode, 0x3b);
+		d.t_from_p  = BIT(opcode, 0x3c);
+		d.mem_use_index = BIT(opcode, 0x21);
+	}
+}
+
 void swp30_device::meg_state::step()
 {
 	// S-MU2000: debugger_instruction_hook は削除
@@ -3156,24 +3188,23 @@ void swp30_device::meg_state::step()
 		m_memr_active[m_delay_2] = false;
 	}
 
-	// S-MU2000: MAME はプログラムをアドレス空間ごしに読んでいたが、実体は
-	// この m_program そのもの。1 秒に 3390 万回通る場所なので直に読む
-	const u64 opcode = m_program[m_pc];
+	// S-MU2000: 解いておいた形を使う。中身は decode_program() が入れている
+	const decoded &d = m_decoded[m_pc];
 
-	int sm = BIT(opcode, 0x04, 6);
-	int sr = BIT(opcode, 0x0b, 7);
-	int dm = BIT(opcode, 0x27, 6);
-	int dr = BIT(opcode, 0x30, 7);
-	int t  = BIT(opcode, 0x38, 3);
+	const int sm = d.sm;
+	const int sr = d.sr;
+	const int dm = d.dm;
+	const int dr = d.dr;
+	const int t  = d.t;
 
-	u32 mmode = BIT(opcode, 0x16, 2);
+	const u32 mmode = d.mmode;
 	if(mmode != 0) {
-		u32 m1t = BIT(opcode, 0x14, 2);
+		const u32 m1t = d.m1t;
 		s64 m1 = m1t == 1 || m1t == 2 ? m_t[t] : m_const[m_pc];
-		if(BIT(opcode, 0x13))
+		if(d.m1_expand)
 			m1 = m1_expand(m1);
 
-		s64 m2 = BIT(opcode, 0x12) ? m_m[sm] : m_r[sr];
+		s64 m2 = d.m2_from_m ? m_m[sm] : m_r[sr];
 
 		s64 m;
 		switch(mmode) {
@@ -3189,7 +3220,7 @@ void swp30_device::meg_state::step()
 		}
 
 		s64 a;
-		switch(BIT(opcode, 0x18, 2)) {
+		switch(d.asel) {
 		case 0: a = m_p; break;
 		case 1: a = sr ? s64(m_r[sr]) << 15 : m_p >> 15; break;
 		case 2: a = sm ? s64(m_m[sm]) << 15 : m_p >> 15; break;
@@ -3197,7 +3228,7 @@ void swp30_device::meg_state::step()
 		}
 
 		s64 r;
-		switch(BIT(opcode, 0x1a, 2)) {
+		switch(d.rop) {
 		case 0:
 			r = m + a;
 			break;
@@ -3212,14 +3243,14 @@ void swp30_device::meg_state::step()
 			break;
 		}
 
-		int shift = BIT(opcode, 0x1c, 2);
+		const int shift = d.shift;
 		if(shift)
 			r <<= shift == 3 ? 4 : shift;
 
 		// wrap at 42 bits (27.15)
 		r = util::sext(r, 42);
 
-		switch(BIT(opcode, 0x1e, 2)) {
+		switch(d.clamp) {
 		case 0:
 			break;
 		case 1:
@@ -3239,7 +3270,7 @@ void swp30_device::meg_state::step()
 	m_mw_reg[m_delay_3] = dm;
 	if(dm) {
 		u32 v;
-		switch(BIT(opcode, 0x2d, 3)) {
+		switch(d.dm_src) {
 		case 0: case 1: case 2: case 3:
 			v = get_lfo(m_pc >> 4);
 			break;
@@ -3247,7 +3278,7 @@ void swp30_device::meg_state::step()
 		case 5: v = m_swp->machine().rand() & 0xffffff; if(v & 0x00800000) v |= 0xff000000; break;
 		case 6: {
 			s64 p = m_p;
-			if(!BIT(opcode, 0x0a))
+			if(!d.no_noise)
 				p += m_swp->machine().rand() & 0x07e0;
 			v = (p >> 15) & 0xffffff;
 			if(v & 0x00800000)
@@ -3262,11 +3293,11 @@ void swp30_device::meg_state::step()
 	m_rw_reg[m_delay_3] = dr;
 	if(dr) {
 		u32 v;
-		if(BIT(opcode, 0x37))
+		if(d.dr_from_r)
 			v = m_r[sr];
 		else {
 			s64 p = m_p;
-			if(!BIT(opcode, 0x0a))
+			if(!d.no_noise)
 				p += m_swp->machine().rand() & 0x07e0;
 			v = (p >> 15) & 0xffffff;
 			if(v & 0x00800000)
@@ -3275,13 +3306,13 @@ void swp30_device::meg_state::step()
 		m_rw_value[m_delay_3] = v;
 	}
 
-	if(BIT(opcode, 0x3d)) {
+	if(d.memw) {
 		m_memw_active[m_delay_2] = true;
 		m_memw_value[m_delay_2] = m_p >> 15;
 	} else
 		m_memw_active[m_delay_2] = false;
 
-	if(BIT(opcode, 0x3e)) {
+	if(d.index) {
 		m_index_active[m_delay_3] = true;
 		m_index_value[m_delay_3] = m_p >> (15+8);
 	} else
@@ -3289,25 +3320,25 @@ void swp30_device::meg_state::step()
 
 	// T write lookups the p value from two cycles before, but which
 	// bits depends on the presence of index setting
-	if(BIT(opcode, 0x3b, 1)) {
-		if(BIT(opcode, 0x3c))
+	if(d.t_write) {
+		if(d.t_from_p)
 			m_t[t] = m_t_value[m_delay_2];
 		else
 			m_t[t] = m_const[m_pc];
 	}
-	m_t_value[m_delay_2] = BIT(opcode, 0x3e) ? (m_p >> 8) & 0x7fff : m_p >> (15+8);
+	m_t_value[m_delay_2] = d.index ? (m_p >> 8) & 0x7fff : m_p >> (15+8);
 
 	// Memory access
-	switch(BIT(opcode, 0x24, 2)) {
+	switch(d.memop) {
 	case 1: {
-		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (BIT(opcode, 0x21) ? m_ram_index : 0) - m_sample_counter);
+		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (d.mem_use_index ? m_ram_index : 0) - m_sample_counter);
 		if(address != 0xffffffff)
 			// S-MU2000: リバーブ RAM も実体は素の配列。18bit ぶんで折り返す
 			m_swp->m_reverb_ram[address & 0x3ffff] = revram_encode(m_ram_write);
 		break;
 	}
 	case 2: {
-		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (BIT(opcode, 0x21) ? m_ram_index : 0) - m_sample_counter);
+		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (d.mem_use_index ? m_ram_index : 0) - m_sample_counter);
 		if(address != 0xffffffff) {
 			const u16 val = m_swp->m_reverb_ram[address & 0x3ffff];
 			m_memr_value[m_delay_2] = revram_decode(val);
@@ -3316,7 +3347,7 @@ void swp30_device::meg_state::step()
 		break;
 	}
 	case 3: {
-		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (BIT(opcode, 0x21) ? m_ram_index : 0) - m_sample_counter + 1);
+		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (d.mem_use_index ? m_ram_index : 0) - m_sample_counter + 1);
 		if(address != 0xffffffff) {
 			const u16 val = m_swp->m_reverb_ram[address & 0x3ffff];
 			m_memr_value[m_delay_2] = revram_decode(val);
@@ -3348,7 +3379,10 @@ void swp30_device::meg_state::step()
 // 1 サンプル = sample_step() 1 回 + MEG のプログラム 384 ステップ。
 void swp30_device::run_sample(s32 &left, s32 &right)
 {
-	m_meg_program_changed = false;
+	if(m_meg_program_changed) {
+		m_meg->decode_program();
+		m_meg_program_changed = false;
+	}
 
 	sample_step();
 	for(int i = 0; i != 384; i++)

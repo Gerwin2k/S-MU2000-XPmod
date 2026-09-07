@@ -48,6 +48,7 @@ int main(int argc, char **argv)
 	const std::string dir = argv[1], mid = argv[2], wav = argv[3];
 	double seconds = 0.0;
 	const char *swptrace = nullptr;
+	bool single = false;   // スレーブを別スレッドにしない
 	double boot = -1.0;     // 負なら firmware が受信を有効にするまで待つ
 	const char *mu_dac_path = nullptr;
 	u32 mu_dac_from = 0, mu_dac_count = 0;
@@ -61,6 +62,8 @@ int main(int argc, char **argv)
 			mu_dac_from = u32(std::strtoul(argv[++i], nullptr, 0));
 			mu_dac_count = u32(std::strtoul(argv[++i], nullptr, 0));
 		}
+		else if (!std::strcmp(argv[i], "--single"))
+			single = true;
 		else if (!std::strcmp(argv[i], "-v"))
 			smu2000::g_verbose = true;
 		else
@@ -93,6 +96,7 @@ int main(int argc, char **argv)
 		mu.swpm().m_dbg_dac_count = mu_dac_count;
 	}
 
+	mu.set_threaded(!single);
 	mu.reset();
 
 	if (seconds <= 0.0)
