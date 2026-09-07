@@ -3,13 +3,8 @@
 
 // Yamaha SWP30/30B, ROMpler/DSP combo
 
-#include "emu.h"
+// S-MU2000: MAME 本体の取り込みをやめ、swp30.h（互換層を取り込む）だけにした
 #include "swp30.h"
-
-#include "cpu/drcumlsh.h"
-
-#include "debugger.h"
-#include "emuopts.h"
 
 #include <algorithm>
 #include <sstream>
@@ -1712,179 +1707,41 @@ void swp30_device::awm2_step(std::array<s32, 0x40> &samples_per_chan)
 
 
 
-swp30_device::swp30_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
-	: cpu_device(mconfig, SWP30, tag, owner, clock),
-	  device_sound_interface(mconfig, *this),
-	  m_program_config("meg_program", ENDIANNESS_LITTLE, 64, 9, -3, address_map_constructor(FUNC(swp30_device::meg_prg_map), this)),
-	  m_wave_config("wave", ENDIANNESS_LITTLE, 32, 25, -2),
-	  m_reverb_config("reverb_ram", ENDIANNESS_LITTLE, 16, 18, -1, address_map_constructor(FUNC(swp30_device::meg_reverb_map), this)),
-	  m_sintab(*this, "sintab"),
-	  m_drccache(32*1024*1024 + sizeof(meg_state))
+// S-MU2000: コンストラクタと初期化を書き換えた。
+// もとは MAME の address_space / drccache / stream_alloc を組み立てていた。
+swp30_device::swp30_device()
 {
-}
-
-void swp30_device::device_start()
-{
-	m_program = &space(AS_PROGRAM);
-	m_wave    = &space(AS_DATA);
-	m_reverb  = &space(AS_REVERB);
-	m_program->cache(m_program_cache);
-	m_wave->cache(m_wave_cache);
-	m_reverb->cache(m_reverb_cache);
-
-	m_drccache.allocate_cache(mconfig().options().drc_rwx());
-	m_meg = m_drccache.alloc_near<meg_state>();
+	m_meg_storage = std::make_unique<meg_state>();
+	m_meg = m_meg_storage.get();
 	m_meg->m_swp = this;
 	m_meg->reset();
-
-	state_add(STATE_GENPC,     "GENPC",     m_meg->m_pc).noshow();
-	state_add(STATE_GENPCBASE, "CURPC",     m_meg->m_pc).noshow();
-	state_add(0,               "PC",        m_meg->m_pc);
-	state_add(1,               "P",         m_meg->m_p);
-
-	for(int i=1; i != 0x40; i++)
-		state_add(i+1, util::string_format("m%02x", i).c_str(), m_meg->m_m[i]);
-
-	// SWP30 compiles the entire MEG program as one block, so the max sequence length is
-	// passed as 0 bytes.  In the unlikely event that changes, this should be updated.
-	m_drcuml = std::make_unique<drcuml_state>(*this, m_drccache, 0, 1, 9, 0, 0);
-	m_drcuml->symbol_add(&m_meg->m_pc,          sizeof(m_meg->m_pc),          "pc");
-	m_drcuml->symbol_add(&m_meg->m_icount,      sizeof(m_meg->m_icount),      "icount");
-	m_drcuml->symbol_add(&m_meg->m_program,     sizeof(m_meg->m_program),     "program");
-	m_drcuml->symbol_add(&m_meg->m_const,       sizeof(m_meg->m_const),       "const");
-	m_drcuml->symbol_add(&m_meg->m_offset,      sizeof(m_meg->m_offset),      "offset");
-	m_drcuml->symbol_add(&m_meg->m_m,           sizeof(m_meg->m_m),           "m");
-	m_drcuml->symbol_add(&m_meg->m_r,           sizeof(m_meg->m_r),           "r");
-	m_drcuml->symbol_add(&m_meg->m_t,           sizeof(m_meg->m_t),           "t");
-	m_drcuml->symbol_add(&m_meg->m_p,           sizeof(m_meg->m_p),           "p");
-	m_drcuml->symbol_add(&m_meg->m_mw_value,    sizeof(m_meg->m_mw_value),    "mw");
-	m_drcuml->symbol_add(&m_meg->m_rw_value,    sizeof(m_meg->m_rw_value),    "rw");
-	m_drcuml->symbol_add(&m_meg->m_index_value, sizeof(m_meg->m_index_value), "index");
-	m_drcuml->symbol_add(&m_meg->m_memw_value,  sizeof(m_meg->m_memw_value),  "memw");
-
-	m_meg_drc_entry = m_drcuml->handle_alloc("entry");
-
 	m_meg_program_changed = true;
-	m_meg_drc_active = allow_drc();
 
-	set_icountptr(m_meg->m_icount);
+	// MEG のプログラム空間(9bit, 64bit幅)とリバーブ RAM(18bit, 16bit幅)は
+	// もとは address_map で組まれていた。ここでは実体を持つ。
+	m_meg_program.assign(1 << 9, 0);
+	m_reverb_ram.assign(1 << 18, 0);
+	m_program_cache.set(m_meg_program.data(), m_meg_program.size() * sizeof(u64));
+	m_reverb_cache.set_writable(m_reverb_ram.data(), m_reverb_ram.size() * sizeof(u16));
 
-	// Separate the streams to avoid loops with plugins and dual-swp30 systems
-	m_input_stream  = stream_alloc(16, 0, 44100, STREAM_SYNCHRONOUS);
-	m_output_stream = stream_alloc(0, 20, 44100, STREAM_SYNCHRONOUS);
+	// 1 サンプル分だけのバッファ。出力 20ch(DAC 4 + MELO 16)、入力 16ch(MELI)
+	m_buf.reset(sound_buffer::INPUTS, sound_buffer::OUTPUTS, 1);
 
-	save_item(NAME(m_keyon_mask));
-
-	save_item(STRUCT_MEMBER(m_streaming, m_start));
-	save_item(STRUCT_MEMBER(m_streaming, m_loop));
-	save_item(STRUCT_MEMBER(m_streaming, m_address));
-	save_item(STRUCT_MEMBER(m_streaming, m_pitch));
-	save_item(STRUCT_MEMBER(m_streaming, m_loop_size));
-	save_item(STRUCT_MEMBER(m_streaming, m_pos));
-	save_item(STRUCT_MEMBER(m_streaming, m_pos_dec));
-	save_item(STRUCT_MEMBER(m_streaming, m_dpcm_s0));
-	save_item(STRUCT_MEMBER(m_streaming, m_dpcm_s1));
-	save_item(STRUCT_MEMBER(m_streaming, m_dpcm_s2));
-	save_item(STRUCT_MEMBER(m_streaming, m_dpcm_s3));
-	save_item(STRUCT_MEMBER(m_streaming, m_dpcm_pos));
-	save_item(STRUCT_MEMBER(m_streaming, m_dpcm_delta));
-	save_item(STRUCT_MEMBER(m_streaming, m_first));
-	save_item(STRUCT_MEMBER(m_streaming, m_finetune_active));
-	save_item(STRUCT_MEMBER(m_streaming, m_done));
-	save_item(STRUCT_MEMBER(m_streaming, m_last));
-
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_a));
-	save_item(STRUCT_MEMBER(m_filter, m_level_1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_a));
-	save_item(STRUCT_MEMBER(m_filter, m_level_2));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_b));
-
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_p1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_p1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_p2));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_x1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_x2));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_y0));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_y1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_h));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_b));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_n));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_1_l));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_x1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_x2));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_y0));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_y1));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_h));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_b));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_n));
-	save_item(STRUCT_MEMBER(m_filter, m_filter_2_l));
-
-	save_item(STRUCT_MEMBER(m_iir1, m_a));
-	save_item(STRUCT_MEMBER(m_iir1, m_b));
-	save_item(STRUCT_MEMBER(m_iir1, m_hx));
-	save_item(STRUCT_MEMBER(m_iir1, m_hy));
-
-	save_item(STRUCT_MEMBER(m_envelope, m_attack));
-	save_item(STRUCT_MEMBER(m_envelope, m_decay1));
-	save_item(STRUCT_MEMBER(m_envelope, m_decay2));
-	save_item(STRUCT_MEMBER(m_envelope, m_release_glo));
-	save_item(STRUCT_MEMBER(m_envelope, m_envelope_level));
-	save_item(STRUCT_MEMBER(m_envelope, m_envelope_mode));
-
-	save_item(STRUCT_MEMBER(m_lfo, m_counter));
-	save_item(STRUCT_MEMBER(m_lfo, m_state));
-	save_item(STRUCT_MEMBER(m_lfo, m_type));
-	save_item(STRUCT_MEMBER(m_lfo, m_step));
-	save_item(STRUCT_MEMBER(m_lfo, m_amplitude));
-	save_item(STRUCT_MEMBER(m_lfo, m_pitch_mode));
-	save_item(STRUCT_MEMBER(m_lfo, m_pitch_depth));
-	save_item(STRUCT_MEMBER(m_lfo, m_r_type_step_pitch));
-	save_item(STRUCT_MEMBER(m_lfo, m_r_amplitude));
-
-	save_item(NAME(m_internal_adr));
-
-	save_item(NAME(m_wave_adr));
-	save_item(NAME(m_wave_size));
-	save_item(NAME(m_wave_access));
-	save_item(NAME(m_wave_val));
-
-	save_item(STRUCT_MEMBER(m_mixer, vol));
-	save_item(STRUCT_MEMBER(m_mixer, route));
-	save_item(NAME(m_melo));
-	save_item(NAME(m_meli));
-	save_item(NAME(m_adc));
-
-	save_item(STRUCT_MEMBER(*m_meg, m_program));
-	save_item(STRUCT_MEMBER(*m_meg, m_const));
-	save_item(STRUCT_MEMBER(*m_meg, m_offset));
-	save_item(STRUCT_MEMBER(*m_meg, m_lfo));
-	save_item(STRUCT_MEMBER(*m_meg, m_lfo_counter));
-	save_item(STRUCT_MEMBER(*m_meg, m_lfo_increment));
-	save_item(STRUCT_MEMBER(*m_meg, m_map));
-	save_item(STRUCT_MEMBER(*m_meg, m_ram_read));
-	save_item(STRUCT_MEMBER(*m_meg, m_ram_write));
-	save_item(STRUCT_MEMBER(*m_meg, m_ram_index));
-	save_item(STRUCT_MEMBER(*m_meg, m_program_address));
-	save_item(STRUCT_MEMBER(*m_meg, m_m));
-	save_item(STRUCT_MEMBER(*m_meg, m_r));
-	save_item(STRUCT_MEMBER(*m_meg, m_t));
-	save_item(STRUCT_MEMBER(*m_meg, m_p));
-	save_item(STRUCT_MEMBER(*m_meg, m_mw_value));
-	save_item(STRUCT_MEMBER(*m_meg, m_mw_reg));
-	save_item(STRUCT_MEMBER(*m_meg, m_rw_value));
-	save_item(STRUCT_MEMBER(*m_meg, m_rw_reg));
-	save_item(STRUCT_MEMBER(*m_meg, m_index_value));
-	save_item(STRUCT_MEMBER(*m_meg, m_index_active));
-	save_item(STRUCT_MEMBER(*m_meg, m_memw_value));
-	save_item(STRUCT_MEMBER(*m_meg, m_memw_active));
-	save_item(STRUCT_MEMBER(*m_meg, m_memr_value));
-	save_item(STRUCT_MEMBER(*m_meg, m_memr_active));
-	save_item(STRUCT_MEMBER(*m_meg, m_delay_3));
-	save_item(STRUCT_MEMBER(*m_meg, m_delay_2));
-	save_item(STRUCT_MEMBER(*m_meg, m_sample_counter));
-	save_item(STRUCT_MEMBER(*m_meg, m_retval));
+	reset();
 }
 
+void swp30_device::set_wave_rom(const void *base, size_t bytes)
+{
+	m_wave_cache.set(base, bytes);
+}
+
+void swp30_device::set_sintab(const u16 *base, size_t count)
+{
+	m_sintab.set(base, count);
+}
+
+
+// S-MU2000: device_start の置換で巻き添えになっていた meg_state::reset() を戻す
 void swp30_device::meg_state::reset()
 {
 	std::fill(m_program.begin(),       m_program.end(),       0);
@@ -1919,7 +1776,7 @@ void swp30_device::meg_state::reset()
 	m_retval = 0;
 }
 
-void swp30_device::device_reset()
+void swp30_device::reset()
 {
 	m_keyon_mask = 0;
 
@@ -1952,105 +1809,200 @@ void swp30_device::device_reset()
 	std::fill(m_adc.begin(),   m_adc.end(),   0);
 }
 
-void swp30_device::map(address_map &map)
+// S-MU2000: address_map をやめ、素の分岐にした。
+// レジスタは 64ch x 64 スロットの格子で、番地 = チャンネル * 0x40 + スロット（16bit 単位）。
+// ハンドラは offset >> 6 でチャンネルを取り出すので、offset には chan << 6 を渡す。
+// ハンドラ自体は一切変更していない。
+
+u16 swp30_device::read16(offs_t addr)
 {
-	map(0x0000, 0x1fff).w(FUNC(swp30_device::snd_w));
+	addr &= 0xfff;
+	const u32 slot = addr & 0x3f;
+	const u32 chan = (addr >> 6) & 0x3f;
 
-	rchan(map, 0x00).rw(FUNC(swp30_device::filter_1_a_r), FUNC(swp30_device::filter_1_a_w));
-	rchan(map, 0x01).rw(FUNC(swp30_device::level_1_r), FUNC(swp30_device::level_1_w));
-	rchan(map, 0x02).rw(FUNC(swp30_device::filter_2_a_r), FUNC(swp30_device::filter_2_a_w));
-	rchan(map, 0x03).rw(FUNC(swp30_device::level_2_r), FUNC(swp30_device::level_2_w));
-	rchan(map, 0x04).rw(FUNC(swp30_device::filter_b_r), FUNC(swp30_device::filter_b_w));
-	rchan(map, 0x05).rw(FUNC(swp30_device::lfo_amplitude_r), FUNC(swp30_device::lfo_amplitude_w));
-	rchan(map, 0x06).rw(FUNC(swp30_device::attack_r), FUNC(swp30_device::attack_w));
-	rchan(map, 0x07).rw(FUNC(swp30_device::decay1_r), FUNC(swp30_device::decay1_w));
-	rchan(map, 0x08).rw(FUNC(swp30_device::decay2_r), FUNC(swp30_device::decay2_w));
-	rchan(map, 0x09).rw(FUNC(swp30_device::release_glo_r), FUNC(swp30_device::release_glo_w));
-	rchan(map, 0x0a).rw(FUNC(swp30_device::lfo_type_step_pitch_r), FUNC(swp30_device::lfo_type_step_pitch_w));
-	// 0b-0d missing
-	// 10 missing
-	rchan(map, 0x11).rw(FUNC(swp30_device::pitch_r), FUNC(swp30_device::pitch_w));
-	rchan(map, 0x12).rw(FUNC(swp30_device::start_h_r), FUNC(swp30_device::start_h_w));
-	rchan(map, 0x13).rw(FUNC(swp30_device::start_l_r), FUNC(swp30_device::start_l_w));
-	rchan(map, 0x14).rw(FUNC(swp30_device::loop_h_r), FUNC(swp30_device::loop_h_w));
-	rchan(map, 0x15).rw(FUNC(swp30_device::loop_l_r), FUNC(swp30_device::loop_l_w));
-	rchan(map, 0x16).rw(FUNC(swp30_device::address_h_r), FUNC(swp30_device::address_h_w));
-	rchan(map, 0x17).rw(FUNC(swp30_device::address_l_r), FUNC(swp30_device::address_l_w));
-	rchan(map, 0x20).rw(FUNC(swp30_device::a1_r<0>), FUNC(swp30_device::a1_w<0>));
-	rchan(map, 0x22).rw(FUNC(swp30_device::b1_r<0>), FUNC(swp30_device::b1_w<0>));
-	rchan(map, 0x24).rw(FUNC(swp30_device::a0_r<0>), FUNC(swp30_device::a0_w<0>));
-	rchan(map, 0x26).rw(FUNC(swp30_device::a1_r<1>), FUNC(swp30_device::a1_w<1>));
-	rchan(map, 0x28).rw(FUNC(swp30_device::b1_r<1>), FUNC(swp30_device::b1_w<1>));
-	rchan(map, 0x2a).rw(FUNC(swp30_device::a0_r<1>), FUNC(swp30_device::a0_w<1>));
-	// 2c-2f missing
+	// --- チャンネルごとのレジスタ（全 64ch 共通、offset にチャンネル<<6 を渡す）
+	switch(slot) {
+	case 0x00: return filter_1_a_r(chan << 6);
+	case 0x01: return level_1_r(chan << 6);
+	case 0x02: return filter_2_a_r(chan << 6);
+	case 0x03: return level_2_r(chan << 6);
+	case 0x04: return filter_b_r(chan << 6);
+	case 0x05: return lfo_amplitude_r(chan << 6);
+	case 0x06: return attack_r(chan << 6);
+	case 0x07: return decay1_r(chan << 6);
+	case 0x08: return decay2_r(chan << 6);
+	case 0x09: return release_glo_r(chan << 6);
+	case 0x0a: return lfo_type_step_pitch_r(chan << 6);
+	case 0x11: return pitch_r(chan << 6);
+	case 0x12: return start_h_r(chan << 6);
+	case 0x13: return start_l_r(chan << 6);
+	case 0x14: return loop_h_r(chan << 6);
+	case 0x15: return loop_l_r(chan << 6);
+	case 0x16: return address_h_r(chan << 6);
+	case 0x17: return address_l_r(chan << 6);
+	case 0x20: return a1_r<0>(chan << 6);
+	case 0x21: return meg_const_r<0>(chan << 6);
+	case 0x22: return b1_r<0>(chan << 6);
+	case 0x23: return meg_const_r<1>(chan << 6);
+	case 0x24: return a0_r<0>(chan << 6);
+	case 0x25: return meg_const_r<2>(chan << 6);
+	case 0x26: return a1_r<1>(chan << 6);
+	case 0x27: return meg_const_r<3>(chan << 6);
+	case 0x28: return b1_r<1>(chan << 6);
+	case 0x29: return meg_const_r<4>(chan << 6);
+	case 0x2a: return a0_r<1>(chan << 6);
+	case 0x2b: return meg_const_r<5>(chan << 6);
+	case 0x30: return meg_offset_r<0>(chan << 6);
+	case 0x31: return meg_offset_r<1>(chan << 6);
+	case 0x32: return vol_r<0x00|0>(chan << 6);
+	case 0x33: return vol_r<0x00|1>(chan << 6);
+	case 0x34: return vol_r<0x00|2>(chan << 6);
+	case 0x35: return route_r<0x00|0>(chan << 6);
+	case 0x36: return route_r<0x00|1>(chan << 6);
+	case 0x37: return route_r<0x00|2>(chan << 6);
+	case 0x38: return vol_r<0x40|0>(chan << 6);
+	case 0x39: return vol_r<0x40|1>(chan << 6);
+	case 0x3a: return vol_r<0x40|2>(chan << 6);
+	case 0x3b: return route_r<0x40|0>(chan << 6);
+	case 0x3c: return route_r<0x40|1>(chan << 6);
+	case 0x3d: return route_r<0x40|2>(chan << 6);
+	case 0x3e: return meg_lfo_r<0>(chan << 6);
+	case 0x3f: return meg_lfo_r<1>(chan << 6);
+	}
 
-	// Control registers
-	// These appear as channel slots 0x0e and 0x0f
-	// 00-01 missing
-	rctrl(map, 0x02).rw(FUNC(swp30_device::internal_adr_r), FUNC(swp30_device::internal_adr_w));
-	rctrl(map, 0x03).r (FUNC(swp30_device::internal_r));
-	rctrl(map, 0x04).rw(FUNC(swp30_device::wave_adr_r<1>), FUNC(swp30_device::wave_adr_w<1>));
-	rctrl(map, 0x05).rw(FUNC(swp30_device::wave_adr_r<0>), FUNC(swp30_device::wave_adr_w<0>));
-	rctrl(map, 0x06).rw(FUNC(swp30_device::wave_size_r<1>), FUNC(swp30_device::wave_size_w<1>));
-	rctrl(map, 0x07).rw(FUNC(swp30_device::wave_size_r<0>), FUNC(swp30_device::wave_size_w<0>));
-	rctrl(map, 0x08).rw(FUNC(swp30_device::wave_access_r), FUNC(swp30_device::wave_access_w));
-	rctrl(map, 0x09).r (FUNC(swp30_device::wave_busy_r));
-	rctrl(map, 0x0a).rw(FUNC(swp30_device::wave_val_r<1>), FUNC(swp30_device::wave_val_w<1>));
-	rctrl(map, 0x0b).rw(FUNC(swp30_device::wave_val_r<0>), FUNC(swp30_device::wave_val_w<0>));
-	rctrl(map, 0x0c).rw(FUNC(swp30_device::keyon_mask_r<3>), FUNC(swp30_device::keyon_mask_w<3>));
-	rctrl(map, 0x0d).rw(FUNC(swp30_device::keyon_mask_r<2>), FUNC(swp30_device::keyon_mask_w<2>));
-	rctrl(map, 0x0e).rw(FUNC(swp30_device::keyon_mask_r<1>), FUNC(swp30_device::keyon_mask_w<1>));
-	rctrl(map, 0x0f).rw(FUNC(swp30_device::keyon_mask_r<0>), FUNC(swp30_device::keyon_mask_w<0>));
-	rctrl(map, 0x10).rw(FUNC(swp30_device::keyon_r), FUNC(swp30_device::keyon_w));
-	// 11-1f missing
-	rctrl(map, 0x20).w (FUNC(swp30_device::meg_lfo_commit_w));
-	rctrl(map, 0x21).rw(FUNC(swp30_device::meg_prg_address_r), FUNC(swp30_device::meg_prg_address_w));
-	rctrl(map, 0x22).rw(FUNC(swp30_device::meg_prg_r<0>), FUNC(swp30_device::meg_prg_w<0>));
-	rctrl(map, 0x23).rw(FUNC(swp30_device::meg_prg_r<1>), FUNC(swp30_device::meg_prg_w<1>));
-	rctrl(map, 0x24).rw(FUNC(swp30_device::meg_prg_r<2>), FUNC(swp30_device::meg_prg_w<2>));
-	rctrl(map, 0x25).rw(FUNC(swp30_device::meg_prg_r<3>), FUNC(swp30_device::meg_prg_w<3>));
+	// --- 制御レジスタ（チャンネル位置に単発で置かれている）
+	switch(addr) {
+	case 0x04e: return internal_adr_r();
+	case 0x04f: return internal_r();
+	case 0x08e: return wave_adr_r<1>();
+	case 0x08f: return wave_adr_r<0>();
+	case 0x0ce: return wave_size_r<1>();
+	case 0x0cf: return wave_size_r<0>();
+	case 0x10e: return wave_access_r();
+	case 0x10f: return wave_busy_r();
+	case 0x14e: return wave_val_r<1>();
+	case 0x14f: return wave_val_r<0>();
+	case 0x18e: return keyon_mask_r<3>();
+	case 0x18f: return keyon_mask_r<2>();
+	case 0x1ce: return keyon_mask_r<1>();
+	case 0x1cf: return keyon_mask_r<0>();
+	case 0x20e: return keyon_r();
+	case 0x40f: return meg_prg_address_r();
+	case 0x44e: return meg_prg_r<0>();
+	case 0x44f: return meg_prg_r<1>();
+	case 0x48e: return meg_prg_r<2>();
+	case 0x48f: return meg_prg_r<3>();
+	case 0x60e: return meg_map_r<0>();
+	case 0x64e: return meg_map_r<1>();
+	case 0x68e: return meg_map_r<2>();
+	case 0x6ce: return meg_map_r<3>();
+	case 0x70e: return meg_map_r<4>();
+	case 0x74e: return meg_map_r<5>();
+	case 0x78e: return meg_map_r<6>();
+	case 0x7ce: return meg_map_r<7>();
+	case 0x84e: return revram_status_r();
+	case 0x98e: return revram_data_r<1>();
+	case 0x98f: return revram_data_r<0>();
+	}
 
-	rctrl(map, 0x30).rw(FUNC(swp30_device::meg_map_r<0>), FUNC(swp30_device::meg_map_w<0>));
-	rctrl(map, 0x32).rw(FUNC(swp30_device::meg_map_r<1>), FUNC(swp30_device::meg_map_w<1>));
-	rctrl(map, 0x34).rw(FUNC(swp30_device::meg_map_r<2>), FUNC(swp30_device::meg_map_w<2>));
-	rctrl(map, 0x36).rw(FUNC(swp30_device::meg_map_r<3>), FUNC(swp30_device::meg_map_w<3>));
-	rctrl(map, 0x38).rw(FUNC(swp30_device::meg_map_r<4>), FUNC(swp30_device::meg_map_w<4>));
-	rctrl(map, 0x3a).rw(FUNC(swp30_device::meg_map_r<5>), FUNC(swp30_device::meg_map_w<5>));
-	rctrl(map, 0x3c).rw(FUNC(swp30_device::meg_map_r<6>), FUNC(swp30_device::meg_map_w<6>));
-	rctrl(map, 0x3e).rw(FUNC(swp30_device::meg_map_r<7>), FUNC(swp30_device::meg_map_w<7>));
-	rctrl(map, 0x40).w (FUNC(swp30_device::revram_enable_w));
-	rctrl(map, 0x41).w (FUNC(swp30_device::revram_clear_w));
-	rctrl(map, 0x42).r (FUNC(swp30_device::revram_status_r));
-	rctrl(map, 0x4a).w (FUNC(swp30_device::revram_adr_w<1>));
-	rctrl(map, 0x4b).w (FUNC(swp30_device::revram_adr_w<0>));
-	rctrl(map, 0x4c).rw(FUNC(swp30_device::revram_data_r<1>), FUNC(swp30_device::revram_data_w<1>));
-	rctrl(map, 0x4d).rw(FUNC(swp30_device::revram_data_r<0>), FUNC(swp30_device::revram_data_w<0>));
+	// S-MU2000: snd_r は MAME にも実体が無い（書き込み専用の受け皿しかない）
+	return 0;
+}
 
-	// MEG registers
-	rchan(map, 0x21).rw(FUNC(swp30_device::meg_const_r<0>), FUNC(swp30_device::meg_const_w<0>));
-	rchan(map, 0x23).rw(FUNC(swp30_device::meg_const_r<1>), FUNC(swp30_device::meg_const_w<1>));
-	rchan(map, 0x25).rw(FUNC(swp30_device::meg_const_r<2>), FUNC(swp30_device::meg_const_w<2>));
-	rchan(map, 0x27).rw(FUNC(swp30_device::meg_const_r<3>), FUNC(swp30_device::meg_const_w<3>));
-	rchan(map, 0x29).rw(FUNC(swp30_device::meg_const_r<4>), FUNC(swp30_device::meg_const_w<4>));
-	rchan(map, 0x2b).rw(FUNC(swp30_device::meg_const_r<5>), FUNC(swp30_device::meg_const_w<5>));
-	rchan(map, 0x30).rw(FUNC(swp30_device::meg_offset_r<0>), FUNC(swp30_device::meg_offset_w<0>));
-	rchan(map, 0x31).rw(FUNC(swp30_device::meg_offset_r<1>), FUNC(swp30_device::meg_offset_w<1>));
-	rchan(map, 0x3e).rw(FUNC(swp30_device::meg_lfo_r<0>), FUNC(swp30_device::meg_lfo_w<0>));
-	rchan(map, 0x3f).rw(FUNC(swp30_device::meg_lfo_r<1>), FUNC(swp30_device::meg_lfo_w<1>));
+void swp30_device::write16(offs_t addr, u16 data)
+{
+	addr &= 0xfff;
+	const u32 slot = addr & 0x3f;
+	const u32 chan = (addr >> 6) & 0x3f;
 
-	// Mixer registers
-	rchan(map, 0x32).rw(FUNC(swp30_device::vol_r  <0x00|0>), FUNC(swp30_device::vol_w  <0x00|0>));
-	rchan(map, 0x33).rw(FUNC(swp30_device::vol_r  <0x00|1>), FUNC(swp30_device::vol_w  <0x00|1>));
-	rchan(map, 0x34).rw(FUNC(swp30_device::vol_r  <0x00|2>), FUNC(swp30_device::vol_w  <0x00|2>));
-	rchan(map, 0x35).rw(FUNC(swp30_device::route_r<0x00|0>), FUNC(swp30_device::route_w<0x00|0>));
-	rchan(map, 0x36).rw(FUNC(swp30_device::route_r<0x00|1>), FUNC(swp30_device::route_w<0x00|1>));
-	rchan(map, 0x37).rw(FUNC(swp30_device::route_r<0x00|2>), FUNC(swp30_device::route_w<0x00|2>));
-	rchan(map, 0x38).rw(FUNC(swp30_device::vol_r  <0x40|0>), FUNC(swp30_device::vol_w  <0x40|0>));
-	rchan(map, 0x39).rw(FUNC(swp30_device::vol_r  <0x40|1>), FUNC(swp30_device::vol_w  <0x40|1>));
-	rchan(map, 0x3a).rw(FUNC(swp30_device::vol_r  <0x40|2>), FUNC(swp30_device::vol_w  <0x40|2>));
-	rchan(map, 0x3b).rw(FUNC(swp30_device::route_r<0x40|0>), FUNC(swp30_device::route_w<0x40|0>));
-	rchan(map, 0x3c).rw(FUNC(swp30_device::route_r<0x40|1>), FUNC(swp30_device::route_w<0x40|1>));
-	rchan(map, 0x3d).rw(FUNC(swp30_device::route_r<0x40|2>), FUNC(swp30_device::route_w<0x40|2>));
+	// --- チャンネルごとのレジスタ（全 64ch 共通、offset にチャンネル<<6 を渡す）
+	switch(slot) {
+	case 0x00: filter_1_a_w(chan << 6, data); return;
+	case 0x01: level_1_w(chan << 6, data); return;
+	case 0x02: filter_2_a_w(chan << 6, data); return;
+	case 0x03: level_2_w(chan << 6, data); return;
+	case 0x04: filter_b_w(chan << 6, data); return;
+	case 0x05: lfo_amplitude_w(chan << 6, data); return;
+	case 0x06: attack_w(chan << 6, data); return;
+	case 0x07: decay1_w(chan << 6, data); return;
+	case 0x08: decay2_w(chan << 6, data); return;
+	case 0x09: release_glo_w(chan << 6, data); return;
+	case 0x0a: lfo_type_step_pitch_w(chan << 6, data); return;
+	case 0x11: pitch_w(chan << 6, data); return;
+	case 0x12: start_h_w(chan << 6, data); return;
+	case 0x13: start_l_w(chan << 6, data); return;
+	case 0x14: loop_h_w(chan << 6, data); return;
+	case 0x15: loop_l_w(chan << 6, data); return;
+	case 0x16: address_h_w(chan << 6, data); return;
+	case 0x17: address_l_w(chan << 6, data); return;
+	case 0x20: a1_w<0>(chan << 6, data); return;
+	case 0x21: meg_const_w<0>(chan << 6, data); return;
+	case 0x22: b1_w<0>(chan << 6, data); return;
+	case 0x23: meg_const_w<1>(chan << 6, data); return;
+	case 0x24: a0_w<0>(chan << 6, data); return;
+	case 0x25: meg_const_w<2>(chan << 6, data); return;
+	case 0x26: a1_w<1>(chan << 6, data); return;
+	case 0x27: meg_const_w<3>(chan << 6, data); return;
+	case 0x28: b1_w<1>(chan << 6, data); return;
+	case 0x29: meg_const_w<4>(chan << 6, data); return;
+	case 0x2a: a0_w<1>(chan << 6, data); return;
+	case 0x2b: meg_const_w<5>(chan << 6, data); return;
+	case 0x30: meg_offset_w<0>(chan << 6, data); return;
+	case 0x31: meg_offset_w<1>(chan << 6, data); return;
+	case 0x32: vol_w<0x00|0>(chan << 6, data); return;
+	case 0x33: vol_w<0x00|1>(chan << 6, data); return;
+	case 0x34: vol_w<0x00|2>(chan << 6, data); return;
+	case 0x35: route_w<0x00|0>(chan << 6, data); return;
+	case 0x36: route_w<0x00|1>(chan << 6, data); return;
+	case 0x37: route_w<0x00|2>(chan << 6, data); return;
+	case 0x38: vol_w<0x40|0>(chan << 6, data); return;
+	case 0x39: vol_w<0x40|1>(chan << 6, data); return;
+	case 0x3a: vol_w<0x40|2>(chan << 6, data); return;
+	case 0x3b: route_w<0x40|0>(chan << 6, data); return;
+	case 0x3c: route_w<0x40|1>(chan << 6, data); return;
+	case 0x3d: route_w<0x40|2>(chan << 6, data); return;
+	case 0x3e: meg_lfo_w<0>(chan << 6, data); return;
+	case 0x3f: meg_lfo_w<1>(chan << 6, data); return;
+	}
+
+	// --- 制御レジスタ（チャンネル位置に単発で置かれている）
+	switch(addr) {
+	case 0x04e: internal_adr_w(data); return;
+	case 0x08e: wave_adr_w<1>(data); return;
+	case 0x08f: wave_adr_w<0>(data); return;
+	case 0x0ce: wave_size_w<1>(data); return;
+	case 0x0cf: wave_size_w<0>(data); return;
+	case 0x10e: wave_access_w(data); return;
+	case 0x14e: wave_val_w<1>(data); return;
+	case 0x14f: wave_val_w<0>(data); return;
+	case 0x18e: keyon_mask_w<3>(data); return;
+	case 0x18f: keyon_mask_w<2>(data); return;
+	case 0x1ce: keyon_mask_w<1>(data); return;
+	case 0x1cf: keyon_mask_w<0>(data); return;
+	case 0x20e: keyon_w(data); return;
+	case 0x40e: meg_lfo_commit_w(data); return;
+	case 0x40f: meg_prg_address_w(data); return;
+	case 0x44e: meg_prg_w<0>(data); return;
+	case 0x44f: meg_prg_w<1>(data); return;
+	case 0x48e: meg_prg_w<2>(data); return;
+	case 0x48f: meg_prg_w<3>(data); return;
+	case 0x60e: meg_map_w<0>(data); return;
+	case 0x64e: meg_map_w<1>(data); return;
+	case 0x68e: meg_map_w<2>(data); return;
+	case 0x6ce: meg_map_w<3>(data); return;
+	case 0x70e: meg_map_w<4>(data); return;
+	case 0x74e: meg_map_w<5>(data); return;
+	case 0x78e: meg_map_w<6>(data); return;
+	case 0x7ce: meg_map_w<7>(data); return;
+	case 0x80e: revram_enable_w(data); return;
+	case 0x80f: revram_clear_w(data); return;
+	case 0x94e: revram_adr_w<1>(data); return;
+	case 0x94f: revram_adr_w<0>(data); return;
+	case 0x98e: revram_data_w<1>(data); return;
+	case 0x98f: revram_data_w<0>(data); return;
+	}
+
+	snd_w(addr, data);
 }
 
 // Control registers
@@ -2296,13 +2248,13 @@ template<int Sel> void swp30_device::revram_data_w(u16 data)
 		m_revram_data = (m_revram_data & 0xffff0000) |  data;
 
 	if(!Sel)
-		m_reverb->write_word(m_revram_adr, meg_state::revram_encode(m_revram_data >> 5));
+		m_reverb_cache.write_word(m_revram_adr, meg_state::revram_encode(m_revram_data >> 5));
 }
 
 template<int Sel> u16 swp30_device::revram_data_r()
 {
 	if(Sel)
-		m_revram_data = meg_state::revram_decode(m_reverb->read_word(m_revram_adr)) << 5;
+		m_revram_data = meg_state::revram_decode(m_reverb_cache.read_word(m_revram_adr)) << 5;
 
 	return Sel ? m_revram_data >> 16 : m_revram_data;
 }
@@ -2574,7 +2526,7 @@ u16 swp30_device::internal_r()
 		return 0x8000;
 	}
 
-	logerror("%s internal_r port %x channel %02x sample %d\n", machine().time().to_string(), m_internal_adr >> 8, m_internal_adr & 0x1f, m_meg->m_sample_counter);
+	logerror("internal_r port %x channel %02x sample %d\n", m_internal_adr >> 8, m_internal_adr & 0x1f, m_meg->m_sample_counter);
 
 	return 0;
 }
@@ -2613,68 +2565,22 @@ void swp30_device::snd_w(offs_t offset, u16 data)
 
 // Synthesis and meg
 
-uint32_t swp30_device::execute_min_cycles() const noexcept
-{
-	return 1;
-}
-
-uint32_t swp30_device::execute_max_cycles() const noexcept
-{
-	return 1;
-}
-
-
-void swp30_device::meg_prg_map(address_map &map)
-{
-	map(0x000, 0x17f).r(FUNC(swp30_device::meg_prg_map_r));
-}
-
+// S-MU2000: execute_min_cycles() は MAME 専用なので削除
+// S-MU2000: execute_max_cycles() は MAME 専用なので削除
+// S-MU2000: meg_prg_map() は MAME 専用なので削除
 u64 swp30_device::meg_prg_map_r(offs_t address)
 {
 	return m_meg->m_program[address];
 }
 
-void swp30_device::meg_reverb_map(address_map &map)
-{
-	map(0x00000, 0x3ffff).ram();
-}
-
-u16 swp30_device::swp30d_const_r(u16 address) const
-{
-	return m_meg->m_const[address];
-}
-
-u16 swp30_device::swp30d_offset_r(u16 address) const
-{
-	return m_meg->m_offset[address];
-}
-
-device_memory_interface::space_config_vector swp30_device::memory_space_config() const
-{
-	return space_config_vector {
-		std::make_pair(AS_PROGRAM, &m_program_config),
-		std::make_pair(AS_DATA,    &m_wave_config),
-		std::make_pair(AS_REVERB,  &m_reverb_config),
-	};
-}
-
-std::unique_ptr<util::disasm_interface> swp30_device::create_disassembler()
-{
-	return std::make_unique<swp30_disassembler>(this);
-}
-
-void swp30_device::state_import(const device_state_entry &entry)
-{
-}
-
-void swp30_device::state_export(const device_state_entry &entry)
-{
-}
-
-void swp30_device::state_string_export(const device_state_entry &entry, std::string &str) const
-{
-}
-
+// S-MU2000: meg_reverb_map() は MAME 専用なので削除
+// S-MU2000: swp30d_const_r() は MAME 専用なので削除
+// S-MU2000: swp30d_offset_r() は MAME 専用なので削除
+// S-MU2000: memory_space_config() は MAME 専用なので削除
+// S-MU2000: create_disassembler() は MAME 専用なので削除
+// S-MU2000: state_import() は MAME 専用なので削除
+// S-MU2000: state_export() は MAME 専用なので削除
+// S-MU2000: state_string_export() は MAME 専用なので削除
 /*======================= Mixer block ============================================
 
   ssssss 110010  Mixer            llll llll rrrr rrrr                      Route attenuation left/right input s
@@ -3028,15 +2934,7 @@ void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 //   guessing what calculation gives the correct pattern of
 //   imprecision is not trivial.
 
-ROM_START( swp30 )
-	ROM_REGION16_LE( 0x10000, "sintab", 0 )
-	ROM_LOAD( "sin-table.bin", 0, 0x10000, CRC(4305f63c) SHA1(ab3aeacc7a6261cd77019d2f3febd2c21986bf46) )
-ROM_END
-
-const tiny_rom_entry *swp30_device::device_rom_region() const
-{
-	return ROM_NAME( swp30 );
-}
+// S-MU2000: ここにあった 10 行を削除 — ROM 定義（sintab は外から渡す）
 
 const std::array<u32, 256> swp30_device::meg_state::lfo_increment_table = []() {
 	std::array<u32, 256> increments;
@@ -3050,35 +2948,7 @@ const std::array<u32, 256> swp30_device::meg_state::lfo_increment_table = []() {
 	return increments;
 }();
 
-swp30_disassembler::swp30_disassembler(info *inf) : m_info(inf)
-{
-}
-
-u32 swp30_disassembler::opcode_alignment() const
-{
-	return 1;
-}
-
-std::string swp30_disassembler::gconst(offs_t address) const
-{
-	if(!m_info)
-		return util::string_format("c%03x", address);
-	s16 value = m_info->swp30d_const_r(address);
-	return util::string_format("%g", value / 32768.0);
-}
-
-std::string swp30_disassembler::goffset(offs_t address) const
-{
-	return m_info ? util::string_format("%x", m_info->swp30d_offset_r(address)) : util::string_format("of%02x", address);
-}
-
-inline void swp30_disassembler::append(std::string &r, const std::string &e)
-{
-	if(r != "")
-		r += " ; ";
-	r += e;
-}
-
+// S-MU2000: ここにあった 30 行を削除 — 逆アセンブラの補助関数
 
 u16 swp30_device::meg_state::const_r(offs_t offset)
 {
@@ -3230,138 +3100,7 @@ s16 swp30_device::meg_state::m1_expand(s16 v)
 	return (s == 5) ? v : (s < 5) ? (v >> (5-s)) : (v << (s-5));
 }
 
-offs_t swp30_disassembler::disassemble(std::ostream &stream, offs_t pc, const data_buffer &opcodes, const data_buffer &params)
-{
-	std::string r;
-	u64 opcode = opcodes.r64(pc);
-
-	int sm = BIT(opcode, 0x04, 6);
-	int sr = BIT(opcode, 0x0b, 7);
-	int dm = BIT(opcode, 0x27, 6);
-	int dr = BIT(opcode, 0x30, 7);
-	int t  = BIT(opcode, 0x38, 3);
-
-	u32 mmode = BIT(opcode, 0x16, 2);
-	if(mmode != 0 && !BIT(opcode, 0x3f)) {
-		u32 m1t = BIT(opcode, 0x14, 2);
-		std::string mul1 = m1t == 1 || m1t == 2 ? util::string_format("t%x", BIT(opcode, 0x38, 3)) : gconst(pc);
-		if(BIT(opcode, 0x13))
-			mul1 = util::string_format("exp(%s)", mul1);
-
-		std::string mul2 = BIT(opcode, 0x12) ? sm ? util::string_format("m%02x", sm) : "0" : sr ? util::string_format("r%02x", sr) : "0";
-
-		u32 at = BIT(opcode, 0x18, 2);
-		std::string aop;
-		switch(at) {
-		case 0:
-			aop = "p";
-			break;
-
-		case 1:
-			if(sr)
-				aop = util::string_format("r%02x", sr);
-			else
-				aop = "(p >> 15)";
-			break;
-
-		case 2:
-			if(sm)
-				aop = util::string_format("m%02x", sm);
-			else
-				aop = "(p >> 15)";
-			break;
-		}
-
-		std::string op;
-		switch(mmode) {
-		case 1:
-			op = util::string_format("(%s << 8)", mul1);
-			break;
-		case 2:
-			op = util::string_format("%s * %s", mul1, mul2);
-			break;
-		case 3:
-			op = util::string_format("%s", mul2);
-			break;
-		}
-
-		std::string aopf;
-		if(at != 3)
-			switch(BIT(opcode, 0x1a, 2)) {
-			case 0:
-				aopf = util::string_format(" + %s", aop);
-				break;
-			case 1:
-				aopf = util::string_format(" - %s", aop);
-				break;
-			case 2:
-				aopf = util::string_format(" + abs(%s)", aop);
-				break;
-			case 3:
-				aopf = util::string_format(" & %s", aop);
-				break;
-			}
-
-		std::string o = op + aopf;
-		u32 shift = BIT(opcode, 0x1c, 2);
-		if(shift)
-			o = util::string_format("(%s) << %d", o, shift == 3 ? 4 : shift);
-
-		u32 sat = BIT(opcode, 0x1e, 2);
-		static const char *const satmode[4] = { "=", "=s", "=_", "=a" };
-
-		append(r, util::string_format("p %s %s", satmode[sat], o));
-	}
-
-	if(dm) {
-		std::string dst = util::string_format("m%02x", dm);
-		switch(BIT(opcode, 0x2d, 3)) {
-		case 0: case 1: case 2: case 3:
-			append(r, util::string_format("%s = lfo.%02x", dst, pc >> 4));
-			break;
-		case 4: append(r, util::string_format("%s = mr", dst)); break;
-		case 5: append(r, util::string_format("%s = rand", dst)); break;
-		case 6: append(r, util::string_format("%s = p", dst)); break;
-		case 7: append(r, util::string_format("%s = %s", dst, sm ? util::string_format("m%02x", sm) : "0")); break;
-		}
-	}
-
-	if(dr) {
-		if(BIT(opcode, 0x37))
-			append(r, util::string_format("r%02x = r%02x", dr, sr));
-		else
-			append(r, util::string_format("r%02x = p", dr));
-	}
-
-	if(BIT(opcode, 0x3d))
-		append(r, util::string_format("mw = p"));
-
-	if(BIT(opcode, 0x3e))
-		append(r, util::string_format("idx = p"));
-
-	if(BIT(opcode, 0x3b)) {
-		if(BIT(opcode, 0x3c))
-			append(r, util::string_format("t%x = p", t));
-		else
-			append(r, util::string_format("t%x = %s", t, gconst(pc)));
-	}
-
-	if(BIT(opcode, 0x0a))
-		append(r, "nodither");
-
-	u32 memmode = BIT(opcode, 0x24, 2);
-	if(memmode) {
-		static const char *modes[4] = { nullptr, "w", "r", "1r" };
-		append(r, util::string_format("mem_%s +%s%s", modes[memmode], goffset(pc/3), BIT(opcode, 0x21) ? "+idx" : ""));
-	}
-
-	if(opcode == 0)
-		append(r, "nop");
-
-	stream << r;
-
-	return 1 | SUPPORTED;
-}
+// S-MU2000: ここにあった 133 行を削除 — MEG の逆アセンブラ
 
 void swp30_device::meg_state::call_rand(void *ms)
 {
@@ -3381,383 +3120,11 @@ void swp30_device::meg_state::call_revram_decode(void *ms)
 	ms1->m_retval = revram_decode(ms1->m_retval);
 }
 
-void swp30_device::meg_state::drc(drcuml_block &block, u16 pc)
-{
-	enum {
-		L_ABS,     // abs value on p
-		L_ABS2,    // abs value on the mac add branch
-		L_M1_0,    // m1 expansion, value is < 0
-		L_M1_DONE, // m1 expansion, end
-		L_M1_M5,   // m1 expansion, exp < 5
-		L_LFO1,    // lfo, first label
-		L_LFO2,    // lfo, second label
-	};
-
-	UML_DEBUG(block, pc);
-
-	u64 opcodep3 = m_program[(pc + 384 - 3) % 384];
-	u64 opcodep2 = m_program[(pc + 384 - 2) % 384];
-	u64 opcode   = m_program[pc];
-	u64 opcode2  = m_program[(pc +       2) % 384];
-	u32 index3 = pc % 3;
-	u32 index2 = pc % 2;
-
-	// Store the m register at the third instruction
-	int delayed_md = BIT(opcodep3, 0x27, 6);
-	if(delayed_md)
-		UML_MOV(block, mem(&m_m[delayed_md]), mem(&m_mw_value[index3]));
-
-	// Store the r register at the third instruction
-	int delayed_rd = BIT(opcodep3, 0x30, 7);
-	if(delayed_rd)
-		UML_MOV(block, mem(&m_r[delayed_rd]), mem(&m_rw_value[index3]));
-
-	// Store the index register at the third instruction
-	if(BIT(opcodep3, 0x3e))
-		UML_MOV(block, mem(&m_ram_index), mem(&m_index_value[index3]));
-
-	// Store the memw register at the second instruction
-	if(BIT(opcodep2, 0x3d))
-		UML_MOV(block, mem(&m_ram_write), mem(&m_memw_value[index2]));
-
-	// Store the memr register at the second instruction
-	if(BIT(opcodep2, 0x25))
-		UML_MOV(block, mem(&m_ram_read), mem(&m_memr_value[index2]));
-
-	int sm = BIT(opcode, 0x04, 6);
-	int sr = BIT(opcode, 0x0b, 7);
-	int dm = BIT(opcode, 0x27, 6);
-	int dr = BIT(opcode, 0x30, 7);
-	int t  = BIT(opcode, 0x38, 3);
-
-	u32 mmode = BIT(opcode, 0x16, 2);
-	if(mmode != 0 && !BIT(opcode, 0x3f)) {
-		u32 m1t = BIT(opcode, 0x14, 2);
-		if(mmode != 3) {
-			// Needs m1
-			if(m1t == 1 || m1t == 2)
-				UML_DLOADS(block, I1, m_t.data(), t, SIZE_WORD, SCALE_x2);
-			else
-				UML_DLOADS(block, I1, m_const.data(), pc, SIZE_WORD, SCALE_x2);
-			if(BIT(opcode, 0x13)) {
-				// m1_expand inline
-				UML_DMOV(block, I0,  0x0000000000);
-				UML_DCMP(block, I1, I0);
-				UML_JMPc(block, COND_L, (pc << 4) | L_M1_0);     // If negative, clear
-				UML_DSAR(block, I0, I1, 12);                     // exponent in I2
-				UML_DAND(block, I1, I1, 0xfff);
-				UML_DOR(block, I1, I1, 0x1000);                  // mantissa in I1
-				UML_DMOV(block, I2, 5);                          // compare exponent with 5
-				UML_DCMP(block, I0, I2);
-				UML_JMPc(block, COND_E, (pc << 4) | L_M1_DONE);  // no shift if 5
-				UML_JMPc(block, COND_L, (pc << 4) | L_M1_M5);
-
-				UML_DSUB(block, I0, I0, I2);                     // shift left by exp-5 if >5
-				UML_DSHL(block, I1, I1, I0);
-				UML_JMP(block, (pc << 4) | L_M1_DONE);
-
-				UML_LABEL(block, (pc << 4) | L_M1_M5);
-				UML_DSUB(block, I0, I2, I0);                     // shift right by 5-exp if <5
-				UML_DSAR(block, I1, I1, I0);
-				UML_JMP(block, (pc << 4) | L_M1_DONE);
-
-				UML_LABEL(block, (pc << 4) | L_M1_0);            // Clear (negative case), entered with I0=0
-				UML_DMOV(block, I1, I0);
-				UML_LABEL(block, (pc << 4) | L_M1_DONE);         // Exit
-			}
-		}
-
-		if(mmode != 1) {
-			// Needs m2
-			if(BIT(opcode, 0x12)) {
-				if(sm)
-					UML_DLOADS(block, I2, m_m.data(), sm, SIZE_DWORD, SCALE_x4);
-				else
-					UML_DMOV(block, I2, 0);
-			} else {
-				if(sr)
-					UML_DLOADS(block, I2, m_r.data(), sr, SIZE_DWORD, SCALE_x4);
-				else
-					UML_DMOV(block, I2, 0);
-			}
-		}
-
-		switch(mmode) {
-		case 1:
-			UML_DSHL(block, I0, I1, 8+15);
-			break;
-		case 2:
-			UML_DMULSLW(block, I0, I1, I2);
-			break;
-		case 3:
-			UML_DSHL(block, I0, I2, 15);
-			break;
-		}
-
-		bool a_is_zero = false;
-		switch(BIT(opcode, 0x18, 2)) {
-		case 0:
-			UML_DMOV(block, I1, mem(&m_p));
-			break;
-		case 1:
-			if(sr) {
-				UML_DLOADS(block, I1, m_r.data(), sr, SIZE_DWORD, SCALE_x4);
-				UML_DSHL(block, I1, I1, 15);
-			} else
-				UML_DSAR(block, I1, mem(&m_p), 15);
-			break;
-		case 2:
-			if(sm) {
-				UML_DLOADS(block, I1, m_m.data(), sm, SIZE_DWORD, SCALE_x4);
-				UML_DSHL(block, I1, I1, 15);
-			} else
-				UML_DSAR(block, I1, mem(&m_p), 15);
-			break;
-		case 3:
-			a_is_zero = true;
-			break;
-		}
-
-		switch(BIT(opcode, 0x1a, 2)) {
-		case 0:
-			if(!a_is_zero)
-				UML_DADD(block, I0, I0, I1);
-			break;
-		case 1:
-			if(!a_is_zero)
-				UML_DSUB(block, I0, I0, I1);
-			break;
-		case 2:
-			if(!a_is_zero) {
-				UML_DCMP(block, I1, 0x0000000000);
-				UML_JMPc(block, COND_GE, (pc << 4) | L_ABS2);
-				UML_DSUB(block, I1, 0x0000000000, I1);
-				UML_LABEL(block, (pc << 4) | L_ABS2);
-				UML_DADD(block, I0, I0, I1);
-			}
-			break;
-		case 3:
-			if(!a_is_zero)
-				UML_DAND(block, I0, I0, I1);
-			else
-				UML_DMOV(block, I0, 0);
-			break;
-		}
-
-		// Shift and wrap to 42 bits
-		switch(BIT(opcode, 0x1c, 2)) {
-		case 0:
-			UML_DSHL(block, I0, I0, 0 + (64-42));
-			break;
-		case 1:
-			UML_DSHL(block, I0, I0, 1 + (64-42));
-			break;
-		case 2:
-			UML_DSHL(block, I0, I0, 2 + (64-42));
-			break;
-		case 3:
-			UML_DSHL(block, I0, I0, 4 + (64-42));
-			break;
-		}
-		UML_DSAR(block, I0, I0, (64-42));
-
-		// Clamp/saturate as requested
-		switch(BIT(opcode, 0x1e, 2)) {
-		case 0:
-			break;
-		case 1:
-			UML_DMOV(block, I1, -0x4000000000);
-			UML_DCMP(block, I0, I1);
-			UML_DMOVc(block, COND_L, I0, I1);
-			UML_DMOV(block, I1,  0x3fffffffff);
-			UML_DCMP(block, I0, I1);
-			UML_DMOVc(block, COND_G, I0, I1);
-			break;
-		case 2:
-			UML_DMOV(block, I1,  0x0000000000);
-			UML_DCMP(block, I0, I1);
-			UML_DMOVc(block, COND_L, I0, I1);
-			UML_DMOV(block, I1,  0x3fffffffff);
-			UML_DCMP(block, I0, I1);
-			UML_DMOVc(block, COND_G, I0, I1);
-			break;
-		case 3:
-			UML_DMOV(block, I1,  0x0000000000);
-			UML_DCMP(block, I0, I1);
-			UML_JMPc(block, COND_GE, (pc << 4) | L_ABS);
-			UML_DSUB(block, I0, I1, I0);
-			UML_LABEL(block, (pc << 4) | L_ABS);
-			UML_DMOV(block, I1,  0x3fffffffff);
-			UML_DCMP(block, I0, I1);
-			UML_DMOVc(block, COND_G, I0, I1);
-			break;
-		}
-
-		UML_DMOV(block, mem(&m_p), I0);
-	}
-
-	if(dm) {
-		switch(BIT(opcode, 0x2d, 3)) {
-		case 0: case 1: case 2: case 3: {
-			int lfo = pc >> 4;
-			u16 info = m_lfo[lfo];
-			UML_MOV(block, I0, mem(&m_lfo_counter[lfo]));
-			UML_SAR(block, I0, I0, 5);
-			if(info & 0xf300) {
-				constexpr u32 offsets[16] = {
-					0x00000, 0x02aaa, 0x04000, 0x05555,
-					0x08000, 0x0aaaa, 0x0c000, 0x0d555,
-					0x10000, 0x12aaa, 0x14000, 0x15555,
-					0x18000, 0x1aaaa, 0x1c000, 0x1d555,
-				};
-
-				if(info & 0x0300)
-					UML_SHL(block, I0, I0, BIT(info, 8, 2));
-				if(info & 0xf000)
-					UML_ADD(block, I0, I0, offsets[BIT(info, 12, 4)]);
-				UML_AND(block, I0, I0, 0x1ffff);
-			}
-
-			switch((info >> 10) & 3) {
-			case 0:
-				UML_MOV(block, I1, I0);
-				UML_AND(block, I0, I0, 0x7fff);
-				UML_TEST(block, I1, 0x8000);
-				UML_JMPc(block, COND_Z, (pc << 4) | L_LFO1);
-				UML_XOR(block, I0, I0, 0x7fff);
-				UML_LABEL(block, (pc << 4) | L_LFO1);
-				UML_LOAD(block, I0, m_swp->m_sintab, I0, SIZE_WORD, SCALE_x2);
-				UML_TEST(block, I1, 0x10000);
-				UML_JMPc(block, COND_Z, (pc << 4) | L_LFO2);
-				UML_XOR(block, I0, I0, 0xffff);
-				UML_LABEL(block, (pc << 4) | L_LFO2);
-				break;
-			case 1:
-				UML_ADD(block, I0, I0, 0x8000);
-				UML_TEST(block, I0, 0x10000);
-				UML_JMPc(block, COND_Z, (pc << 4) | L_LFO1);
-				UML_XOR(block, I0, I0, 0xffff);
-				UML_LABEL(block, (pc << 4) | L_LFO1);
-				UML_AND(block, I0, I0, 0xffff);
-				break;
-			case 2:
-				UML_SAR(block, I0, I0, 1);
-				break;
-			case 3:
-				UML_XOR(block, I0, I0, 0x1ffff);
-				UML_SAR(block, I0, I0, 1);
-				break;
-			}
-			UML_SHL(block, mem(&m_mw_value[index3]), I0, 7);
-			break;
-		}
-		case 4:
-			UML_MOV(block, mem(&m_mw_value[index3]), mem(&m_ram_read));
-			break;
-		case 5:
-			UML_CALLC(block, call_rand, this);
-			UML_SHL(block, I0, mem(&m_retval), 8);
-			UML_SAR(block, mem(&m_mw_value[index3]), I0, 8);
-			break;
-		case 6:
-			UML_DMOV(block, I0, mem(&m_p));
-			if(!BIT(opcode, 0x0a)) {
-				UML_CALLC(block, call_rand, this);
-				UML_AND(block, I1, mem(&m_retval), 0x07e0);
-				UML_DADD(block, I0, I0, I1);
-			}
-			UML_DSAR(block, I0, I0, (15-8));
-			UML_SAR(block, mem(&m_mw_value[index3]), I0, 8);
-			break;
-		case 7:
-			UML_MOV(block, mem(&m_mw_value[index3]), mem(&m_m[sm]));
-			break;
-		}
-	}
-
-	if(dr) {
-		if(BIT(opcode, 0x37)) {
-			if(sr)
-				UML_DMOV(block, mem(&m_rw_value[index3]), mem(&m_r[sr]));
-			else
-				UML_DMOV(block, mem(&m_rw_value[index3]), 0);
-		} else {
-			UML_DMOV(block, I0, mem(&m_p));
-			if(!BIT(opcode, 0x0a)) {
-				UML_CALLC(block, call_rand, this);
-				UML_AND(block, I1, mem(&m_retval), 0x07e0);
-				UML_DADD(block, I0, I0, I1);
-			}
-			UML_DSAR(block, I0, I0, (15-8));
-			UML_SAR(block, mem(&m_rw_value[index3]), I0, 8);
-		}
-	}
-
-	// T write lookups the p value from two cycles before
-	if(BIT(opcode, 0x3b, 1)) {
-		if(BIT(opcode, 0x3c))
-			UML_LOADS(block, I0, m_t_value.data(), index2, SIZE_WORD, SCALE_x2);
-		else
-			UML_LOADS(block, I0, m_const.data(), pc, SIZE_WORD, SCALE_x2);
-		UML_STORE(block, m_t.data(), t, I0, SIZE_WORD, SCALE_x2);
-	}
-	if(BIT(opcode2, 0x3b, 2) == 3) {
-		if(BIT(opcode, 0x3e)) {
-			UML_DSAR(block, I0, mem(&m_p), 8);
-			UML_AND(block, I0, I0, 0x7fff);
-			UML_STORE(block, m_t_value.data(), index2, I0, SIZE_WORD, SCALE_x2);
-		} else {
-			UML_DSAR(block, I0, mem(&m_p), 15+8);
-			UML_STORE(block, m_t_value.data(), index2, I0, SIZE_WORD, SCALE_x2);
-		}
-	}
-
-	if(BIT(opcode, 0x3d)) {
-		UML_DSAR(block, I0, mem(&m_p), 15);
-		UML_MOV(block, mem(&m_memw_value[index2]), I0);
-	}
-
-	if(BIT(opcode, 0x3e)) {
-		UML_DSAR(block, I0, mem(&m_p), 15+8);
-		UML_STORE(block, m_index_value.data(), index3, I0, SIZE_WORD, SCALE_x2);
-	}
-
-	// Memory access
-	int amem = BIT(opcode, 0x24, 2);
-	if(amem) {
-		u16 key = (pc / 12) << 11;
-		int bank;
-		for(bank=0; bank != 7; bank++)
-			if(m_map[bank+1] <= m_map[bank] || ((m_map[bank+1] & 0xf800) > key))
-				break;
-		u16 mapr = m_map[bank];
-		u32 mask = (1 << (10+BIT(mapr, 8, 3))) - 1;
-		u32 offset = BIT(mapr, 0, 8) << 10;
-		if(amem == 3)
-			offset ++;
-		UML_LOAD(block, I0, m_offset.data(), pc/3, SIZE_WORD, SCALE_x2);
-		UML_SUB(block, I0, I0, mem(&m_sample_counter));
-		UML_ADD(block, I0, I0, offset);
-		if(BIT(opcode, 0x21))
-			UML_ADD(block, I0, I0, mem(&m_ram_index));
-		UML_AND(block, I0, I0, mask);
-		if(amem == 1) {
-			UML_MOV(block, mem(&m_retval), mem(&m_ram_write));
-			UML_CALLC(block, call_revram_encode, this);
-			UML_MOV(block, I1, mem(&m_retval));
-			UML_WRITE(block, I0, I1, SIZE_WORD, memory_space(swp30_device::AS_REVERB));
-		} else {
-			UML_READ(block, I1, I0, SIZE_WORD, memory_space(swp30_device::AS_REVERB));
-			UML_MOV(block, mem(&m_retval), I1);
-			UML_CALLC(block, call_revram_decode, this);
-			UML_MOV(block, mem(&m_memr_value[index2]), mem(&m_retval));
-		}
-	}
-}
+// S-MU2000: ここにあった 374 行を削除 — MEG の DRC 生成（インタプリタ経路を使うので不要）
 
 void swp30_device::meg_state::step()
 {
-	m_swp->debugger_instruction_hook(m_pc);
+	// S-MU2000: debugger_instruction_hook は削除
 
 	// All register writes are delayed by 3 cycles, probably a pipeline
 	// Register 0 in both banks are wired to value 0
@@ -3963,35 +3330,23 @@ void swp30_device::meg_state::step()
 		m_pc = 0;
 }
 
-void swp30_device::execute_run()
+// S-MU2000: execute_run() を run_sample() に置き換えた。
+// もとは MAME のスケジューラが m_icount 分だけ回す作りだった。
+// ここではホストが「1 サンプルくれ」と呼ぶ形にする。DRC は使わない。
+//
+// 1 サンプル = sample_step() 1 回 + MEG のプログラム 384 ステップ。
+void swp30_device::run_sample(s32 &left, s32 &right)
 {
-	if(m_meg_drc_active) {
-		if(m_meg_program_changed) {
-			m_drcuml->reset();
-			m_meg_program_changed = false;
-			drcuml_block &block(m_drcuml->begin_block(16384));
-			UML_HANDLE(block, *m_meg_drc_entry);
-			for(u16 pc = 0; pc != 384; pc++)
-				m_meg->drc(block, pc);
-			UML_EXIT(block, 0);
-			block.end();
-		}
+	m_meg_program_changed = false;
 
-		while(m_meg->m_icount > 0) {
-			sample_step();
-			m_drcuml->execute(*m_meg_drc_entry);
-			m_meg->m_icount -= 384;
-		}
+	sample_step();
+	for(int i = 0; i != 384; i++)
+		m_meg->step();
 
-	} else {
-		m_meg_program_changed = false;
-
-		while(m_meg->m_icount > 0) {
-			if(m_meg->m_pc == 0)
-				sample_step();
-			m_meg->step();
-		}
-	}
+	// sound_stream_update() がやっていたことをここで行う。
+	// DAC は出力 0-3 の先頭 2 本。scale は 1<<17。
+	left  = m_adc[0];
+	right = m_adc[1];
 }
 
 void swp30_device::adc_step()
@@ -4010,17 +3365,6 @@ void swp30_device::sample_step()
 	m_meg->m_sample_counter ++;
 }
 
-void swp30_device::sound_stream_update(sound_stream &stream)
-{
-	if(&stream == m_output_stream) {
-		for(int i=0; i != 4; i++)
-			stream.put_int_clamp(i, 0, m_adc[i], 1<<17);
-		for(int i=0; i != 16; i++)
-			stream.put_int_clamp(i+4, 0, m_melo[i], 1<<26);
-	} else
-		for(int i=0; i != 16; i++)
-			m_meli[i] = stream.get(i, 0) * (1<<26);
-}
-
-DEFINE_DEVICE_TYPE(SWP30, swp30_device, "swp30", "Yamaha SWP30 sound chip")
+// S-MU2000: sound_stream_update() は MAME 専用なので削除
+// S-MU2000: DEFINE_DEVICE_TYPE は MAME 専用なので削除
 

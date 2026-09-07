@@ -21,6 +21,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -144,6 +145,41 @@ private:
 	size_t    m_mask  = 0;
 	bool      m_pow2  = false;
 };
+
+// ---- MAME の小物 ------------------------------------------------------------
+
+// BIT(value, n) : n ビット目を取り出す。BIT(value, n, len) : n から len ビット
+constexpr u32 BIT(u64 v, int n)          { return u32((v >> n) & 1); }
+constexpr u64 BIT(u64 v, int n, int len) { return (v >> n) & ((u64(1) << len) - 1); }
+
+namespace util {
+// util::string_format は printf 形式。ログ用途にしか使われていない
+template <typename... A>
+inline std::string string_format(const char *fmt, A... args)
+{
+	char buf[512];
+	std::snprintf(buf, sizeof(buf), fmt, args...);
+	return std::string(buf);
+}
+inline std::string string_format(const char *fmt) { return std::string(fmt); }
+
+// util::stream_format はデバッグ表示用。中身は要らないが呼び出しは残っている
+template <typename S, typename... A>
+inline void stream_format(S &, const char *, A...) {}
+
+// util::sext(value, bits) : bits ビットの符号付き値として符号拡張する
+// util::make_bitmask<T>(n) : 下位 n ビットが立ったマスク
+template <typename T> constexpr T make_bitmask(unsigned n)
+{
+	return T(n >= (sizeof(T) * 8) ? T(~T(0)) : ((T(1) << n) - 1));
+}
+
+constexpr s64 sext(u64 v, int bits)
+{
+	const u64 m = u64(1) << (bits - 1);
+	return s64((v ^ m) - m);
+}
+}
 
 // ---- 乱数 -------------------------------------------------------------------
 //

@@ -28,6 +28,11 @@ public:
 	void set_sintab(const u16 *base, size_t count);
 
 	void reset();
+
+	// S-MU2000: swp30 が machine() を使うのは乱数のためだけ。
+	// MAME と同じ数列でないと波形が一致しないので、同じ実装を持たせる。
+	running_machine &machine() { return m_machine; }
+
 	// 1 サンプル進めて、DAC 出力 2ch を返す
 	void run_sample(s32 &left, s32 &right);
 
@@ -294,6 +299,7 @@ private:
 	};
 
 	// S-MU2000: address_space の代わりにフラットな領域を直接持つ
+	running_machine m_machine;
 	region_ptr<u16> m_sintab;
 	std::vector<u64> m_meg_program;      // MEG のプログラム（9bit 空間）
 	std::vector<u16> m_reverb_ram;       // リバーブ RAM（18bit 空間）
