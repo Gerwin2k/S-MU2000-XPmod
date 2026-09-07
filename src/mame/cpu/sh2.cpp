@@ -329,35 +329,7 @@ void sh2_device::execute_run()
 
 // S-MU2000: init_drc_frontend() は削除（DRC を使わない）
 
-void sh2_device::state_string_export(const device_state_entry &entry, std::string &str) const
-{
-	switch (entry.index())
-	{
-		case STATE_GENFLAGS:
-			str = string_format("%c%c%d%c%c",
-					m_sh2_state->sr & SH_M ? 'M':'.',
-					m_sh2_state->sr & SH_Q ? 'Q':'.',
-					(m_sh2_state->sr & SH_I) >> 4,
-					m_sh2_state->sr & SH_S ? 'S':'.',
-					m_sh2_state->sr & SH_T ? 'T':'.');
-			break;
-	}
-}
 
-void sh2_device::state_import(const device_state_entry &entry)
-{
-	switch (entry.index())
-	{
-		case STATE_GENPC:
-		case STATE_GENPCBASE:
-			m_sh2_state->m_delay = 0;
-			break;
-
-		case SH_SR:
-			check_pending_irq("sh2_set_reg");
-			break;
-	}
-}
 
 void sh2_device::execute_set_input(int irqline, int state)
 {

@@ -40,6 +40,10 @@ using s64 = std::int64_t;
 
 using offs_t = std::uint32_t;
 
+// MAME のソースは uintN_t も混ぜて使うので、素の名前でも引けるようにする
+using std::uint8_t;  using std::uint16_t; using std::uint32_t; using std::uint64_t;
+using std::int8_t;   using std::int16_t;  using std::int32_t;  using std::int64_t;
+
 // MAME のソースに散っている属性・注釈。中身は要らない
 #define ATTR_COLD
 #define ATTR_FORCE_INLINE inline
@@ -180,6 +184,49 @@ constexpr s64 sext(u64 v, int bits)
 	return s64((v ^ m) - m);
 }
 }
+
+// ---- MAME のデバイス生成まわり ----------------------------------------------
+//
+// MAME のデバイスは machine_config に登録して生成する。ここでは実体を直接
+// 作るので、コンストラクタの引数を受け流すためだけの空の型を用意する。
+// sh7042 は内蔵周辺（SCI, タイマ, ポート…）を required_device で持つので、
+// それも「ただのポインタ」に置き換える。
+
+class device_t;
+class machine_config;
+struct device_type_dummy {};
+using device_type = const device_type_dummy *;
+struct address_map_constructor {};
+struct address_map {};
+
+// required_device<T> / optional_device<T> はサブデバイスへの参照。
+// 実体はこちらで作って set() で結び付ける。
+template <typename T>
+class required_device
+{
+public:
+	template <typename... A> required_device(A &&...) {}
+	T *operator->() const { return m_target; }
+	T &operator*()  const { return *m_target; }
+	operator T *()  const { return m_target; }
+	T *target() const { return m_target; }
+	bool found() const { return m_target != nullptr; }
+	void set(T *p) { m_target = p; }
+private:
+	T *m_target = nullptr;
+};
+template <typename T> using optional_device = required_device<T>;
+
+// ---- 割り込み線とエラー -----------------------------------------------------
+
+enum line_state { CLEAR_LINE = 0, ASSERT_LINE, HOLD_LINE };
+
+[[noreturn]] inline void fatalerror_impl(const char *msg)
+{
+	std::fprintf(stderr, "fatal: %s\n", msg);
+	std::abort();
+}
+#define fatalerror(...) do { char b[256]; std::snprintf(b, sizeof(b), __VA_ARGS__); fatalerror_impl(b); } while(0)
 
 // ---- 乱数 -------------------------------------------------------------------
 //

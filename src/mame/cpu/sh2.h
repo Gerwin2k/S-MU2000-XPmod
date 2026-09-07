@@ -24,7 +24,6 @@ class sh2_device : public sh_common_execution
 public:
 	void set_frt_input(int state) override {} // not every CPU needs this, let the ones that do override it
 
-	void func_fastirq(); // required for DRC, needs to be public to be accessible through non-classed static trampoline function
 
 protected:
 	class sh2_frontend;
@@ -50,8 +49,6 @@ protected:
 	virtual space_config_vector memory_space_config() const override;
 
 	// device_state_interface overrides
-	virtual void state_import(const device_state_entry &entry) override;
-	virtual void state_string_export(const device_state_entry &entry, std::string &str) const override;
 
 	// device_disasm_interface overrides
 	virtual std::unique_ptr<util::disasm_interface> create_disassembler() override;
@@ -82,16 +79,11 @@ private:
 
 	virtual void execute_one_f000(uint16_t opcode) override;
 
-	virtual void init_drc_frontend() override;
 	virtual const opcode_desc* get_desclist(offs_t pc) override;
 
-	virtual void generate_update_cycles(drcuml_block &block, compiler_state &compiler, uml::parameter param, bool allow_exception) override;
-	virtual void static_generate_entry_point() override;
-	virtual void static_generate_memory_accessor(int size, int iswrite, const char *name, uml::code_handle *&handleptr) override;
 
 	address_space_config m_program_config, m_decrypted_program_config;
 
-	std::unique_ptr<sh2_frontend> m_drcfe; /* pointer to the DRC front-end state */
 
 	uint32_t m_cpu_off;
 	int8_t m_irq_line_state[17];

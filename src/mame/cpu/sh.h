@@ -6,7 +6,10 @@
 
 #pragma once
 
-#include "cpu/drcuml.h"
+// S-MU2000: MAME 本体の代わりに互換層とバスを使う
+#include "../../compat/mamecompat.h"
+#include "../../compat/membus.h"
+
 
 
 /***************************************************************************
@@ -82,7 +85,6 @@
 #define SH34LE_CODE_XOR(a)  ((a) ^ NATIVE_ENDIAN_VALUE_LE_BE(0, 6)) // naomi
 #define SH34BE_CODE_XOR(a)  ((a) ^ NATIVE_ENDIAN_VALUE_LE_BE(6, 0)) // cave
 
-#define R32(reg)        m_regmap[reg]
 
 enum
 {
@@ -91,7 +93,8 @@ enum
 	SH4_R8, SH4_R9, SH4_R10, SH4_R11, SH4_R12, SH4_R13, SH4_R14, SH4_R15, SH4_EA, SH4_SP
 };
 
-class sh_common_execution : public cpu_device
+// S-MU2000: cpu_device をやめ、素のクラスにした
+class sh_common_execution
 {
 
 public:
@@ -192,7 +195,8 @@ protected:
 	class frontend;
 	class opcode_desc;
 
-	sh_common_execution(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock, endianness_t endianness, address_map_constructor internal);
+	// S-MU2000: MAME のデバイス生成の引数を落とした
+	sh_common_execution() = default;
 
 	void ADD(uint32_t m, uint32_t n);
 	void ADDI(uint32_t i, uint32_t n);
@@ -351,7 +355,6 @@ protected:
 	virtual void TRAPA(uint32_t i) = 0;
 	virtual void ILLEGAL() = 0;
 
-	drc_cache           m_cache;                  /* pointer to the DRC code cache */
 
 public:
 	/* fast RAM */
@@ -367,108 +370,47 @@ public:
 	int m_pcfsel;                 // last pcflush entry set
 	uint32_t m_pcflushes[16];           // pcflush entries
 
-	virtual void init_drc_frontend() = 0;
 
-	void drc_start();
 
-	void sh2drc_add_fastram(offs_t start, offs_t end, uint8_t readonly, void *base);
 
 	std::function<u16 (offs_t)> m_pr16;
 	std::function<const void * (offs_t)> m_prptr;
-	address_space *m_program;
-	memory_access<32, 2, 0, ENDIANNESS_BIG>::cache m_cache32;
-	memory_access<32, 3, 0, ENDIANNESS_BIG>::cache m_cache64be;
-	memory_access<32, 3, 0, ENDIANNESS_LITTLE>::cache m_cache64le;
+	// S-MU2000: address_space の代わりに mem_bus を指す。
+	// 命令フェッチ用の別空間（m_decrypted_program）は MU2000 では同じもの。
+	mem_bus *m_program = nullptr;
+	mem_bus *m_decrypted_program = nullptr;
 
-	std::unique_ptr<drcuml_state>      m_drcuml;                 /* DRC UML generator state */
-	uint32_t              m_drcoptions;         /* configurable DRC options */
 
 	/* internal stuff */
 	uint8_t               m_cache_dirty;                /* true if we need to flush the cache */
 
 	/* register mappings */
-	uml::parameter      m_regmap[16];                 /* parameter to register mappings for all 16 integer registers */
 
-	uml::code_handle *  m_entry;                      /* entry point */
-	uml::code_handle *  m_read8;                  /* read byte */
-	uml::code_handle *  m_write8;                 /* write byte */
-	uml::code_handle *  m_read16;                 /* read half */
-	uml::code_handle *  m_write16;                    /* write half */
-	uml::code_handle *  m_read32;                 /* read word */
-	uml::code_handle *  m_write32;                    /* write word */
 
-	uml::code_handle *  m_interrupt;              /* interrupt */
-	uml::code_handle *  m_nocode;                 /* nocode */
-	uml::code_handle *  m_out_of_cycles;              /* out of cycles exception handler */
 
 	/* internal compiler state */
-	struct compiler_state
-	{
-		compiler_state &operator=(compiler_state const &) = delete;
-
-		uint32_t          cycles;                     /* accumulated cycles */
-		uint8_t           checkints;                  /* need to check interrupts before next instruction */
-		uml::code_label  labelnum;                   /* index for local labels */
-	};
 
 	virtual void sh2_exception(const char *message, int irqline) { fatalerror("sh2_exception in base classs\n"); }
 
-	virtual void generate_update_cycles(drcuml_block &block, compiler_state &compiler, uml::parameter param, bool allow_exception) = 0;
-
-	virtual bool generate_group_0_RTE(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	virtual bool generate_group_4_LDCSR(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	virtual bool generate_group_4_LDCMSR(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	virtual bool generate_group_12_TRAPA(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
 
 
-	virtual bool generate_opcode(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint32_t ovrpc);
-	virtual bool generate_group_0(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	bool generate_group_2(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	bool generate_group_3(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, uint32_t ovrpc);
-	virtual bool generate_group_4(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	bool generate_group_6(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	bool generate_group_8(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	bool generate_group_12(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
-	virtual bool generate_group_15(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint16_t opcode, int in_delay_slot, uint32_t ovrpc);
 
-	void func_printf_probe();
-	void func_unimplemented();
-	void func_MAC_W();
-	void func_MAC_L();
-	void func_DIV1();
-	void func_ADDV();
-	void func_SUBV();
+
 
 	int m_cpu_type;
 	uint32_t m_am;
-	bool m_isdrc;
 
 	void sh2drc_set_options(uint32_t options);
 	void sh2drc_add_pcflush(offs_t address);
 
-	virtual void static_generate_entry_point() = 0;
-	virtual void static_generate_memory_accessor(int size, int iswrite, const char *name, uml::code_handle *&handleptr) = 0;
 	virtual const opcode_desc* get_desclist(offs_t pc) = 0;
 
 	uint32_t epc(const opcode_desc *desc);
-	void alloc_handle(uml::code_handle *&handleptr, const char *name);
-	void load_fast_iregs(drcuml_block &block);
-	void save_fast_iregs(drcuml_block &block);
-	void log_opcode_desc(const opcode_desc *desclist, int indent);
-	void log_add_disasm_comment(drcuml_block &block, uint32_t pc, uint32_t op);
-	void generate_delay_slot(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint32_t ovrpc);
-	void generate_checksum_block(drcuml_block &block, compiler_state &compiler, const opcode_desc *seqhead, const opcode_desc *seqlast);
-	void generate_sequence_instruction(drcuml_block &block, compiler_state &compiler, const opcode_desc *desc, uint32_t ovrpc);
-	void static_generate_nocode_handler();
-	void static_generate_out_of_cycles();
-	void code_flush_cache();
-	void execute_run_drc();
-	void code_compile_block(uint8_t mode, offs_t pc);
 
 
 protected:
 	// device_t implementation
-	virtual void device_start() override ATTR_COLD;
+	virtual void device_start();
 };
 
 #endif // MAME_CPU_SH_SH_H
