@@ -17,12 +17,15 @@
 
 #pragma once
 
+// S-MU2000: MAME 本体の代わりに互換層を使う
+#include "../../compat/mamecompat.h"
+
 #include "sh.h"
 
 class sh2_device : public sh_common_execution
 {
 public:
-	void set_frt_input(int state) override {} // not every CPU needs this, let the ones that do override it
+	void set_frt_input(int state) {} // not every CPU needs this, let the ones that do override it
 
 
 protected:
@@ -38,22 +41,22 @@ protected:
 	virtual void device_reset() override ATTR_COLD;
 
 	// device_execute_interface overrides
-	virtual uint32_t execute_min_cycles() const noexcept override { return 1; }
-	virtual uint32_t execute_max_cycles() const noexcept override { return 4; }
-	virtual uint32_t execute_default_irq_vector(int inputnum) const noexcept override { return 0; }
-	virtual bool execute_input_edge_triggered(int inputnum) const noexcept override { return inputnum == INPUT_LINE_NMI; }
-	virtual void execute_run() override;
-	virtual void execute_set_input(int inputnum, int state) override;
+	virtual uint32_t execute_min_cycles() const noexcept { return 1; }
+	virtual uint32_t execute_max_cycles() const noexcept { return 4; }
+	virtual uint32_t execute_default_irq_vector(int inputnum) const noexcept { return 0; }
+	virtual bool execute_input_edge_triggered(int inputnum) const noexcept { return inputnum == INPUT_LINE_NMI; }
+	virtual void execute_run();
+	virtual void execute_set_input(int inputnum, int state);
 
 	// device_memory_interface overrides
-	virtual space_config_vector memory_space_config() const override;
+	virtual space_config_vector memory_space_config() const;
 
 	// device_state_interface overrides
 
 	// device_disasm_interface overrides
-	virtual std::unique_ptr<util::disasm_interface> create_disassembler() override;
+	virtual std::unique_ptr<util::disasm_interface> create_disassembler();
 
-	virtual void sh2_exception(const char *message, int irqline) override;
+	virtual void sh2_exception(const char *message, int irqline);
 	virtual void sh2_exception_internal(const char *message, int irqline, int vector);
 
 	address_space *m_decrypted_program;
@@ -63,23 +66,23 @@ protected:
 	int8_t m_nmi_line_state;
 
 private:
-	virtual uint8_t read_byte(offs_t A) override;
-	virtual uint16_t read_word(offs_t A) override;
-	virtual uint32_t read_long(offs_t A) override;
-	virtual uint16_t decrypted_read_word(offs_t offset) override;
-	virtual void write_byte(offs_t A, uint8_t V) override;
-	virtual void write_word(offs_t A, uint16_t V) override;
-	virtual void write_long(offs_t A, uint32_t V) override;
+	virtual uint8_t read_byte(offs_t A);
+	virtual uint16_t read_word(offs_t A);
+	virtual uint32_t read_long(offs_t A);
+	virtual uint16_t decrypted_read_word(offs_t offset);
+	virtual void write_byte(offs_t A, uint8_t V);
+	virtual void write_word(offs_t A, uint16_t V);
+	virtual void write_long(offs_t A, uint32_t V);
 
-	virtual void LDCMSR(const uint16_t opcode) override;
-	virtual void LDCSR(const uint16_t opcode) override;
-	virtual void TRAPA(uint32_t i) override;
-	virtual void RTE() override;
-	virtual void ILLEGAL() override;
+	virtual void LDCMSR(const uint16_t opcode);
+	virtual void LDCSR(const uint16_t opcode);
+	virtual void TRAPA(uint32_t i);
+	virtual void RTE();
+	virtual void ILLEGAL();
 
-	virtual void execute_one_f000(uint16_t opcode) override;
+	virtual void execute_one_f000(uint16_t opcode);
 
-	virtual const opcode_desc* get_desclist(offs_t pc) override;
+	virtual const opcode_desc* get_desclist(offs_t pc);
 
 
 	address_space_config m_program_config, m_decrypted_program_config;

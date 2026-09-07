@@ -192,7 +192,30 @@ constexpr s64 sext(u64 v, int bits)
 // sh7042 は内蔵周辺（SCI, タイマ, ポート…）を required_device で持つので、
 // それも「ただのポインタ」に置き換える。
 
-class device_t;
+// MAME のデバイス基底。周辺が実際に使うのは clock() と machine() だけだった
+// （save_item と logerror はマクロで無効化済み）。
+class running_machine;
+
+class device_t
+{
+public:
+	virtual ~device_t() = default;
+
+	u32 clock() const { return m_clock; }
+	void set_clock(u32 c) { m_clock = c; }
+
+	running_machine &machine() const { return *m_machine; }
+	void set_machine(running_machine *m) { m_machine = m; }
+
+	// MAME が呼ぶ初期化。実体側は素直に呼べばよい
+	virtual void device_start() {}
+	virtual void device_reset() {}
+
+private:
+	u32 m_clock = 0;
+	running_machine *m_machine = nullptr;
+};
+
 class machine_config;
 struct device_type_dummy {};
 using device_type = const device_type_dummy *;
@@ -212,10 +235,24 @@ public:
 	T *target() const { return m_target; }
 	bool found() const { return m_target != nullptr; }
 	void set(T *p) { m_target = p; }
+	// MAME は tag（文字列）で結線するが、こちらは実体を直接渡すので何もしない
+	template <typename... A> void set_tag(A &&...) {}
 private:
 	T *m_target = nullptr;
 };
 template <typename T> using optional_device = required_device<T>;
+
+// 時間。周辺のタイマが型として使うだけで、実際の刻みは呼び出し側が管理する
+struct attotime
+{
+	static attotime from_ticks(u64, u32) { return {}; }
+	static attotime never() { return {}; }
+	static attotime zero() { return {}; }
+};
+
+#define DEFINE_DEVICE_TYPE(...)
+#define DECLARE_DEVICE_TYPE(...)
+#define TIMER_CALLBACK_MEMBER(name) void name(s32 param)
 
 // ---- 割り込み線とエラー -----------------------------------------------------
 

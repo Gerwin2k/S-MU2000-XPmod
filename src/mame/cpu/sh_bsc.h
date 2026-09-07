@@ -13,6 +13,9 @@
 
 #pragma once
 
+// S-MU2000: MAME 本体の代わりに互換層を使う
+#include "../../compat/mamecompat.h"
+
 class sh_bsc_device : public device_t {
 public:
 	sh_bsc_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock = 0);

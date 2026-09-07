@@ -13,6 +13,9 @@
 
 #pragma once
 
+// S-MU2000: MAME 本体の代わりに互換層を使う
+#include "../../compat/mamecompat.h"
+
 class sh7042_device;
 
 class sh_port16_device : public device_t {
