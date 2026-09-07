@@ -9,6 +9,9 @@
 
 namespace {
 
+// MIDI は 31250bps。28MHz の CPU から見て 1 ビット = 896 サイクル
+constexpr u64 MIDI_BIT_CYCLES = 28000000 / 31250;
+
 bool read_file(const std::string &path, std::vector<u8> &out, size_t expect)
 {
 	std::FILE *f = std::fopen(path.c_str(), "rb");
@@ -190,6 +193,34 @@ void mu2000::build_bus()
 }
 
 
+// ポート E は LCD の 8bit バス。上位バイトがデータ、下位が制御線。
+// MAME の mu500_state::pe_r / pe_w と同じ形にしてある
+//   bit 4: E（立ち下がりで確定）  bit 2: RS（1 でデータ）  bit 0: R/W
+u16 mu2000::lcd_port_r()
+{
+	m_lcd.set_now(m_cpu->total_cycles());
+	if (BIT(m_pe, 4)) {
+		if (BIT(m_pe, 0))
+			return u16((BIT(m_pe, 2) ? m_lcd.data_r() : m_lcd.control_r()) << 8);
+		return 0x0000;
+	}
+	return 0;
+}
+
+void mu2000::lcd_port_w(u16 data)
+{
+	m_lcd.set_now(m_cpu->total_cycles());
+	if (BIT(m_pe, 4) && !BIT(data, 4)) {        // E の立ち下がり
+		if (!BIT(data, 0)) {                    // R/W = 0、つまり書き込み
+			if (BIT(data, 2))
+				m_lcd.data_w(u8(data >> 8));
+			else
+				m_lcd.control_w(u8(data >> 8));
+		}
+	}
+	m_pe = data;
+}
+
 void mu2000::start_devices()
 {
 	// MAME はスケジューラが順に呼ぶ。こちらは生成順にそのまま呼ぶ
@@ -202,11 +233,17 @@ void mu2000::reset()
 {
 	// ポートの既定値。MAME の mu500_state::pa_r は 0xffff を返していた
 	m_cpu->read_porta().set([]() { return u32(0xffff); });
-	m_cpu->read_porte().set([this]() { return u16(0); });
-	m_cpu->write_porte().set([this](u16 v) { m_pe = v; });
+	m_cpu->read_porte().set([this]() { return lcd_port_r(); });
+	m_cpu->write_porte().set([this](u16 v) { lcd_port_w(v); });
+
+	m_lcd.reset();
 
 	m_swpm.reset();
 	m_swps.reset();
+
+	// MIDI IN の線は何も来ていないとき High
+	m_cpu->sci_rx_w<0>(1);
+	m_cpu->sci_rx_w<1>(1);
 
 	start_devices();
 
@@ -234,9 +271,17 @@ void mu2000::run_cycles(u64 n)
 		}
 		idle = 0;
 
+		// MIDI のビット送出も跨がないように
+		midi_step(now);
+
 		u64 chunk = n;
 		if (ev && ev - now < chunk)
 			chunk = ev - now;
+		if (m_midi_bit >= 0 || !m_midi_queue.empty()) {
+			const u64 left = m_midi_next > now ? m_midi_next - now : 1;
+			if (left < chunk)
+				chunk = left;
+		}
 
 		const int done = m_cpu->run_cycles(int(chunk));
 		if (done <= 0) {
@@ -245,6 +290,34 @@ void mu2000::run_cycles(u64 n)
 			continue;
 		}
 		n -= u64(done) < n ? u64(done) : n;
+	}
+}
+
+void mu2000::midi_step(u64 now)
+{
+	if (m_midi_bit < 0) {
+		// 直前のバイトのストップビットぶんは空けてから次を出す
+		if (m_midi_queue.empty() || now < m_midi_next)
+			return;
+		m_midi_cur = m_midi_queue.front();
+		m_midi_queue.pop_front();
+		m_midi_bit  = 0;
+		m_midi_next = now + MIDI_BIT_CYCLES;
+		logerror("midi in %02x @ %llu\n", m_midi_cur, (unsigned long long)now);
+		m_cpu->sci_rx_w<0>(0);          // スタートビット
+		return;
+	}
+
+	if (now < m_midi_next)
+		return;
+
+	m_midi_bit++;
+	m_midi_next = now + MIDI_BIT_CYCLES;
+	if (m_midi_bit <= 8)
+		m_cpu->sci_rx_w<0>((m_midi_cur >> (m_midi_bit - 1)) & 1);   // 下位ビットから
+	else {
+		m_cpu->sci_rx_w<0>(1);          // ストップビット
+		m_midi_bit = -1;
 	}
 }
 

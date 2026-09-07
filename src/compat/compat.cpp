@@ -25,9 +25,9 @@ std::FILE *g_upd_trace = nullptr;
 
 static u64 s_count = 0, s_h = 0;
 
-void pc_hash(u32 pc)
+void pc_hash(u32 pc, u64 regs)
 {
-	s_h = s_h * 1000003 ^ pc;
+	s_h = (s_h * 1000003 ^ pc) * 1000003 ^ regs;
 	if (!(++s_count & 0xffff))
 		std::fprintf(g_pc_hash, "%llu %016llx\n",
 		             (unsigned long long)s_count, (unsigned long long)s_h);

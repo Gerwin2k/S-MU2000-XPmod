@@ -15,7 +15,9 @@
 #include "compat/membus.h"
 #include "mame/cpu/sh7042.h"
 #include "mame/sound/swp30.h"
+#include "mame/video/hd44780.h"
 
+#include <deque>
 #include <string>
 
 class mu2000
@@ -38,12 +40,17 @@ public:
 	// n サイクルぶん進める。周辺のイベントはこの中で挟む
 	void run_cycles(u64 n);
 
+	// MIDI IN A に 1 バイト送る。実機と同じく 31250bps の直列で流れる
+	void midi_in(u8 byte) { m_midi_queue.push_back(byte); }
+	bool midi_idle() const { return m_midi_bit < 0 && m_midi_queue.empty(); }
+
 	// 1 サンプル（44.1kHz 相当）ぶん進めて、DAC 出力を返す
 	void run_sample(s32 &left, s32 &right);
 
 	sh7043a_device &cpu()  { return *m_cpu; }
 	swp30_device   &swpm() { return m_swpm; }
 	swp30_device   &swps() { return m_swps; }
+	hd44780_device &lcd()  { return m_lcd; }
 
 	const std::string &error() const { return m_error; }
 
@@ -70,9 +77,15 @@ private:
 	std::vector<u8>  m_iram;        // CPU 内蔵    0xfffff000-0xffffffff
 	std::vector<u8>  m_sampram;     // SWP30 のサンプリング RAM
 
-	// パネルまわり。音を出すのに要らないが、firmware は起動時に触る
-	u8 m_ledsw1 = 0, m_ledsw2 = 0;
+	// パネルまわり。音そのものには関わらないが、firmware は起動時に触る。
+	// LCD は「要らない」ように見えて必要だった。firmware は初期化のたびに
+	// ビジーフラグが立つのを確かめており、常に空いていると先へ進まない
+	hd44780_device m_lcd;
+	u8  m_ledsw1 = 0, m_ledsw2 = 0;
 	u16 m_pe = 0;
+
+	u16  lcd_port_r();
+	void lcd_port_w(u16 data);
 
 	std::string m_error;
 	std::FILE  *m_swp_trace = nullptr;
@@ -80,6 +93,13 @@ private:
 
 	// 44.1kHz 1 サンプルあたりの CPU サイクル。端数は繰り越す
 	u64 m_cycle_debt = 0;
+
+	// MIDI IN A。バイトを 31250bps の直列に崩して RX 線に流す
+	void midi_step(u64 now);
+	std::deque<u8> m_midi_queue;
+	int m_midi_bit = -1;      // -1 待ち / 0 スタート / 1-8 データ / 9 ストップ
+	u8  m_midi_cur = 0;
+	u64 m_midi_next = 0;
 };
 
 #endif // S_MU2000_MU2000_H

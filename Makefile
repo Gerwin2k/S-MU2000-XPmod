@@ -1,6 +1,7 @@
 # S-MU2000
 #
-#   make          verify（移植の最小確認）と boot（起動の確認）を作る
+#   make          verify / boot / render を作る
+#                 render は MIDI を食わせて WAV に書き出す
 #   make clean    消す
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
@@ -17,6 +18,7 @@ BUILD := build
 SRCS := \
 	src/compat/compat.cpp \
 	src/mame/sound/swp30.cpp \
+	src/mame/video/hd44780.cpp \
 	src/mame/cpu/sh.cpp \
 	src/mame/cpu/sh2.cpp \
 	src/mame/cpu/sh7042.cpp \
@@ -31,13 +33,17 @@ SRCS := \
 
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
-all: $(BUILD)/verify.exe $(BUILD)/boot.exe
+all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 $(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/render.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -55,6 +61,6 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d
+-include $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d
 
 .PHONY: all clean regen

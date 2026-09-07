@@ -159,6 +159,19 @@ public:
 	// MAME では device_state_interface が持っていた。周辺がログに出すのに使う
 	u32 pc() const { return m_sh2_state->pc; }
 
+	// 移植の突き合わせ用。レジスタの状態を 1 つの値に畳む（安い方）
+	u64 regs_hash() const
+	{
+		u64 h = 0;
+		for (int i = 0; i < 16; i++) h = h * 1000003 ^ m_sh2_state->r[i];
+		h = h * 1000003 ^ m_sh2_state->sr;
+		h = h * 1000003 ^ m_sh2_state->pr;
+		h = h * 1000003 ^ m_sh2_state->gbr;
+		h = h * 1000003 ^ m_sh2_state->mach;
+		h = h * 1000003 ^ m_sh2_state->macl;
+		return h;
+	}
+
 	// 移植の突き合わせ用。レジスタの状態を文字にする。
 	// MAME 側にも同じものを入れてあるので、最初に食い違う命令が分かる
 	const char *regs_text() const

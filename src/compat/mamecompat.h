@@ -73,7 +73,7 @@ struct state_entry_dummy
 // デバッガのフック。デバッガを持たないので何もしない
 // MAME はここでデバッガに命令を見せていた。こちらは PC の追跡にだけ使う
 #define debugger_instruction_hook(pc) \
-	do { if (::smu2000::g_pc_hash)  ::smu2000::pc_hash(pc); \
+	do { if (::smu2000::g_pc_hash)  ::smu2000::pc_hash(pc, regs_hash()); \
 	     if (::smu2000::g_pc_trace) { \
 	         ::smu2000::g_pc_cycles = total_cycles(); \
 	         ::smu2000::pc_trace(pc, regs_text()); } } while(0)
@@ -94,7 +94,7 @@ extern std::FILE *g_pc_hash;       // ブロックごとに畳んだ値
 extern std::FILE *g_port_trace;    // ポート E（LCD 用）の出入り
 extern u64        g_pc_cycles;     // 追跡に添えるサイクル数
 extern std::FILE *g_upd_trace;     // 周辺を進めた時刻と次の予定
-void pc_hash(u32 pc);                  // 畳み込みだけ。安い
+void pc_hash(u32 pc, u64 regs);        // 畳み込みだけ。安い
 void pc_trace(u32 pc, const char *regs);
 }
 
@@ -225,10 +225,13 @@ template <typename T> constexpr T make_bitmask(unsigned n)
 	return T(n >= (sizeof(T) * 8) ? T(~T(0)) : ((T(1) << n) - 1));
 }
 
-constexpr s64 sext(u64 v, int bits)
+// util::sext(value, width) : width ビットの符号付き値として符号拡張する。
+// 元の型のまま扱うのが肝で、u64 に広げてから畳むと上位ビットが残る
+template <typename T, typename U>
+constexpr std::make_signed_t<T> sext(T value, U width) noexcept
 {
-	const u64 m = u64(1) << (bits - 1);
-	return s64((v ^ m) - m);
+	return std::make_signed_t<T>(value << (8 * sizeof(value) - width))
+	       >> (8 * sizeof(value) - width);
 }
 }
 
