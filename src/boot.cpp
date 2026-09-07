@@ -27,6 +27,7 @@ int main(int argc, char **argv)
 	const char *pctrace = nullptr;
 	const char *pchash = nullptr;
 	const char *porttrace = nullptr;
+	const char *updtrace = nullptr;
 	u64 pcskip = 0;
 	u64 pccount = 2000000;
 
@@ -37,6 +38,8 @@ int main(int argc, char **argv)
 			pctrace = argv[++i];
 		else if (!std::strcmp(argv[i], "--hash-pc") && i + 1 < argc)
 			pchash = argv[++i];
+		else if (!std::strcmp(argv[i], "--trace-upd") && i + 1 < argc)
+			updtrace = argv[++i];
 		else if (!std::strcmp(argv[i], "--trace-port") && i + 1 < argc)
 			porttrace = argv[++i];
 		else if (!std::strcmp(argv[i], "--pc-skip") && i + 1 < argc)
@@ -82,6 +85,8 @@ int main(int argc, char **argv)
 		smu2000::g_pc_trace_left = pccount;
 		smu2000::g_pc_skip = pcskip;
 	}
+	if (updtrace)
+		smu2000::g_upd_trace = std::fopen(updtrace, "w");
 	if (porttrace)
 		smu2000::g_port_trace = std::fopen(porttrace, "w");
 	if (pchash) {

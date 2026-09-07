@@ -73,8 +73,10 @@ struct state_entry_dummy
 // デバッガのフック。デバッガを持たないので何もしない
 // MAME はここでデバッガに命令を見せていた。こちらは PC の追跡にだけ使う
 #define debugger_instruction_hook(pc) \
-	do { if (::smu2000::g_pc_trace || ::smu2000::g_pc_hash) \
-	         ::smu2000::pc_trace(pc, regs_text()); } while(0)
+	do { if (::smu2000::g_pc_hash)  ::smu2000::pc_hash(pc); \
+	     if (::smu2000::g_pc_trace) { \
+	         ::smu2000::g_pc_cycles = total_cycles(); \
+	         ::smu2000::pc_trace(pc, regs_text()); } } while(0)
 #define debugger_exception_hook(...)   do {} while(0)
 #define debugger_wait_hook(...)        do {} while(0)
 #define debugger_privilege_hook(...)   do {} while(0)
@@ -90,6 +92,9 @@ extern u64        g_pc_trace_left;
 extern u64        g_pc_skip;       // 頭を飛ばす命令数
 extern std::FILE *g_pc_hash;       // ブロックごとに畳んだ値
 extern std::FILE *g_port_trace;    // ポート E（LCD 用）の出入り
+extern u64        g_pc_cycles;     // 追跡に添えるサイクル数
+extern std::FILE *g_upd_trace;     // 周辺を進めた時刻と次の予定
+void pc_hash(u32 pc);                  // 畳み込みだけ。安い
 void pc_trace(u32 pc, const char *regs);
 }
 

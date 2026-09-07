@@ -20,20 +20,21 @@ u64        g_pc_trace_left = 0;
 u64        g_pc_skip = 0;
 std::FILE *g_pc_hash = nullptr;
 std::FILE *g_port_trace = nullptr;
+u64        g_pc_cycles = 0;   // 追跡に添えるサイクル数
+std::FILE *g_upd_trace = nullptr;
 
 static u64 s_count = 0, s_h = 0;
 
+void pc_hash(u32 pc)
+{
+	s_h = s_h * 1000003 ^ pc;
+	if (!(++s_count & 0xffff))
+		std::fprintf(g_pc_hash, "%llu %016llx\n",
+		             (unsigned long long)s_count, (unsigned long long)s_h);
+}
+
 void pc_trace(u32 pc, const char *regs)
 {
-	if (g_pc_hash) {
-		s_h = s_h * 1000003 ^ pc;
-		if (!(++s_count & 0xffff))
-			std::fprintf(g_pc_hash, "%llu %016llx\n",
-			             (unsigned long long)s_count, (unsigned long long)s_h);
-	}
-
-	if (!g_pc_trace)
-		return;
 	if (g_pc_skip) {
 		g_pc_skip--;
 		return;
@@ -43,7 +44,7 @@ void pc_trace(u32 pc, const char *regs)
 		return;
 	}
 	g_pc_trace_left--;
-	std::fprintf(g_pc_trace, "%08X%s\n", pc, regs);
+	std::fprintf(g_pc_trace, "%08X C=%llu%s\n", pc, (unsigned long long)g_pc_cycles, regs);
 }
 
 } // namespace smu2000

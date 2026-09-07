@@ -70,8 +70,24 @@ public:
 	u32 do_read_port32(int port) { return m_read_port32[port](); }
 	void do_write_port32(int port, u32 data, u32 ddr) { m_write_port32[port](0, data, ddr); }
 
-	// S-MU2000: 実時間ではなく CPU が数えたサイクルを返す
-	u64 current_cycles() { return total_cycles(); }
+	// S-MU2000: MAME はここで machine().time().as_ticks(clock()) を使っていた。
+	// MAME の時刻は 1 サイクルあたりのアト秒を切り捨てて持つので、
+	// サイクル -> 時刻 -> サイクルの往復で必ず 1 減る（28MHz なら
+	// 1 サイクル = 35714285714.28.. アト秒を 35714285714 に丸める）。
+	// 周辺のタイマはその値を基準に予定を立てているので、同じ値を返す
+	// タイマが鳴っている最中は、MAME の時計が予定時刻（e + 半サイクル）に
+	// 載っているので切り捨てて e になる。走行中は往復で 1 減る
+	u64 current_cycles()
+	{
+		const u64 c = total_cycles();
+		if (m_in_event)
+			return c;
+		return c ? c - 1 : 0;
+	}
+
+	// 予定の時刻になったら実行ループがこれを呼ぶ。
+	// MAME ではスケジューラがタイマを鳴らしていたところ
+	void event_tick();
 
 	void set_internal_interrupt(int level, u32 vector);
 
@@ -142,7 +158,8 @@ private:
 	// S-MU2000: MAME はスケジューラに emu_timer を預けていた。
 	// こちらは「次に internal_update() を呼ぶサイクル数」を覚えるだけにして、
 	// 実行ループがそこを追い越したときに呼ぶ。0 なら予定なし
-	u64 m_event_cycles = 0;
+	u64  m_event_cycles = 0;
+	bool m_in_event = false;
 
 	u16 m_pcf_ah;
 	u32 m_pcf_al;

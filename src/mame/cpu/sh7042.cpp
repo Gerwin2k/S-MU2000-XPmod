@@ -244,6 +244,13 @@ void sh7042_device::internal_update()
 	internal_update(current_cycles());
 }
 
+void sh7042_device::event_tick()
+{
+	m_in_event = true;
+	internal_update(current_cycles());
+	m_in_event = false;
+}
+
 void sh7042_device::add_event(u64 &event_time, u64 new_event)
 {
 	if(!new_event)
@@ -283,6 +290,11 @@ void sh7042_device::internal_update(u64 current_time)
 	add_event(event_time, m_mtu4->internal_update(current_time));
 	add_event(event_time, m_sci[0]->internal_update(current_time));
 	add_event(event_time, m_sci[1]->internal_update(current_time));
+
+	// S-MU2000: 移植の突き合わせ用。MAME 側にも同じものを入れてある
+	if(::smu2000::g_upd_trace)
+		fprintf(::smu2000::g_upd_trace, "U %llu -> %llu pc=%08x\n",
+		        (unsigned long long)current_time, (unsigned long long)event_time, pc());
 
 	recompute_timer(event_time);
 }

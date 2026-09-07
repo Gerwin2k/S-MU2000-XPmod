@@ -218,30 +218,28 @@ void mu2000::reset()
 void mu2000::run_cycles(u64 n)
 {
 	// MAME ではスケジューラがやっていたこと。周辺の予定を跨がないように区切る。
-	// 周辺がレジスタ書き込みに反応して新しい予定を入れると、CPU は
+	// MAME は予定の時刻ちょうどで CPU を止めてタイマを鳴らし、そのあと再開する。
+	// 周辺がレジスタ書き込みに反応して新しい予定を入れた場合は、CPU が
 	// abort_timeslice() でその場で戻ってくるので、ここで組み直す
+	int idle = 0;
 	while (n) {
 		const u64 now = m_cpu->total_cycles();
 		const u64 ev  = m_cpu->event_cycles();
 
-		// MAME のタイマは event_time の半サイクル後に鳴っていた
-		if (ev && now > ev) {
-			m_cpu->internal_update();
-			if (m_cpu->event_cycles() == ev) {
-				// 予定が動かない。放っておくと止まるので進める
-				m_cpu->internal_update();
-				break;
-			}
+		if (ev && now >= ev) {
+			m_cpu->event_tick();
+			if (m_cpu->event_cycles() == ev && ++idle > 2)
+				break;          // 予定が動かない。放っておくと止まる
 			continue;
 		}
+		idle = 0;
 
 		u64 chunk = n;
-		if (ev && ev + 1 - now < chunk)
-			chunk = ev + 1 - now;
+		if (ev && ev - now < chunk)
+			chunk = ev - now;
 
 		const int done = m_cpu->run_cycles(int(chunk));
 		if (done <= 0) {
-			// 1 命令も進まなかった。予定も変わらないなら抜ける
 			if (m_cpu->event_cycles() == ev)
 				break;
 			continue;
