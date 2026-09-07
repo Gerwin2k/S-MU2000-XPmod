@@ -8,57 +8,32 @@
 
 #pragma once
 
-#include "cpu/drcuml.h"
+// S-MU2000: MAME 本体の代わりに互換層を使う
+#include "../../compat/mamecompat.h"
 
 
-class swp30_disassembler : public util::disasm_interface
+// S-MU2000: swp30_disassembler はデバッガ用なので削除した
+
+class swp30_device
 {
 public:
-	class info {
-	public:
-		virtual u16 swp30d_const_r(u16 address) const = 0;
-		virtual u16 swp30d_offset_r(u16 address) const = 0;
-	};
+	swp30_device();
 
-	swp30_disassembler(info *inf = nullptr);
+	// S-MU2000: address_map の代わり。レジスタは 64ch x 64 スロットの格子
+	u16  read16(offs_t addr);
+	void write16(offs_t addr, u16 data);
 
-	virtual u32 opcode_alignment() const override;
-	virtual offs_t disassemble(std::ostream &stream, offs_t pc, const data_buffer &opcodes, const data_buffer &params) override;
+	// 外から与えるメモリ
+	void set_wave_rom(const void *base, size_t bytes);
+	void set_sintab(const u16 *base, size_t count);
 
-private:
-	info *m_info;
-
-	std::string gconst(offs_t address) const;
-	std::string goffset(offs_t address) const;
-
-	static void append(std::string &r, const std::string &e);
-};
-
-class swp30_device : public cpu_device, public device_sound_interface, public swp30_disassembler::info
-{
-public:
-	enum { AS_REVERB = AS_IO };
-
-	swp30_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 33868800);
-
-	void map(address_map &map) ATTR_COLD;
-
-protected:
-	virtual void device_start() override ATTR_COLD;
-	virtual void device_reset() override ATTR_COLD;
-	virtual void sound_stream_update(sound_stream &stream) override;
-	virtual uint32_t execute_min_cycles() const noexcept override;
-	virtual uint32_t execute_max_cycles() const noexcept override;
-	virtual uint64_t execute_clocks_to_cycles(uint64_t clocks) const noexcept override { return (clocks + 1) / 2; }
-	virtual void execute_run() override;
-	virtual space_config_vector memory_space_config() const override;
-	virtual void state_import(const device_state_entry &entry) override;
-	virtual void state_export(const device_state_entry &entry) override;
-	virtual void state_string_export(const device_state_entry &entry, std::string &str) const override;
-	virtual std::unique_ptr<util::disasm_interface> create_disassembler() override;
-	virtual const tiny_rom_entry *device_rom_region() const override ATTR_COLD;
+	void reset();
+	// 1 サンプル進めて、DAC 出力 2ch を返す
+	void run_sample(s32 &left, s32 &right);
 
 private:
+	// S-MU2000: device_start/reset, state_*, disassembler, rom_region の宣言は削除
+
 	struct streaming_block {
 		static const std::array<u16, 0x400> pitch_base;
 		static const std::array<s16,   256> dpcm_expand;
@@ -315,20 +290,20 @@ private:
 		static void call_revram_decode(void *ms);
 
 		void step();
-		void drc(drcuml_block &block, u16 pc);
 		void reset();
 	};
 
-	address_space_config m_program_config, m_wave_config, m_reverb_config;
-	address_space *m_program, *m_wave, *m_reverb;
-
-	required_region_ptr<u16> m_sintab;
+	// S-MU2000: address_space の代わりにフラットな領域を直接持つ
+	region_ptr<u16> m_sintab;
+	std::vector<u64> m_meg_program;      // MEG のプログラム（9bit 空間）
+	std::vector<u16> m_reverb_ram;       // リバーブ RAM（18bit 空間）
 
 	memory_access< 9, 3, -3, ENDIANNESS_LITTLE>::cache m_program_cache;
 	memory_access<25, 2, -2, ENDIANNESS_LITTLE>::cache m_wave_cache;
 	memory_access<18, 1, -1, ENDIANNESS_LITTLE>::cache m_reverb_cache;
 
-	sound_stream *m_input_stream, *m_output_stream;
+	// S-MU2000: sound_stream の代わり。1 サンプル分だけ持つ
+	sound_buffer m_buf;
 
 	std::array<streaming_block, 0x40> m_streaming;
 	std::array<filter_block,    0x40> m_filter;
@@ -342,15 +317,10 @@ private:
 	std::array<s32,  0x10> m_meli;
 	std::array<s32,     4> m_adc;
 
+	// S-MU2000: DRC は使わない。meg_state はそのまま持つ
+	std::unique_ptr<meg_state> m_meg_storage;
 	meg_state *m_meg;
-	drc_cache m_drccache;
-	std::unique_ptr<drcuml_state> m_drcuml;
-	uml::code_handle *m_meg_drc_entry;
-	uml::code_handle *m_meg_drc_nocode;
-	uml::code_handle *m_meg_drc_out_of_cycles;
-
 	bool m_meg_program_changed;
-	bool m_meg_drc_active;
 
 	u32 m_sample_counter;
 	u32 m_wave_adr, m_wave_size, m_wave_val, m_revram_adr, m_revram_data;
@@ -461,34 +431,19 @@ private:
 	template<int Sel> u16 meg_lfo_r(offs_t offset);
 	template<int Sel> void meg_lfo_w(offs_t offset, u16 data);
 
-	void meg_prg_map(address_map &map) ATTR_COLD;
 	u64 meg_prg_map_r(offs_t address);
 
-	void meg_reverb_map(address_map &map) ATTR_COLD;
 
-
-	virtual u16 swp30d_const_r(u16 address) const override;
-	virtual u16 swp30d_offset_r(u16 address) const override;
 
 	// Generic catch-all
 	u16 snd_r(offs_t offset);
 	void snd_w(offs_t offset, u16 data);
 
-	inline auto &rchan(address_map &map, int idx) {
-		return map(idx*2, idx*2+1).select(0x1f80);
-	}
-
-	inline auto &rctrl(address_map &map, int idx) {
-		int slot = 0x40*(idx >> 1) | 0xe | (idx & 1);
-		return map(slot*2, slot*2+1);
-	}
 
 	void awm2_step(std::array<s32, 0x40> &samples_per_chan);
 	void mixer_step(const std::array<s32, 0x40> &samples_per_chan);
 	void adc_step();
 	void sample_step();
 };
-
-DECLARE_DEVICE_TYPE(SWP30, swp30_device)
 
 #endif // MAME_SOUND_SWP30_H

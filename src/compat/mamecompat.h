@@ -145,6 +145,60 @@ private:
 	bool      m_pow2  = false;
 };
 
+// ---- 乱数 -------------------------------------------------------------------
+//
+// swp30 が machine() を使うのは乱数のためだけ（LFO のランダム波形と MEG のノイズ）。
+// MAME と**同じ数列**でないと波形が一致しないので、実装をそのまま写す。
+//   src/emu/machine.cpp : running_machine::rand(), 初期シード 0x9d14abd7
+
+class running_machine
+{
+public:
+	u32 rand()
+	{
+		m_rand_seed = 1664525 * m_rand_seed + 1013904223;
+		// 下位ビットは周期が短くよく使われるので 16bit 回転して返す
+		return (m_rand_seed >> 16) | (m_rand_seed << 16);
+	}
+
+	void reset_seed() { m_rand_seed = 0x9d14abd7; }
+
+private:
+	u32 m_rand_seed = 0x9d14abd7;
+};
+
+// ---- MAME の型名に合わせる --------------------------------------------------
+//
+// swp30.h は内部の構造体でも memory_access<...>::cache を引数の型に使っている。
+// ここで同じ名前を用意しておけば、**ヘッダの中身に一切手を入れずに** 解決できる。
+
+enum endianness_t { ENDIANNESS_LITTLE, ENDIANNESS_BIG };
+
+template <int AddrBits, int DataWidth, int AddrShift, endianness_t Endian>
+struct memory_access
+{
+	using cache    = flat_space<AddrBits, DataWidth, AddrShift>;
+	using specific = flat_space<AddrBits, DataWidth, AddrShift>;
+};
+
+// required_region_ptr<u16> の代わり。ROM を指すだけ
+template <typename T>
+class region_ptr
+{
+public:
+	void set(const T *base, size_t count) { m_base = base; m_count = count; }
+	const T &operator[](size_t i) const
+	{
+		static const T zero = T();
+		return (m_base && i < m_count) ? m_base[i] : zero;
+	}
+	const T *target() const { return m_base; }
+	explicit operator bool() const { return m_base != nullptr; }
+private:
+	const T *m_base = nullptr;
+	size_t   m_count = 0;
+};
+
 // ---- 音声バッファ -----------------------------------------------------------
 //
 // MAME の sound_stream の代わり。swp30.cpp が使うのは get / put_int_clamp の 2 つだけ。
