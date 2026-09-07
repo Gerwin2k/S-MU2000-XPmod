@@ -1,7 +1,8 @@
 # S-MU2000
 #
-#   make          verify / boot / render を作る
-#                 render は MIDI を食わせて WAV に書き出す
+#   make          verify / boot / render / live を作る
+#                 render は MIDI ファイルを WAV に書き出す
+#                 live   は MIDI 入力を受けてその場で鳴らす
 #   make clean    消す
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
@@ -34,7 +35,8 @@ SRCS := \
 
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
-all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe
+all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
+     $(BUILD)/live.exe $(BUILD)/midisend.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
 	@mkdir -p $(dir $@)
@@ -44,9 +46,19 @@ $(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/render.o
+$(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^
+
+# midisend は MIDI ファイルを実時間で MIDI 出力へ流す（live の試験用）
+$(BUILD)/midisend.exe: $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lwinmm
+
+# live は Windows の MIDI 入力と音声出力を使う
+$(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/live.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lwinmm
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -62,6 +74,6 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d
+-include $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
 
 .PHONY: all clean regen

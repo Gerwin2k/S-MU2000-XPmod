@@ -2,7 +2,7 @@
 
 Yamaha MU2000 のソフトウェア音源。DAW に挿して使えることを目指す。
 
-**現在の状態: 曲が正しく鳴る。MIDI ファイルを WAV に書き出せる。**
+**現在の状態: MIDI 入力を受けてその場で鳴る。DAW への組み込み（VST3）はこれから。**
 
 実機の firmware をそのまま走らせ、MIDI を受けて発音する。2 分半の実曲を
 MAME の録音と突き合わせて、発音指示 2851 件すべてが一致、振幅も 88.7% の
@@ -37,9 +37,17 @@ USB ケーブル 1 本で 32MB を約 36 分。MIDI インターフェースは�
 
 ```
 make
-build/render.exe <rom ディレクトリ> <MIDI ファイル> <出力 wav> [秒数]
-build/boot.exe   <rom ディレクトリ> [サイクル数]        起動の確認
+
+build/live.exe   <rom ディレクトリ> [--midi 番号]     MIDI 入力を受けて鳴らす
+build/live.exe   --list                              MIDI 入力の一覧
+build/render.exe <rom ディレクトリ> <MIDI> <出力 wav>  ファイルを WAV に
+build/midisend.exe <MIDI ファイル> [--port 番号]      MIDI 出力へ実時間で流す
+build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確認
 ```
+
+`live` は音声デバイスが要求した分だけ音源を進める。自分で時計を持たないので、
+外部と同期させてもずれない（MAME が破綻したのはここ）。待ち時間は既定で
+23ms、`--frames` と `--buffers` で詰められる。CPU 使用率はおよそ 60%。
 
 rom ディレクトリには次を置く。
 
