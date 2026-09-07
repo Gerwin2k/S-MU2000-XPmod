@@ -149,139 +149,191 @@ void sh7042_device::device_reset()
 }
 
 
-void sh7042_device::map(address_map &map)
+// S-MU2000: address_map をやめ、番地で振り分ける形にした。
+// 移植したのは firmware が実際に触る周辺だけ（SCI/MTU/CMT/INTC/PORT と
+// CPU 自身のピン機能設定 pcf_*）。BSC と DMAC は起動時に少し触られるだけなので
+// 何もしない。ADC は参照 0 回だったので配線していない。
+// 内蔵 RAM 0xFFFFF000- は mem_bus 側で領域として持つ。
+// 根拠は doc/design.md「どの内蔵周辺が要るか」。
+
+u16 sh7042_device::internal_r(offs_t a)
 {
-	map(0xffff81a0, 0xffff81a0).rw(m_sci[0], FUNC(sh_sci_device::smr_r), FUNC(sh_sci_device::smr_w));
-	map(0xffff81a1, 0xffff81a1).rw(m_sci[0], FUNC(sh_sci_device::brr_r), FUNC(sh_sci_device::brr_w));
-	map(0xffff81a2, 0xffff81a2).rw(m_sci[0], FUNC(sh_sci_device::scr_r), FUNC(sh_sci_device::scr_w));
-	map(0xffff81a3, 0xffff81a3).rw(m_sci[0], FUNC(sh_sci_device::tdr_r), FUNC(sh_sci_device::tdr_w));
-	map(0xffff81a4, 0xffff81a4).rw(m_sci[0], FUNC(sh_sci_device::ssr_r), FUNC(sh_sci_device::ssr_w));
-	map(0xffff81a5, 0xffff81a5).r(m_sci[0], FUNC(sh_sci_device::rdr_r));
-	map(0xffff81b0, 0xffff81b0).rw(m_sci[1], FUNC(sh_sci_device::smr_r), FUNC(sh_sci_device::smr_w));
-	map(0xffff81b1, 0xffff81b1).rw(m_sci[1], FUNC(sh_sci_device::brr_r), FUNC(sh_sci_device::brr_w));
-	map(0xffff81b2, 0xffff81b2).rw(m_sci[1], FUNC(sh_sci_device::scr_r), FUNC(sh_sci_device::scr_w));
-	map(0xffff81b3, 0xffff81b3).rw(m_sci[1], FUNC(sh_sci_device::tdr_r), FUNC(sh_sci_device::tdr_w));
-	map(0xffff81b4, 0xffff81b4).rw(m_sci[1], FUNC(sh_sci_device::ssr_r), FUNC(sh_sci_device::ssr_w));
-	map(0xffff81b5, 0xffff81b5).r(m_sci[1], FUNC(sh_sci_device::rdr_r));
+	if(a >= 0xffff81a0 && a <= 0xffff81a0) return m_sci[0]->smr_r();
+	if(a >= 0xffff81a1 && a <= 0xffff81a1) return m_sci[0]->brr_r();
+	if(a >= 0xffff81a2 && a <= 0xffff81a2) return m_sci[0]->scr_r();
+	if(a >= 0xffff81a3 && a <= 0xffff81a3) return m_sci[0]->tdr_r();
+	if(a >= 0xffff81a4 && a <= 0xffff81a4) return m_sci[0]->ssr_r();
+	if(a >= 0xffff81a5 && a <= 0xffff81a5) return m_sci[0]->rdr_r();
+	if(a >= 0xffff81b0 && a <= 0xffff81b0) return m_sci[1]->smr_r();
+	if(a >= 0xffff81b1 && a <= 0xffff81b1) return m_sci[1]->brr_r();
+	if(a >= 0xffff81b2 && a <= 0xffff81b2) return m_sci[1]->scr_r();
+	if(a >= 0xffff81b3 && a <= 0xffff81b3) return m_sci[1]->tdr_r();
+	if(a >= 0xffff81b4 && a <= 0xffff81b4) return m_sci[1]->ssr_r();
+	if(a >= 0xffff81b5 && a <= 0xffff81b5) return m_sci[1]->rdr_r();
+	if(a >= 0xffff8200 && a <= 0xffff8200) return m_mtu3->tcr_r();
+	if(a >= 0xffff8201 && a <= 0xffff8201) return m_mtu4->tcr_r();
+	if(a >= 0xffff8202 && a <= 0xffff8202) return m_mtu3->tmdr_r();
+	if(a >= 0xffff8203 && a <= 0xffff8203) return m_mtu4->tmdr_r();
+	if(a >= 0xffff8204 && a <= 0xffff8205) return m_mtu3->tior_r();
+	if(a >= 0xffff8206 && a <= 0xffff8207) return m_mtu4->tior_r();
+	if(a >= 0xffff8208 && a <= 0xffff8208) return m_mtu3->tier_r();
+	if(a >= 0xffff8209 && a <= 0xffff8209) return m_mtu4->tier_r();
+	if(a >= 0xffff820a && a <= 0xffff820a) return m_mtu->toer_r();
+	if(a >= 0xffff820b && a <= 0xffff820b) return m_mtu->tocr_r();
+	if(a >= 0xffff820d && a <= 0xffff820d) return m_mtu->tgcr_r();
+	if(a >= 0xffff8210 && a <= 0xffff8211) return m_mtu3->tcnt_r();
+	if(a >= 0xffff8212 && a <= 0xffff8213) return m_mtu4->tcnt_r();
+	if(a >= 0xffff8214 && a <= 0xffff8215) return m_mtu->tcdr_r();
+	if(a >= 0xffff8216 && a <= 0xffff8217) return m_mtu->tddr_r();
+	if(a >= 0xffff8218 && a <= 0xffff821b) return m_mtu3->tgr_r();
+	if(a >= 0xffff821c && a <= 0xffff821f) return m_mtu4->tgr_r();
+	if(a >= 0xffff8220 && a <= 0xffff8221) return m_mtu->tcnts_r();
+	if(a >= 0xffff8222 && a <= 0xffff8223) return m_mtu->tcbr_r();
+	if(a >= 0xffff8224 && a <= 0xffff8227) return m_mtu3->tgrc_r();
+	if(a >= 0xffff8228 && a <= 0xffff822b) return m_mtu4->tgrc_r();
+	if(a >= 0xffff822c && a <= 0xffff822c) return m_mtu3->tsr_r();
+	if(a >= 0xffff822d && a <= 0xffff822d) return m_mtu4->tsr_r();
+	if(a >= 0xffff8240 && a <= 0xffff8240) return m_mtu->tstr_r();
+	if(a >= 0xffff8241 && a <= 0xffff8241) return m_mtu->tsyr_r();
+	if(a >= 0xffff8260 && a <= 0xffff8260) return m_mtu0->tcr_r();
+	if(a >= 0xffff8261 && a <= 0xffff8261) return m_mtu0->tmdr_r();
+	if(a >= 0xffff8262 && a <= 0xffff8263) return m_mtu0->tior_r();
+	if(a >= 0xffff8264 && a <= 0xffff8264) return m_mtu0->tier_r();
+	if(a >= 0xffff8265 && a <= 0xffff8265) return m_mtu0->tsr_r();
+	if(a >= 0xffff8266 && a <= 0xffff8267) return m_mtu0->tcnt_r();
+	if(a >= 0xffff8268 && a <= 0xffff826f) return m_mtu0->tgr_r();
+	if(a >= 0xffff8280 && a <= 0xffff8280) return m_mtu1->tcr_r();
+	if(a >= 0xffff8281 && a <= 0xffff8281) return m_mtu1->tmdr_r();
+	if(a >= 0xffff8282 && a <= 0xffff8283) return m_mtu1->tior_r();
+	if(a >= 0xffff8284 && a <= 0xffff8284) return m_mtu1->tier_r();
+	if(a >= 0xffff8285 && a <= 0xffff8285) return m_mtu1->tsr_r();
+	if(a >= 0xffff8286 && a <= 0xffff8287) return m_mtu1->tcnt_r();
+	if(a >= 0xffff8288 && a <= 0xffff828b) return m_mtu1->tgr_r();
+	if(a >= 0xffff82a0 && a <= 0xffff82a0) return m_mtu2->tcr_r();
+	if(a >= 0xffff82a1 && a <= 0xffff82a1) return m_mtu2->tmdr_r();
+	if(a >= 0xffff82a2 && a <= 0xffff82a3) return m_mtu2->tior_r();
+	if(a >= 0xffff82a4 && a <= 0xffff82a4) return m_mtu2->tier_r();
+	if(a >= 0xffff82a5 && a <= 0xffff82a5) return m_mtu2->tsr_r();
+	if(a >= 0xffff82a6 && a <= 0xffff82a7) return m_mtu2->tcnt_r();
+	if(a >= 0xffff82a8 && a <= 0xffff82ab) return m_mtu2->tgr_r();
+	if(a >= 0xffff8348 && a <= 0xffff8357) return m_intc->ipr_r();
+	if(a >= 0xffff8358 && a <= 0xffff8359) return m_intc->icr_r();
+	if(a >= 0xffff835a && a <= 0xffff835b) return m_intc->isr_r();
+	if(a >= 0xffff8380 && a <= 0xffff8383) return m_porta->dr_r();
+	if(a >= 0xffff8384 && a <= 0xffff8387) return m_porta->io_r();
+	if(a >= 0xffff8388 && a <= 0xffff8389) return pcf_ah_r();
+	if(a >= 0xffff838c && a <= 0xffff838f) return pcf_al_r();
+	if(a >= 0xffff8390 && a <= 0xffff8391) return m_portb->dr_r();
+	if(a >= 0xffff8392 && a <= 0xffff8393) return m_portc->dr_r();
+	if(a >= 0xffff8394 && a <= 0xffff8395) return m_portb->io_r();
+	if(a >= 0xffff8396 && a <= 0xffff8397) return m_portc->io_r();
+	if(a >= 0xffff8398 && a <= 0xffff839b) return pcf_b_r();
+	if(a >= 0xffff839c && a <= 0xffff839d) return pcf_c_r();
+	if(a >= 0xffff83a0 && a <= 0xffff83a3) return m_portd->dr_r();
+	if(a >= 0xffff83a4 && a <= 0xffff83a7) return m_portd->io_r();
+	if(a >= 0xffff83a8 && a <= 0xffff83ab) return pcf_dh_r();
+	if(a >= 0xffff83ac && a <= 0xffff83ad) return pcf_dl_r();
+	if(a >= 0xffff83b0 && a <= 0xffff83b1) return m_porte->dr_r();
+	if(a >= 0xffff83b2 && a <= 0xffff83b3) return m_portf->dr_r();
+	if(a >= 0xffff83b4 && a <= 0xffff83b5) return m_porte->io_r();
+	if(a >= 0xffff83b8 && a <= 0xffff83bb) return pcf_e_r();
+	if(a >= 0xffff83c8 && a <= 0xffff83c9) return pcf_if_r();
+	if(a >= 0xffff83d0 && a <= 0xffff83d1) return m_cmt->cmstr_r();
+	if(a >= 0xffff83d2 && a <= 0xffff83d3) return m_cmt->cmcsr0_r();
+	if(a >= 0xffff83d4 && a <= 0xffff83d5) return m_cmt->cmcnt0_r();
+	if(a >= 0xffff83d6 && a <= 0xffff83d7) return m_cmt->cmcor0_r();
+	if(a >= 0xffff83d8 && a <= 0xffff83d9) return m_cmt->cmcsr1_r();
+	if(a >= 0xffff83da && a <= 0xffff83db) return m_cmt->cmcnt1_r();
+	if(a >= 0xffff83dc && a <= 0xffff83dd) return m_cmt->cmcor1_r();
+	return 0;
+}
 
-	map(0xffff8200, 0xffff8200).rw(m_mtu3, FUNC(sh_mtu_channel_device::tcr_r), FUNC(sh_mtu_channel_device::tcr_w));
-	map(0xffff8201, 0xffff8201).rw(m_mtu4, FUNC(sh_mtu_channel_device::tcr_r), FUNC(sh_mtu_channel_device::tcr_w));
-	map(0xffff8202, 0xffff8202).rw(m_mtu3, FUNC(sh_mtu_channel_device::tmdr_r), FUNC(sh_mtu_channel_device::tmdr_w));
-	map(0xffff8203, 0xffff8203).rw(m_mtu4, FUNC(sh_mtu_channel_device::tmdr_r), FUNC(sh_mtu_channel_device::tmdr_w));
-	map(0xffff8204, 0xffff8205).rw(m_mtu3, FUNC(sh_mtu_channel_device::tior_r), FUNC(sh_mtu_channel_device::tior_w));
-	map(0xffff8206, 0xffff8207).rw(m_mtu4, FUNC(sh_mtu_channel_device::tior_r), FUNC(sh_mtu_channel_device::tior_w));
-	map(0xffff8208, 0xffff8208).rw(m_mtu3, FUNC(sh_mtu_channel_device::tier_r), FUNC(sh_mtu_channel_device::tier_w));
-	map(0xffff8209, 0xffff8209).rw(m_mtu4, FUNC(sh_mtu_channel_device::tier_r), FUNC(sh_mtu_channel_device::tier_w));
-	map(0xffff820a, 0xffff820a).rw(m_mtu, FUNC(sh_mtu_device::toer_r), FUNC(sh_mtu_device::toer_w));
-	map(0xffff820b, 0xffff820b).rw(m_mtu, FUNC(sh_mtu_device::tocr_r), FUNC(sh_mtu_device::tocr_w));
-	map(0xffff820d, 0xffff820d).rw(m_mtu, FUNC(sh_mtu_device::tgcr_r), FUNC(sh_mtu_device::tgcr_w));
-	map(0xffff8210, 0xffff8211).rw(m_mtu3, FUNC(sh_mtu_channel_device::tcnt_r), FUNC(sh_mtu_channel_device::tcnt_w));
-	map(0xffff8212, 0xffff8213).rw(m_mtu4, FUNC(sh_mtu_channel_device::tcnt_r), FUNC(sh_mtu_channel_device::tcnt_w));
-	map(0xffff8214, 0xffff8215).rw(m_mtu, FUNC(sh_mtu_device::tcdr_r), FUNC(sh_mtu_device::tcdr_w));
-	map(0xffff8216, 0xffff8217).rw(m_mtu, FUNC(sh_mtu_device::tddr_r), FUNC(sh_mtu_device::tddr_w));
-	map(0xffff8218, 0xffff821b).rw(m_mtu3, FUNC(sh_mtu_channel_device::tgr_r), FUNC(sh_mtu_channel_device::tgr_w));
-	map(0xffff821c, 0xffff821f).rw(m_mtu4, FUNC(sh_mtu_channel_device::tgr_r), FUNC(sh_mtu_channel_device::tgr_w));
-	map(0xffff8220, 0xffff8221).rw(m_mtu, FUNC(sh_mtu_device::tcnts_r), FUNC(sh_mtu_device::tcnts_w));
-	map(0xffff8222, 0xffff8223).rw(m_mtu, FUNC(sh_mtu_device::tcbr_r), FUNC(sh_mtu_device::tcbr_w));
-	map(0xffff8224, 0xffff8227).rw(m_mtu3, FUNC(sh_mtu_channel_device::tgrc_r), FUNC(sh_mtu_channel_device::tgrc_w));
-	map(0xffff8228, 0xffff822b).rw(m_mtu4, FUNC(sh_mtu_channel_device::tgrc_r), FUNC(sh_mtu_channel_device::tgrc_w));
-	map(0xffff822c, 0xffff822c).rw(m_mtu3, FUNC(sh_mtu_channel_device::tsr_r), FUNC(sh_mtu_channel_device::tsr_w));
-	map(0xffff822d, 0xffff822d).rw(m_mtu4, FUNC(sh_mtu_channel_device::tsr_r), FUNC(sh_mtu_channel_device::tsr_w));
-	map(0xffff8240, 0xffff8240).rw(m_mtu, FUNC(sh_mtu_device::tstr_r), FUNC(sh_mtu_device::tstr_w));
-	map(0xffff8241, 0xffff8241).rw(m_mtu, FUNC(sh_mtu_device::tsyr_r), FUNC(sh_mtu_device::tsyr_w));
-	map(0xffff8260, 0xffff8260).rw(m_mtu0, FUNC(sh_mtu_channel_device::tcr_r), FUNC(sh_mtu_channel_device::tcr_w));
-	map(0xffff8261, 0xffff8261).rw(m_mtu0, FUNC(sh_mtu_channel_device::tmdr_r), FUNC(sh_mtu_channel_device::tmdr_w));
-	map(0xffff8262, 0xffff8263).rw(m_mtu0, FUNC(sh_mtu_channel_device::tior_r), FUNC(sh_mtu_channel_device::tior_w));
-	map(0xffff8264, 0xffff8264).rw(m_mtu0, FUNC(sh_mtu_channel_device::tier_r), FUNC(sh_mtu_channel_device::tier_w));
-	map(0xffff8265, 0xffff8265).rw(m_mtu0, FUNC(sh_mtu_channel_device::tsr_r), FUNC(sh_mtu_channel_device::tsr_w));
-	map(0xffff8266, 0xffff8267).rw(m_mtu0, FUNC(sh_mtu_channel_device::tcnt_r), FUNC(sh_mtu_channel_device::tcnt_w));
-	map(0xffff8268, 0xffff826f).rw(m_mtu0, FUNC(sh_mtu_channel_device::tgr_r), FUNC(sh_mtu_channel_device::tgr_w));
-	map(0xffff8280, 0xffff8280).rw(m_mtu1, FUNC(sh_mtu_channel_device::tcr_r), FUNC(sh_mtu_channel_device::tcr_w));
-	map(0xffff8281, 0xffff8281).rw(m_mtu1, FUNC(sh_mtu_channel_device::tmdr_r), FUNC(sh_mtu_channel_device::tmdr_w));
-	map(0xffff8282, 0xffff8283).rw(m_mtu1, FUNC(sh_mtu_channel_device::tior_r), FUNC(sh_mtu_channel_device::tior_w));
-	map(0xffff8284, 0xffff8284).rw(m_mtu1, FUNC(sh_mtu_channel_device::tier_r), FUNC(sh_mtu_channel_device::tier_w));
-	map(0xffff8285, 0xffff8285).rw(m_mtu1, FUNC(sh_mtu_channel_device::tsr_r), FUNC(sh_mtu_channel_device::tsr_w));
-	map(0xffff8286, 0xffff8287).rw(m_mtu1, FUNC(sh_mtu_channel_device::tcnt_r), FUNC(sh_mtu_channel_device::tcnt_w));
-	map(0xffff8288, 0xffff828b).rw(m_mtu1, FUNC(sh_mtu_channel_device::tgr_r), FUNC(sh_mtu_channel_device::tgr_w));
-	map(0xffff82a0, 0xffff82a0).rw(m_mtu2, FUNC(sh_mtu_channel_device::tcr_r), FUNC(sh_mtu_channel_device::tcr_w));
-	map(0xffff82a1, 0xffff82a1).rw(m_mtu2, FUNC(sh_mtu_channel_device::tmdr_r), FUNC(sh_mtu_channel_device::tmdr_w));
-	map(0xffff82a2, 0xffff82a3).rw(m_mtu2, FUNC(sh_mtu_channel_device::tior_r), FUNC(sh_mtu_channel_device::tior_w));
-	map(0xffff82a4, 0xffff82a4).rw(m_mtu2, FUNC(sh_mtu_channel_device::tier_r), FUNC(sh_mtu_channel_device::tier_w));
-	map(0xffff82a5, 0xffff82a5).rw(m_mtu2, FUNC(sh_mtu_channel_device::tsr_r), FUNC(sh_mtu_channel_device::tsr_w));
-	map(0xffff82a6, 0xffff82a7).rw(m_mtu2, FUNC(sh_mtu_channel_device::tcnt_r), FUNC(sh_mtu_channel_device::tcnt_w));
-	map(0xffff82a8, 0xffff82ab).rw(m_mtu2, FUNC(sh_mtu_channel_device::tgr_r), FUNC(sh_mtu_channel_device::tgr_w));
-
-	map(0xffff8348, 0xffff8357).rw(m_intc, FUNC(sh_intc_device::ipr_r), FUNC(sh_intc_device::ipr_w));
-	map(0xffff8358, 0xffff8359).rw(m_intc, FUNC(sh_intc_device::icr_r), FUNC(sh_intc_device::icr_w));
-	map(0xffff835a, 0xffff835b).rw(m_intc, FUNC(sh_intc_device::isr_r), FUNC(sh_intc_device::isr_w));
-
-	map(0xffff8380, 0xffff8383).rw(m_porta, FUNC(sh_port32_device::dr_r), FUNC(sh_port32_device::dr_w));
-	map(0xffff8384, 0xffff8387).rw(m_porta, FUNC(sh_port32_device::io_r), FUNC(sh_port32_device::io_w));
-	map(0xffff8388, 0xffff8389).rw(FUNC(sh7042_device::pcf_ah_r), FUNC(sh7042_device::pcf_ah_w));
-	map(0xffff838c, 0xffff838f).rw(FUNC(sh7042_device::pcf_al_r), FUNC(sh7042_device::pcf_al_w));
-	map(0xffff8390, 0xffff8391).rw(m_portb, FUNC(sh_port16_device::dr_r), FUNC(sh_port16_device::dr_w));
-	map(0xffff8392, 0xffff8393).rw(m_portc, FUNC(sh_port16_device::dr_r), FUNC(sh_port16_device::dr_w));
-	map(0xffff8394, 0xffff8395).rw(m_portb, FUNC(sh_port16_device::io_r), FUNC(sh_port16_device::io_w));
-	map(0xffff8396, 0xffff8397).rw(m_portc, FUNC(sh_port16_device::io_r), FUNC(sh_port16_device::io_w));
-	map(0xffff8398, 0xffff839b).rw(FUNC(sh7042_device::pcf_b_r), FUNC(sh7042_device::pcf_b_w));
-	map(0xffff839c, 0xffff839d).rw(FUNC(sh7042_device::pcf_c_r), FUNC(sh7042_device::pcf_c_w));
-	map(0xffff83a0, 0xffff83a3).rw(m_portd, FUNC(sh_port32_device::dr_r), FUNC(sh_port32_device::dr_w));
-	map(0xffff83a4, 0xffff83a7).rw(m_portd, FUNC(sh_port32_device::io_r), FUNC(sh_port32_device::io_w));
-	map(0xffff83a8, 0xffff83ab).rw(FUNC(sh7042_device::pcf_dh_r), FUNC(sh7042_device::pcf_dh_w));
-	map(0xffff83ac, 0xffff83ad).rw(FUNC(sh7042_device::pcf_dl_r), FUNC(sh7042_device::pcf_dl_w));
-	map(0xffff83b0, 0xffff83b1).rw(m_porte, FUNC(sh_port16_device::dr_r), FUNC(sh_port16_device::dr_w));
-	map(0xffff83b2, 0xffff83b3).r (m_portf, FUNC(sh_port16_device::dr_r));
-	map(0xffff83b4, 0xffff83b5).rw(m_porte, FUNC(sh_port16_device::io_r), FUNC(sh_port16_device::io_w));
-	map(0xffff83b8, 0xffff83bb).rw(FUNC(sh7042_device::pcf_e_r), FUNC(sh7042_device::pcf_e_w));
-	map(0xffff83c8, 0xffff83c9).rw(FUNC(sh7042_device::pcf_if_r), FUNC(sh7042_device::pcf_if_w));
-	map(0xffff83d0, 0xffff83d1).rw(m_cmt, FUNC(sh_cmt_device::cmstr_r), FUNC(sh_cmt_device::cmstr_w));
-	map(0xffff83d2, 0xffff83d3).rw(m_cmt, FUNC(sh_cmt_device::cmcsr0_r), FUNC(sh_cmt_device::cmcsr0_w));
-	map(0xffff83d4, 0xffff83d5).rw(m_cmt, FUNC(sh_cmt_device::cmcnt0_r), FUNC(sh_cmt_device::cmcnt0_w));
-	map(0xffff83d6, 0xffff83d7).rw(m_cmt, FUNC(sh_cmt_device::cmcor0_r), FUNC(sh_cmt_device::cmcor0_w));
-	map(0xffff83d8, 0xffff83d9).rw(m_cmt, FUNC(sh_cmt_device::cmcsr1_r), FUNC(sh_cmt_device::cmcsr1_w));
-	map(0xffff83da, 0xffff83db).rw(m_cmt, FUNC(sh_cmt_device::cmcnt1_r), FUNC(sh_cmt_device::cmcnt1_w));
-	map(0xffff83dc, 0xffff83dd).rw(m_cmt, FUNC(sh_cmt_device::cmcor1_r), FUNC(sh_cmt_device::cmcor1_w));
-
-	if(!m_die_a) {
-		map(0xffff83e0, 0xffff83e0).rw(m_adc0, FUNC(sh_adc_device::adcsr_r), FUNC(sh_adc_device::adcsr_w));
-		map(0xffff83e1, 0xffff83e1).rw(m_adc0, FUNC(sh_adc_device::adcr_r), FUNC(sh_adc_device::adcr_w));
-		map(0xffff83f0, 0xffff83ff).r(m_adc0, FUNC(sh_adc_device::addr_r));
-	} else {
-		map(0xffff8400, 0xffff8407).r(m_adc0, FUNC(sh_adc_device::addr_r));
-		map(0xffff8408, 0xffff840f).r(m_adc1, FUNC(sh_adc_device::addr_r));
-		map(0xffff8410, 0xffff8410).rw(m_adc0, FUNC(sh_adc_device::adcsr_r), FUNC(sh_adc_device::adcsr_w));
-		map(0xffff8411, 0xffff8411).rw(m_adc1, FUNC(sh_adc_device::adcsr_r), FUNC(sh_adc_device::adcsr_w));
-		map(0xffff8412, 0xffff8412).rw(m_adc0, FUNC(sh_adc_device::adcr_r), FUNC(sh_adc_device::adcr_w));
-		map(0xffff8413, 0xffff8413).rw(m_adc1, FUNC(sh_adc_device::adcr_r), FUNC(sh_adc_device::adcr_w));
-	}
-
-	map(0xffff8620, 0xffff8621).rw(m_bsc, FUNC(sh_bsc_device::bcr1_r), FUNC(sh_bsc_device::bcr1_w));
-	map(0xffff8622, 0xffff8623).rw(m_bsc, FUNC(sh_bsc_device::bcr2_r), FUNC(sh_bsc_device::bcr2_w));
-	map(0xffff8624, 0xffff8625).rw(m_bsc, FUNC(sh_bsc_device::wcr1_r), FUNC(sh_bsc_device::wcr1_w));
-	map(0xffff8626, 0xffff8627).rw(m_bsc, FUNC(sh_bsc_device::wcr2_r), FUNC(sh_bsc_device::wcr2_w));
-	map(0xffff862a, 0xffff862b).rw(m_bsc, FUNC(sh_bsc_device::dcr_r), FUNC(sh_bsc_device::dcr_w));
-	map(0xffff862c, 0xffff862d).rw(m_bsc, FUNC(sh_bsc_device::rtcsr_r), FUNC(sh_bsc_device::rtcsr_w));
-	map(0xffff862e, 0xffff862f).rw(m_bsc, FUNC(sh_bsc_device::rtcnt_r), FUNC(sh_bsc_device::rtcnt_w));
-	map(0xffff8630, 0xffff8631).rw(m_bsc, FUNC(sh_bsc_device::rtcor_r), FUNC(sh_bsc_device::rtcor_w));
-	map(0xffff86b0, 0xffff86b1).rw(m_dmac, FUNC(sh_dmac_device::dmaor_r), FUNC(sh_dmac_device::dmaor_w));
-	map(0xffff86c0, 0xffff86c3).rw(m_dmac0, FUNC(sh_dmac_channel_device::sar_r), FUNC(sh_dmac_channel_device::sar_w));
-	map(0xffff86c4, 0xffff86c7).rw(m_dmac0, FUNC(sh_dmac_channel_device::dar_r), FUNC(sh_dmac_channel_device::dar_w));
-	map(0xffff86c8, 0xffff86cb).rw(m_dmac0, FUNC(sh_dmac_channel_device::dmatcr_r), FUNC(sh_dmac_channel_device::dmatcr_w));
-	map(0xffff86cc, 0xffff86cf).rw(m_dmac0, FUNC(sh_dmac_channel_device::chcr_r), FUNC(sh_dmac_channel_device::chcr_w));
-	map(0xffff86d0, 0xffff86d3).rw(m_dmac1, FUNC(sh_dmac_channel_device::sar_r), FUNC(sh_dmac_channel_device::sar_w));
-	map(0xffff86d4, 0xffff86d7).rw(m_dmac1, FUNC(sh_dmac_channel_device::dar_r), FUNC(sh_dmac_channel_device::dar_w));
-	map(0xffff86d8, 0xffff86db).rw(m_dmac1, FUNC(sh_dmac_channel_device::dmatcr_r), FUNC(sh_dmac_channel_device::dmatcr_w));
-	map(0xffff86dc, 0xffff86df).rw(m_dmac1, FUNC(sh_dmac_channel_device::chcr_r), FUNC(sh_dmac_channel_device::chcr_w));
-	map(0xffff86e0, 0xffff86e3).rw(m_dmac2, FUNC(sh_dmac_channel_device::sar_r), FUNC(sh_dmac_channel_device::sar_w));
-	map(0xffff86e4, 0xffff86e7).rw(m_dmac2, FUNC(sh_dmac_channel_device::dar_r), FUNC(sh_dmac_channel_device::dar_w));
-	map(0xffff86e8, 0xffff86eb).rw(m_dmac2, FUNC(sh_dmac_channel_device::dmatcr_r), FUNC(sh_dmac_channel_device::dmatcr_w));
-	map(0xffff86ec, 0xffff86ef).rw(m_dmac2, FUNC(sh_dmac_channel_device::chcr_r), FUNC(sh_dmac_channel_device::chcr_w));
-	map(0xffff86f0, 0xffff86f3).rw(m_dmac3, FUNC(sh_dmac_channel_device::sar_r), FUNC(sh_dmac_channel_device::sar_w));
-	map(0xffff86f4, 0xffff86f7).rw(m_dmac3, FUNC(sh_dmac_channel_device::dar_r), FUNC(sh_dmac_channel_device::dar_w));
-	map(0xffff86f8, 0xffff86fb).rw(m_dmac3, FUNC(sh_dmac_channel_device::dmatcr_r), FUNC(sh_dmac_channel_device::dmatcr_w));
-	map(0xffff86fc, 0xffff86ff).rw(m_dmac3, FUNC(sh_dmac_channel_device::chcr_r), FUNC(sh_dmac_channel_device::chcr_w));
-
-	map(0xfffff000, 0xffffffff).ram();
+void sh7042_device::internal_w(offs_t a, u16 v)
+{
+	if(a >= 0xffff81a0 && a <= 0xffff81a0) { m_sci[0]->smr_w(v); return; }
+	if(a >= 0xffff81a1 && a <= 0xffff81a1) { m_sci[0]->brr_w(v); return; }
+	if(a >= 0xffff81a2 && a <= 0xffff81a2) { m_sci[0]->scr_w(v); return; }
+	if(a >= 0xffff81a3 && a <= 0xffff81a3) { m_sci[0]->tdr_w(v); return; }
+	if(a >= 0xffff81a4 && a <= 0xffff81a4) { m_sci[0]->ssr_w(v); return; }
+	if(a >= 0xffff81b0 && a <= 0xffff81b0) { m_sci[1]->smr_w(v); return; }
+	if(a >= 0xffff81b1 && a <= 0xffff81b1) { m_sci[1]->brr_w(v); return; }
+	if(a >= 0xffff81b2 && a <= 0xffff81b2) { m_sci[1]->scr_w(v); return; }
+	if(a >= 0xffff81b3 && a <= 0xffff81b3) { m_sci[1]->tdr_w(v); return; }
+	if(a >= 0xffff81b4 && a <= 0xffff81b4) { m_sci[1]->ssr_w(v); return; }
+	if(a >= 0xffff8200 && a <= 0xffff8200) { m_mtu3->tcr_w(v); return; }
+	if(a >= 0xffff8201 && a <= 0xffff8201) { m_mtu4->tcr_w(v); return; }
+	if(a >= 0xffff8202 && a <= 0xffff8202) { m_mtu3->tmdr_w(v); return; }
+	if(a >= 0xffff8203 && a <= 0xffff8203) { m_mtu4->tmdr_w(v); return; }
+	if(a >= 0xffff8204 && a <= 0xffff8205) { m_mtu3->tior_w(v); return; }
+	if(a >= 0xffff8206 && a <= 0xffff8207) { m_mtu4->tior_w(v); return; }
+	if(a >= 0xffff8208 && a <= 0xffff8208) { m_mtu3->tier_w(v); return; }
+	if(a >= 0xffff8209 && a <= 0xffff8209) { m_mtu4->tier_w(v); return; }
+	if(a >= 0xffff820a && a <= 0xffff820a) { m_mtu->toer_w(v); return; }
+	if(a >= 0xffff820b && a <= 0xffff820b) { m_mtu->tocr_w(v); return; }
+	if(a >= 0xffff820d && a <= 0xffff820d) { m_mtu->tgcr_w(v); return; }
+	if(a >= 0xffff8210 && a <= 0xffff8211) { m_mtu3->tcnt_w(v); return; }
+	if(a >= 0xffff8212 && a <= 0xffff8213) { m_mtu4->tcnt_w(v); return; }
+	if(a >= 0xffff8214 && a <= 0xffff8215) { m_mtu->tcdr_w(v); return; }
+	if(a >= 0xffff8216 && a <= 0xffff8217) { m_mtu->tddr_w(v); return; }
+	if(a >= 0xffff8218 && a <= 0xffff821b) { m_mtu3->tgr_w(v); return; }
+	if(a >= 0xffff821c && a <= 0xffff821f) { m_mtu4->tgr_w(v); return; }
+	if(a >= 0xffff8220 && a <= 0xffff8221) { m_mtu->tcnts_w(v); return; }
+	if(a >= 0xffff8222 && a <= 0xffff8223) { m_mtu->tcbr_w(v); return; }
+	if(a >= 0xffff8224 && a <= 0xffff8227) { m_mtu3->tgrc_w(v); return; }
+	if(a >= 0xffff8228 && a <= 0xffff822b) { m_mtu4->tgrc_w(v); return; }
+	if(a >= 0xffff822c && a <= 0xffff822c) { m_mtu3->tsr_w(v); return; }
+	if(a >= 0xffff822d && a <= 0xffff822d) { m_mtu4->tsr_w(v); return; }
+	if(a >= 0xffff8240 && a <= 0xffff8240) { m_mtu->tstr_w(v); return; }
+	if(a >= 0xffff8241 && a <= 0xffff8241) { m_mtu->tsyr_w(v); return; }
+	if(a >= 0xffff8260 && a <= 0xffff8260) { m_mtu0->tcr_w(v); return; }
+	if(a >= 0xffff8261 && a <= 0xffff8261) { m_mtu0->tmdr_w(v); return; }
+	if(a >= 0xffff8262 && a <= 0xffff8263) { m_mtu0->tior_w(v); return; }
+	if(a >= 0xffff8264 && a <= 0xffff8264) { m_mtu0->tier_w(v); return; }
+	if(a >= 0xffff8265 && a <= 0xffff8265) { m_mtu0->tsr_w(v); return; }
+	if(a >= 0xffff8266 && a <= 0xffff8267) { m_mtu0->tcnt_w(v); return; }
+	if(a >= 0xffff8268 && a <= 0xffff826f) { m_mtu0->tgr_w(v); return; }
+	if(a >= 0xffff8280 && a <= 0xffff8280) { m_mtu1->tcr_w(v); return; }
+	if(a >= 0xffff8281 && a <= 0xffff8281) { m_mtu1->tmdr_w(v); return; }
+	if(a >= 0xffff8282 && a <= 0xffff8283) { m_mtu1->tior_w(v); return; }
+	if(a >= 0xffff8284 && a <= 0xffff8284) { m_mtu1->tier_w(v); return; }
+	if(a >= 0xffff8285 && a <= 0xffff8285) { m_mtu1->tsr_w(v); return; }
+	if(a >= 0xffff8286 && a <= 0xffff8287) { m_mtu1->tcnt_w(v); return; }
+	if(a >= 0xffff8288 && a <= 0xffff828b) { m_mtu1->tgr_w(v); return; }
+	if(a >= 0xffff82a0 && a <= 0xffff82a0) { m_mtu2->tcr_w(v); return; }
+	if(a >= 0xffff82a1 && a <= 0xffff82a1) { m_mtu2->tmdr_w(v); return; }
+	if(a >= 0xffff82a2 && a <= 0xffff82a3) { m_mtu2->tior_w(v); return; }
+	if(a >= 0xffff82a4 && a <= 0xffff82a4) { m_mtu2->tier_w(v); return; }
+	if(a >= 0xffff82a5 && a <= 0xffff82a5) { m_mtu2->tsr_w(v); return; }
+	if(a >= 0xffff82a6 && a <= 0xffff82a7) { m_mtu2->tcnt_w(v); return; }
+	if(a >= 0xffff82a8 && a <= 0xffff82ab) { m_mtu2->tgr_w(v); return; }
+	if(a >= 0xffff8348 && a <= 0xffff8357) { m_intc->ipr_w(v); return; }
+	if(a >= 0xffff8358 && a <= 0xffff8359) { m_intc->icr_w(v); return; }
+	if(a >= 0xffff835a && a <= 0xffff835b) { m_intc->isr_w(v); return; }
+	if(a >= 0xffff8380 && a <= 0xffff8383) { m_porta->dr_w(v); return; }
+	if(a >= 0xffff8384 && a <= 0xffff8387) { m_porta->io_w(v); return; }
+	if(a >= 0xffff8388 && a <= 0xffff8389) { pcf_ah_w(v); return; }
+	if(a >= 0xffff838c && a <= 0xffff838f) { pcf_al_w(v); return; }
+	if(a >= 0xffff8390 && a <= 0xffff8391) { m_portb->dr_w(v); return; }
+	if(a >= 0xffff8392 && a <= 0xffff8393) { m_portc->dr_w(v); return; }
+	if(a >= 0xffff8394 && a <= 0xffff8395) { m_portb->io_w(v); return; }
+	if(a >= 0xffff8396 && a <= 0xffff8397) { m_portc->io_w(v); return; }
+	if(a >= 0xffff8398 && a <= 0xffff839b) { pcf_b_w(v); return; }
+	if(a >= 0xffff839c && a <= 0xffff839d) { pcf_c_w(v); return; }
+	if(a >= 0xffff83a0 && a <= 0xffff83a3) { m_portd->dr_w(v); return; }
+	if(a >= 0xffff83a4 && a <= 0xffff83a7) { m_portd->io_w(v); return; }
+	if(a >= 0xffff83a8 && a <= 0xffff83ab) { pcf_dh_w(v); return; }
+	if(a >= 0xffff83ac && a <= 0xffff83ad) { pcf_dl_w(v); return; }
+	if(a >= 0xffff83b0 && a <= 0xffff83b1) { m_porte->dr_w(v); return; }
+	if(a >= 0xffff83b4 && a <= 0xffff83b5) { m_porte->io_w(v); return; }
+	if(a >= 0xffff83b8 && a <= 0xffff83bb) { pcf_e_w(v); return; }
+	if(a >= 0xffff83c8 && a <= 0xffff83c9) { pcf_if_w(v); return; }
+	if(a >= 0xffff83d0 && a <= 0xffff83d1) { m_cmt->cmstr_w(v); return; }
+	if(a >= 0xffff83d2 && a <= 0xffff83d3) { m_cmt->cmcsr0_w(v); return; }
+	if(a >= 0xffff83d4 && a <= 0xffff83d5) { m_cmt->cmcnt0_w(v); return; }
+	if(a >= 0xffff83d6 && a <= 0xffff83d7) { m_cmt->cmcor0_w(v); return; }
+	if(a >= 0xffff83d8 && a <= 0xffff83d9) { m_cmt->cmcsr1_w(v); return; }
+	if(a >= 0xffff83da && a <= 0xffff83db) { m_cmt->cmcnt1_w(v); return; }
+	if(a >= 0xffff83dc && a <= 0xffff83dd) { m_cmt->cmcor1_w(v); return; }
 }
 
 void sh7042_device::device_add_mconfig(machine_config &config)

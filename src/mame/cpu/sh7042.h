@@ -8,6 +8,9 @@
 
 #pragma once
 
+// S-MU2000: MAME 本体の代わりに互換層を使う
+#include "../../compat/mamecompat.h"
+
 #include "sh2.h"
 #include "sh_intc.h"
 #include "sh_adc.h"
@@ -132,7 +135,9 @@ private:
 	u32 m_pcf_e;
 	u16 m_pcf_if;
 
-	void map(address_map &map) ATTR_COLD;
+	// S-MU2000: address_map の代わり。番地で振り分ける
+	u16  internal_r(offs_t a);
+	void internal_w(offs_t a, u16 v);
 
 	u16 adc_default(int adc);
 	u16 port16_default_r(int port);
