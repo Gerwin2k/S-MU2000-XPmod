@@ -146,7 +146,33 @@ void mu2000::build_bus()
 				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x\n", base, (a - base) >> 1, v, m_cpu->pc());
 			return v;
 		};
+		// 幅の内訳を数える。MAME は 16bit ハンドラに mem_mask を渡せるが
+		// こちらは渡せないので、byte 幅の書き込みがあると片側が壊れる
+		d.w8 = [this, &dev, base](offs_t a, u8 v) {
+			m_swp_w8++;
+			const offs_t reg = (a - base) >> 1;
+			const u16 old = dev.read16(reg);
+			dev.write16(reg, (a & 1) ? u16((old & 0xff00) | v)
+			                         : u16((old & 0x00ff) | (u16(v) << 8)));
+		};
+		d.r8 = [this, &dev, base](offs_t a) {
+			m_swp_r8++;
+			return u8(dev.read16((a - base) >> 1) >> ((a & 1) ? 0 : 8));
+		};
+		d.w32 = [this, &dev, base](offs_t a, u32 v) {
+			m_swp_w32++;
+			const offs_t reg = (a - base) >> 1;
+			if (m_swp_trace) {
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
+				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc());
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
+				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc());
+			}
+			dev.write16(reg, u16(v >> 16));
+			dev.write16(reg + 1, u16(v));
+		};
 		d.w16 = [this, &dev, base](offs_t a, u16 v) {
+			m_swp_w16++;
 			if (m_swp_trace)
 				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
 				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc());
@@ -371,10 +397,24 @@ void mu2000::run_sample(s32 &left, s32 &right)
 
 	run_cycles(cycles);
 
-	// マスタとスレーブを 1 サンプルずつ。出力は足す
+	// マスタとスレーブを 1 サンプルずつ進める
 	s32 lm = 0, rm = 0, ls = 0, rs = 0;
 	m_swpm.run_sample(lm, rm);
 	m_swps.run_sample(ls, rs);
-	left  = lm + ls;
-	right = rm + rs;
+
+	// 2 個の SWP30 は MELO/MELI のシリアルで相互に結ばれている。
+	// スレーブの声は自分の DAC には出ず、この線でマスタのミキサに入る。
+	// 結線は MAME の mu1000_state::mu1000() と同じ:
+	//   スレーブ 出力 4..17 -> マスタ  入力 0..13
+	//   マスタ   出力 4..13 -> スレーブ 入力 0..9
+	// 相互に繋がっているので 1 サンプル遅れで渡す（MAME も同じ）
+	for (int i = 0; i < 14; i++)
+		m_swpm.set_meli(i, m_swps.melo(i));
+	for (int i = 0; i < 10; i++)
+		m_swps.set_meli(i, m_swpm.melo(i));
+
+	// スピーカーに出るのはマスタの DAC だけ。
+	// スレーブの DAC はどこにも繋がっていない
+	left  = lm;
+	right = rm;
 }

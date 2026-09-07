@@ -144,11 +144,18 @@ int main(int argc, char **argv)
 	double seconds = 0.0;
 	const char *swptrace = nullptr;
 	double boot = -1.0;     // 負なら firmware が受信を有効にするまで待つ
+	const char *mu_dac_path = nullptr;
+	u32 mu_dac_from = 0, mu_dac_count = 0;
 	for (int i = 4; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--trace-swp") && i + 1 < argc)
 			swptrace = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot") && i + 1 < argc)
 			boot = std::atof(argv[++i]);
+		else if (!std::strcmp(argv[i], "--dump-dac") && i + 3 < argc) {
+			mu_dac_path = argv[++i];
+			mu_dac_from = u32(std::strtoul(argv[++i], nullptr, 0));
+			mu_dac_count = u32(std::strtoul(argv[++i], nullptr, 0));
+		}
 		else if (!std::strcmp(argv[i], "-v"))
 			smu2000::g_verbose = true;
 		else
@@ -174,6 +181,12 @@ int main(int argc, char **argv)
 	std::FILE *tf = swptrace ? std::fopen(swptrace, "w") : nullptr;
 	if (tf)
 		mu.set_swp_trace(tf, true);
+
+	if (mu_dac_path) {
+		mu.swpm().m_dbg_dac = std::fopen(mu_dac_path, "w");
+		mu.swpm().m_dbg_dac_from = mu_dac_from;
+		mu.swpm().m_dbg_dac_count = mu_dac_count;
+	}
 
 	mu.reset();
 
@@ -240,6 +253,32 @@ int main(int argc, char **argv)
 	std::printf("CPU %llu サイクル / %zu サンプル = %.3f（あるべき値 %.3f）\n",
 	            (unsigned long long)mu.cpu().total_cycles(), total,
 	            double(mu.cpu().total_cycles()) / total, 28000000.0 / rate);
+
+	mu.print_swp_widths();
+
+	if (smu2000::g_verbose) {
+		auto report = [](const char *name, swp30_device &d) {
+			int silent = 0, weak = 0;
+			for (auto [e, l] : d.m_dbg_notes) {
+				if (!l || e == 0) silent++;
+				else if (e / l < 50) weak++;
+			}
+			std::printf("%s: 発音 %zu 件 無音 %d 件 ごく小さい %d 件\n",
+			            name, d.m_dbg_notes.size(), silent, weak);
+			int bucket[8] = {};
+			for (auto [e, l] : d.m_dbg_notes) {
+				if (!l) continue;
+				const u64 avg = e / l;
+				int k = 0;
+				while (k < 7 && avg >= (u64(20) << k)) k++;
+				bucket[k]++;
+			}
+			std::printf("   平均振幅の分布 <20:%d <40:%d <80:%d <160:%d <320:%d <640:%d <1280:%d それ以上:%d\n",
+			            bucket[0],bucket[1],bucket[2],bucket[3],bucket[4],bucket[5],bucket[6],bucket[7]);
+		};
+		report("マスタ", mu.swpm());
+		report("スレーブ", mu.swps());
+	}
 
 	write_wav(wav, pcm, rate);
 	std::printf("書き出した: %s（%.1f 秒）\n", wav.c_str(), double(total) / rate);

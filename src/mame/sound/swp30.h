@@ -11,6 +11,9 @@
 // S-MU2000: MAME 本体の代わりに互換層を使う
 #include "../../compat/mamecompat.h"
 
+#include <algorithm>
+#include <cstdio>
+
 
 // S-MU2000: swp30_disassembler はデバッガ用なので削除した
 
@@ -36,8 +39,26 @@ public:
 	// 1 サンプル進めて、DAC 出力 2ch を返す
 	void run_sample(s32 &left, s32 &right);
 
+	// S-MU2000: MU2000 は SWP30 を 2 個積み、MELO/MELI のシリアルで結んでいる。
+	// スレーブの声はここを通ってマスタのミキサに入る。MAME では
+	// add_route(出力 i+4, 相手, 1.0, 入力 i) がこの線に当たる。
+	// 目盛りは put_int_clamp(..., 1<<26) と同じで、範囲外は切り詰める
+	static constexpr s32 SERIAL_FULL_SCALE = 1 << 26;
+	s32  melo(int i) const { return std::clamp(m_melo[i], -SERIAL_FULL_SCALE, SERIAL_FULL_SCALE); }
+	void set_meli(int i, s32 v) { m_meli[i] = v; }
+
 	// S-MU2000: 音が出ないときの手掛かり
 	s32 m_dbg_adc_max = 0, m_dbg_meg_max = 0, m_dbg_awm_max = 0;
+
+	// 発音ごとに、その声が実際にどれだけ音を出したか。
+	// 「発音指示は出ているのに鳴っていない」を数えるため
+	u64 m_dbg_energy[0x40] = {};
+	u64 m_dbg_len[0x40] = {};
+	std::vector<std::pair<u64,u64>> m_dbg_notes;   // (積算, 長さ)
+
+	// MEG の入口・出口の書き出し（移植の突き合わせ用）
+	std::FILE *m_dbg_dac = nullptr;
+	u32 m_dbg_dac_from = 0, m_dbg_dac_count = 0;
 	s32 m_dbg_megin_max = 0, m_dbg_melo_max = 0;
 
 private:

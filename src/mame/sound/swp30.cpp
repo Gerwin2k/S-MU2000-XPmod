@@ -2030,6 +2030,10 @@ void swp30_device::keyon_w(u16)
 	for(int chan=0; chan<64; chan++) {
 		u64 mask = u64(1) << chan;
 		if(m_keyon_mask & mask) {
+			if(::smu2000::g_verbose) {
+				m_dbg_notes.emplace_back(m_dbg_energy[chan], m_dbg_len[chan]);
+				m_dbg_energy[chan] = m_dbg_len[chan] = 0;
+			}
 			m_streaming[chan].keyon();
 			m_filter   [chan].keyon();
 			m_iir1     [chan].keyon();
@@ -3378,9 +3382,25 @@ void swp30_device::sample_step()
 	if(::smu2000::g_verbose)
 		for(int i=0; i != 0x40; i++)
 			if(std::abs(samples_per_chan[i]) > m_dbg_awm_max) m_dbg_awm_max = std::abs(samples_per_chan[i]);
+	if(::smu2000::g_verbose)
+		for(int i=0; i != 0x40; i++)
+			if(m_envelope[i].active()) {
+				m_dbg_energy[i] += u64(std::abs(samples_per_chan[i]));
+				m_dbg_len[i]++;
+			}
 	adc_step();
 	mixer_step(samples_per_chan);
 	m_meg->lfo_step();
+
+	// S-MU2000: MEG の入口と出口を並べて出す。MAME 側にも同じものを入れてあり、
+	// 音の食い違いが MEG の前か後かを切り分けるのに使う
+	if(m_dbg_dac && m_meg->m_sample_counter >= m_dbg_dac_from &&
+	   m_meg->m_sample_counter < m_dbg_dac_from + m_dbg_dac_count)
+		fprintf(m_dbg_dac, "%u in %d %d %d %d out %d %d %d %d\n",
+		        m_meg->m_sample_counter,
+		        m_meg->m_m[0x20], m_meg->m_m[0x21], m_meg->m_m[0x22], m_meg->m_m[0x23],
+		        m_meg->m_m[0x30], m_meg->m_m[0x31], m_meg->m_m[0x32], m_meg->m_m[0x33]);
+
 	m_meg->m_sample_counter ++;
 }
 

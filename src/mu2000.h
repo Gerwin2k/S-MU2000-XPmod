@@ -18,6 +18,7 @@
 #include "mame/machine/sci4.h"
 #include "mame/video/hd44780.h"
 
+#include <cstdio>
 #include <deque>
 #include <string>
 
@@ -62,6 +63,11 @@ public:
 
 	const std::string &error() const { return m_error; }
 
+	void print_swp_widths() const
+	{ std::printf("SWP30 アクセス: 書き byte %llu / word %llu / dword %llu、読み byte %llu\n",
+	              (unsigned long long)m_swp_w8, (unsigned long long)m_swp_w16,
+	              (unsigned long long)m_swp_w32, (unsigned long long)m_swp_r8); }
+
 	// SWP30 への書き込みを全部書き出す（MAME と突き合わせるため）
 	void set_swp_trace(std::FILE *f, bool with_reads = false)
 	{ m_swp_trace = f; m_swp_trace_reads = with_reads; }
@@ -103,6 +109,9 @@ private:
 	void update_sci_irq();
 
 	std::string m_error;
+	// SWP30 へのアクセス幅の内訳（byte 幅があると片側が壊れる）
+	u64 m_swp_w8 = 0, m_swp_r8 = 0, m_swp_w16 = 0, m_swp_w32 = 0;
+
 	std::FILE  *m_swp_trace = nullptr;
 	bool        m_swp_trace_reads = false;
 
