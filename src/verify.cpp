@@ -1,7 +1,6 @@
 // 移植が成立しているかの最小確認
 #include "mame/sound/swp30.h"
 #include <cstdio>
-namespace smu2000 { bool g_verbose = false; }
 
 int main()
 {

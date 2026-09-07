@@ -1,6 +1,6 @@
 # S-MU2000
 #
-#   make          verify（移植の最小確認）を作る
+#   make          verify（移植の最小確認）と boot（起動の確認）を作る
 #   make clean    消す
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
@@ -15,6 +15,7 @@ CXXFLAGS += -MMD -MP
 BUILD := build
 
 SRCS := \
+	src/compat/compat.cpp \
 	src/mame/sound/swp30.cpp \
 	src/mame/cpu/sh.cpp \
 	src/mame/cpu/sh2.cpp \
@@ -30,9 +31,13 @@ SRCS := \
 
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
-all: $(BUILD)/verify.exe
+all: $(BUILD)/verify.exe $(BUILD)/boot.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -50,6 +55,6 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d) $(BUILD)/src/verify.d
+-include $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d
 
 .PHONY: all clean regen

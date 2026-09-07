@@ -221,6 +221,13 @@ void sh7042_device::device_add_mconfig(machine_config &config)
 			sh_mtu_channel_device::DIV_1024,
 			sh_mtu_channel_device::INPUT_A,
 			sh_mtu_channel_device::INPUT_B);
+	// S-MU2000: MTU 本体から各チャンネルへの結線。MAME は tag で解決していた
+	m_mtu->set_channel(0, *m_mtu0);
+	m_mtu->set_channel(1, *m_mtu1);
+	m_mtu->set_channel(2, *m_mtu2);
+	m_mtu->set_channel(3, *m_mtu3);
+	m_mtu->set_channel(4, *m_mtu4);
+
 	SH_PORT32(config, m_porta, *this, 0, 0x00000000, 0xff000000);
 	SH_PORT16(config, m_portb, *this, 0, 0x0000, 0xfc00);
 	SH_PORT16(config, m_portc, *this, 1, 0x0000, 0x0000);
@@ -248,8 +255,12 @@ void sh7042_device::add_event(u64 &event_time, u64 new_event)
 void sh7042_device::recompute_timer(u64 event_time)
 {
 	// MAME は event_time + 半サイクルの時刻でスケジューラに起こしてもらっていた。
-	// こちらは実行ループが total_cycles() で追い越したときに呼ぶ
-	m_event_cycles = event_time;
+	// こちらは実行ループが total_cycles() で追い越したときに呼ぶ。
+	// 走っている最中に予定が変わったら、その場で切り上げて組み直させる
+	if (m_event_cycles != event_time) {
+		m_event_cycles = event_time;
+		abort_timeslice();
+	}
 }
 
 TIMER_CALLBACK_MEMBER(sh7042_device::event_timer_tick)

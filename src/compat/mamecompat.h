@@ -71,7 +71,8 @@ struct state_entry_dummy
 #define state_add(...)      (::state_entry_dummy{})
 
 // デバッガのフック。デバッガを持たないので何もしない
-#define debugger_instruction_hook(...) do {} while(0)
+// MAME はここでデバッガに命令を見せていた。こちらは PC の追跡にだけ使う
+#define debugger_instruction_hook(pc) 	do { if (::smu2000::g_pc_trace) ::smu2000::pc_trace(pc); } while(0)
 #define debugger_exception_hook(...)   do {} while(0)
 #define debugger_wait_hook(...)        do {} while(0)
 #define debugger_privilege_hook(...)   do {} while(0)
@@ -80,6 +81,11 @@ struct state_entry_dummy
 
 namespace smu2000 {
 extern bool g_verbose;   // 既定では黙る。デバッグ時だけ true にする
+
+// 移植の突き合わせ用。MAME の debugger の trace と同じものを出す
+extern std::FILE *g_pc_trace;
+extern u64        g_pc_trace_left;
+void pc_trace(u32 pc);
 }
 
 #define logerror(...)                                            \

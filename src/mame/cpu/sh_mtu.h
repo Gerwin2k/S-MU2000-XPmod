@@ -147,6 +147,10 @@ public:
 
 	template<typename T> void set_info(T &&cpu) { m_cpu.set_tag(std::forward<T>(cpu)); }
 
+	// S-MU2000: MAME は tag（"mtu:0" など）で子のチャンネルを見つけていた。
+	// tag の木を持たないので、生成した側から直に結んでもらう
+	void set_channel(int i, sh_mtu_channel_device &ch) { m_timer_channel[i].set_tag(ch); }
+
 	u8 tstr_r();
 	void tstr_w(u8 data);
 	u8 tsyr_r();

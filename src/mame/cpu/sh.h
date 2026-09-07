@@ -168,14 +168,25 @@ public:
 	// CPU が自分で数え、周辺のタイマ（MTU / CMT）はこの値を基準に動く。
 	virtual void execute_run() = 0;
 
-	// 呼び出し側はこれで走らせる。要求より少し多く/少なく走ることがある
-	void run_cycles(int cycles)
+	// 呼び出し側はこれで走らせる。実際に進んだサイクル数を返す。
+	// 途中で周辺が予定を入れると、要求より早く戻ってくる
+	int run_cycles(int cycles)
 	{
 		m_sh2_state->icount = cycles;
 		m_cycles_this_run   = cycles;
 		execute_run();
-		m_total_cycles    += cycles - m_sh2_state->icount;
-		m_cycles_this_run  = 0;
+		const int done = m_cycles_this_run - m_sh2_state->icount;
+		m_total_cycles     += done;
+		m_cycles_this_run   = 0;
+		m_sh2_state->icount = 0;
+		return done;
+	}
+
+	// MAME の abort_timeslice。周辺が新しい予定を入れたとき、スケジューラが
+	// 組み直せるよう CPU をその場で止める。使わなかったぶんは経過に数えない
+	void abort_timeslice()
+	{
+		m_cycles_this_run  -= m_sh2_state->icount;
 		m_sh2_state->icount = 0;
 	}
 
