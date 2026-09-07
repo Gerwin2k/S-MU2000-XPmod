@@ -111,11 +111,19 @@ int main(int argc, char **argv)
 {
 	SetConsoleOutputCP(CP_UTF8);   // 既定の CP932 だと表示が化ける
 
+	// Windows の既定のタイマ分解能は 15.6ms。waveOut はこの刻みでしか
+	// バッファを回収しないので、これより短い枚は 1 刻みに 1 枚しか進まず、
+	// 再生が間に合わずに細切れになる。1ms に上げておく
+	timeBeginPeriod(1);
+
 	int  midi_dev = -1;
-	// WinMM の waveOut は内部の周期がおよそ 10ms あり、それより短いバッファは
-	// 1 枚ずつ捌けない。256 サンプル(5.8ms)にすると 1 周期に 1 枚しか進まず、
-	// 再生が半分の速さになって細切れに聞こえる。既定は余裕をみて 512
-	int  frames = 512;      // 1 回に作るサンプル数（11.6ms）
+	// WinMM の waveOut は 1 枚あたり 20ms 前後の間隔でしか回収してくれない。
+	// これより短い枚を使うと供給が追いつかず、再生が遅れて細切れに聞こえる。
+	// 実測（この環境、20 秒ぶんの音を作らせて 1 枚あたりの実時間を割り出した）:
+	//   128 サンプル(2.9ms) -> 10.5ms   256(5.8ms) -> 12.7ms
+	//   512 サンプル(11.6ms) -> 14.5ms  1024(23.2ms) -> 21.7ms（ここで正常）
+	// もっと短くしたいなら waveOut をやめて WASAPI の共有モードにする
+	int  frames = 1024;     // 1 回に作るサンプル数（23.2ms）
 	int  buffers = 3;       // 用意する枚数
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
 	bool nomidi = false;
@@ -234,30 +242,27 @@ int main(int argc, char **argv)
 	LARGE_INTEGER freq, t0, t1;
 	QueryPerformanceFrequency(&freq);
 	u64 busy_ticks = 0;
-	for (;;) {
-		// 空いている枚を探す。無ければドライバの合図を待つ
-		int next = -1;
-		while (next < 0) {
-			for (int i = 0; i < buffers; i++)
-				if (!(hdr[i].dwFlags & WHDR_INQUEUE)) { next = i; break; }
-			if (next < 0)
-				WaitForSingleObject(done, 50);
-		}
+
+	// 音声を作るスレッドは優先度を上げる。取りこぼすと音が切れる
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
+	// 1 枚ぶん作って投入する
+	auto fill_and_write = [&](int i) {
+		QueryPerformanceCounter(&t0);
 
 		// 溜まっている MIDI を音源へ。実機と同じく 31250bps の直列で流れる
 		u8 b;
 		while (g_midi.pop(b))
 			mu.midi_in(b);
 
-		QueryPerformanceCounter(&t0);
-		s16 *out = pcm[next].data();
-		for (int i = 0; i < frames; i++) {
+		s16 *out = pcm[i].data();
+		for (int k = 0; k < frames; k++) {
 			s32 l = 0, r = 0;
 			mu.run_sample(l, r);
 			l = l * 32768 / mu2000::DAC_FULL_SCALE;
 			r = r * 32768 / mu2000::DAC_FULL_SCALE;
-			out[i * 2 + 0] = s16(l < -32768 ? -32768 : l > 32767 ? 32767 : l);
-			out[i * 2 + 1] = s16(r < -32768 ? -32768 : r > 32767 ? 32767 : r);
+			out[k * 2 + 0] = s16(l < -32768 ? -32768 : l > 32767 ? 32767 : l);
+			out[k * 2 + 1] = s16(r < -32768 ? -32768 : r > 32767 ? 32767 : r);
 		}
 
 		QueryPerformanceCounter(&t1);
@@ -269,12 +274,25 @@ int main(int argc, char **argv)
 		if (wav)
 			rec.insert(rec.end(), out, out + size_t(frames) * 2);
 
-		if (waveOutWrite(hwo, &hdr[next], sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
+		if (waveOutWrite(hwo, &hdr[i], sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
 			write_errors++;
-
 		produced += frames;
-		if (seconds > 0.0 && produced >= u64(seconds * RATE))
-			break;
+	};
+
+	// まず全枚を埋めて投入する。以後は投入した順に再生し終わるので、
+	// 同じ順に待てばよい。空きを探し回ると、waveOutWrite 直後でまだ
+	// WHDR_INQUEUE が立っていない枚を選び直し、再生中の枚を上書きしうる
+	for (int i = 0; i < buffers; i++)
+		fill_and_write(i);
+
+	int next = 0;
+	while (seconds <= 0.0 || produced < u64(seconds * RATE)) {
+		while (!(hdr[next].dwFlags & WHDR_DONE))
+			WaitForSingleObject(done, 100);
+
+		fill_and_write(next);
+		next = (next + 1) % buffers;
+
 		if (produced % (RATE * 5) < u64(frames)) {
 			const double audio = double(produced) / RATE;
 			const double busy  = double(busy_ticks) / freq.QuadPart;
@@ -287,7 +305,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	// 片付け。鳴らしかけの分を止めてから閉じる
 	if (wav && !rec.empty()) {
 		// 確認用の WAV。render の出力と突き合わせられる
 		std::FILE *f = std::fopen(wav, "wb");
@@ -312,6 +329,7 @@ int main(int argc, char **argv)
 	waveOutClose(hwo);
 	if (hmi) { midiInStop(hmi); midiInClose(hmi); }
 	CloseHandle(done);
+	timeEndPeriod(1);
 	{
 		const double audio = double(produced) / RATE;
 		const double busy  = double(busy_ticks) / freq.QuadPart;
