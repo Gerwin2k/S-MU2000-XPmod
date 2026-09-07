@@ -114,3 +114,51 @@ DRC を切るのは判断が要る点だが、MAME で 177% の余力があっ�
   可能性はある（SWP30 に内部レジスタを読む口がある）
 
 ソフトシンセ化しても**音の正確さは上がらない**。上がるのは「DAW で使える」という一点。
+
+## swp30 の依存調査（実測）
+
+`swp30.cpp` 8,000 行のうち、MAME に依存しているのは以下だけだった。
+アルゴリズム本体（AWM2 のサンプル読み出し・補間、エンベロープ、フィルタ、LFO、
+MEG のインタプリタ、ミキサ）は**一行も触らずに済む**。
+
+| 依存 | 出現 | 対処 |
+|---|---|---|
+| `save_item(NAME(x))` | 100 | マクロで空にする。セーブステートは作らない |
+| `logerror(...)` | 14 | `fprintf(stderr)` へのマクロ。既定では黙る |
+| `m_input_stream` / `m_output_stream` | 35 | `sound_buffer` に置換 |
+| `state_add(...)` | 5 | マクロで空にする（デバッガ用） |
+| `machine()` | 7 | 削除 |
+| `space(...)` | 5 | `flat_space` を直接持たせる |
+| `m_icount` / `set_icountptr` | 7 | 呼び出し側が回数を管理する |
+| `drcuml` 一式 | — | **使わない**。`m_meg_drc_active = false` 固定でインタプリタ経路へ |
+| `swp30_disassembler` | — | 削除（デバッガ用） |
+
+実際に使われているメモリ API は 5 つだけ。
+
+```
+read_word / read_dword / read_qword / write_word / write_dword
+```
+
+音声 API は 2 つだけ。`sound_stream_update` は **1 サンプルにつき 1 回**呼ばれ、
+`index` には常に 0 が渡る。出力は DAC 4 本 + 外部シリアル(MELO) 16 本の計 20 本、
+入力は MELI 16 本（MU2000 では未使用）。
+
+```
+stream.get(channel, 0)                        入力
+stream.put_int_clamp(channel, 0, value, scale) 出力
+```
+
+### レジスタ対応表
+
+`address_map` は使わず、素の分岐に置き換える。レジスタは 64ch × 64 スロットの
+規則的な格子で、ハンドラは `offset >> 6` でチャンネルを取り出している。
+
+```
+レジスタ番地 = チャンネル * 0x40 + スロット   （16bit 単位）
+rchan(map, slot) → 全チャンネル分。ハンドラには offset = チャンネル << 6 が渡る
+rctrl(map, idx)  → 単発。slot = 0x40*(idx>>1) | 0xe | (idx&1)
+```
+
+したがって `write16(addr, data)` / `read16(addr)` を書き、
+`slot = addr & 0x3f` で分岐して既存のハンドラをそのまま呼べばよい。
+**ハンドラ自体は変更不要。**
