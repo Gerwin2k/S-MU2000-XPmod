@@ -14,6 +14,10 @@ CXXFLAGS += -I src -I src/compat
 # ヘッダを直したときに .o を作り直させる
 CXXFLAGS += -MMD -MP
 
+# MSYS2 の DLL に依存させない。動的リンクのままだと、MSYS2 の環境の外
+# （素の PowerShell など）では起動に失敗して何も言わずに終わる
+LDFLAGS ?= -static -static-libgcc -static-libstdc++
+
 BUILD := build
 
 SRCS := \
@@ -40,25 +44,25 @@ all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 # midisend は MIDI ファイルを実時間で MIDI 出力へ流す（live の試験用）
 $(BUILD)/midisend.exe: $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^ -lwinmm
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm
 
 # live は Windows の MIDI 入力と音声出力を使う
 $(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/live.o
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^ -lwinmm
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
