@@ -109,9 +109,14 @@ void list_midi_inputs()
 
 int main(int argc, char **argv)
 {
+	SetConsoleOutputCP(CP_UTF8);   // 既定の CP932 だと表示が化ける
+
 	int  midi_dev = -1;
-	int  frames = 256;      // 1 回に作るサンプル数
-	int  buffers = 4;       // 用意する枚数
+	// WinMM の waveOut は内部の周期がおよそ 10ms あり、それより短いバッファは
+	// 1 枚ずつ捌けない。256 サンプル(5.8ms)にすると 1 周期に 1 枚しか進まず、
+	// 再生が半分の速さになって細切れに聞こえる。既定は余裕をみて 512
+	int  frames = 512;      // 1 回に作るサンプル数（11.6ms）
+	int  buffers = 3;       // 用意する枚数
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
 	bool nomidi = false;
 	const char *wav = nullptr;   // 鳴らしたものを録っておく（確認用）
@@ -205,8 +210,10 @@ int main(int argc, char **argv)
 		hdr[i].lpData         = reinterpret_cast<LPSTR>(pcm[i].data());
 		hdr[i].dwBufferLength = DWORD(pcm[i].size() * 2);
 		waveOutPrepareHeader(hwo, &hdr[i], sizeof(WAVEHDR));
-		hdr[i].dwFlags |= WHDR_DONE;      // 最初は全部空きとして扱う
 	}
+	// 空きの判定は WHDR_INQUEUE が立っていないこと。waveOutWrite が立て、
+	// 再生し終わるとドライバが下ろす。WHDR_DONE を自分で立てて見張ると、
+	// 完了の取りこぼしで 1 バッファぶん余計に待ち、再生が半分の速さになる
 
 	std::printf("待ち時間の目安 %.1f ms（%d サンプル × %d 枚）\n",
 	            1000.0 * frames * buffers / RATE, frames, buffers);
@@ -216,16 +223,24 @@ int main(int argc, char **argv)
 		std::printf("Ctrl+C で終了\n");
 
 	std::vector<s16> rec;
+	// 音声を作るスレッドは優先度を上げる。取りこぼすと音が切れる
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
 	u64 produced = 0;
-	int next = 0;
+	u64 write_errors = 0;
 	// 生成にかけた時間を測る。実時間に対する割合が余力の目安になる
 	LARGE_INTEGER freq, t0, t1;
 	QueryPerformanceFrequency(&freq);
 	u64 busy_ticks = 0;
 	for (;;) {
-		// 空いた枚を待つ
-		while (!(hdr[next].dwFlags & WHDR_DONE))
-			WaitForSingleObject(done, 100);
+		// 空いている枚を探す。無ければドライバの合図を待つ
+		int next = -1;
+		while (next < 0) {
+			for (int i = 0; i < buffers; i++)
+				if (!(hdr[i].dwFlags & WHDR_INQUEUE)) { next = i; break; }
+			if (next < 0)
+				WaitForSingleObject(done, 50);
+		}
 
 		// 溜まっている MIDI を音源へ。実機と同じく 31250bps の直列で流れる
 		u8 b;
@@ -249,9 +264,8 @@ int main(int argc, char **argv)
 		if (wav)
 			rec.insert(rec.end(), out, out + size_t(frames) * 2);
 
-		hdr[next].dwFlags &= ~WHDR_DONE;
-		waveOutWrite(hwo, &hdr[next], sizeof(WAVEHDR));
-		next = (next + 1) % buffers;
+		if (waveOutWrite(hwo, &hdr[next], sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
+			write_errors++;
 
 		produced += frames;
 		if (seconds > 0.0 && produced >= u64(seconds * RATE))
@@ -259,8 +273,9 @@ int main(int argc, char **argv)
 		if (produced % (RATE * 5) < u64(frames)) {
 			const double audio = double(produced) / RATE;
 			const double busy  = double(busy_ticks) / freq.QuadPart;
-			std::printf("  %.0f 秒経過  MIDI %llu バイト  CPU 使用率 %.1f%%\n",
-			            audio, (unsigned long long)g_midi_bytes.load(), 100.0 * busy / audio);
+			std::printf("  %.0f 秒経過  MIDI %llu バイト  CPU 使用率 %.1f%%%s\n",
+			            audio, (unsigned long long)g_midi_bytes.load(), 100.0 * busy / audio,
+			            write_errors ? "  ※書き込み失敗あり" : "");
 		}
 	}
 
