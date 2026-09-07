@@ -3,7 +3,6 @@
 
 // Yamaha SCI4 / XV833A00, 7-lines serial chip with 4 multiplexed on one and the other 3 separated
 
-#include "emu.h"
 #include "sci4.h"
 
 sci4_device::sci4_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock) :
@@ -14,17 +13,42 @@ sci4_device::sci4_device(const machine_config &mconfig, const char *tag, device_
 }
 
 
-void sci4_device::map(address_map &map)
+// S-MU2000: MAME の address_map を素の振り分けにした。
+// 元の並びは
+//   0x00-0x3f  default_r/default_w
+//   0x00 data / 0x01 enable / 0x02 status / 0x03 datamode / 0x05 reset
+//              （いずれも .select(0x18)、つまり 0x08 刻みで 4 チャンネル）
+//   0x20       target_w
+// select が付いたものは offset をそのまま渡す（受け側が >>3 している）。
+
+u8 sci4_device::read8(offs_t offset)
 {
-	map(0x00, 0x3f).rw(FUNC(sci4_device::default_r), FUNC(sci4_device::default_w));
+	if(offset < 0x20) {
+		switch(offset & 7) {
+		case 0: return data_r(offset);
+		case 1: return enable_r(offset);
+		case 2: return status_r(offset);
+		case 3: return datamode_r(offset);
+		case 5: return reset_r(offset);
+		}
+	}
+	return default_r(offset);
+}
 
-	map(0x00, 0x00).rw(FUNC(sci4_device::data_r), FUNC(sci4_device::data_w)).select(0x18);
-	map(0x01, 0x01).rw(FUNC(sci4_device::enable_r), FUNC(sci4_device::enable_w)).select(0x18);
-	map(0x02, 0x02).r (FUNC(sci4_device::status_r)).select(0x18);
-	map(0x03, 0x03).rw(FUNC(sci4_device::datamode_r), FUNC(sci4_device::datamode_w)).select(0x18);
-	map(0x05, 0x05).r (FUNC(sci4_device::reset_r)).select(0x18);
-
-	map(0x20, 0x20).w (FUNC(sci4_device::target_w));
+void sci4_device::write8(offs_t offset, u8 data)
+{
+	if(offset == 0x20) {
+		target_w(data);
+		return;
+	}
+	if(offset < 0x20) {
+		switch(offset & 7) {
+		case 0: data_w(offset, data); return;
+		case 1: enable_w(offset, data); return;
+		case 3: datamode_w(offset, data); return;
+		}
+	}
+	default_w(offset, data);
 }
 
 

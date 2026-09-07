@@ -19,6 +19,7 @@ SRCS := \
 	src/compat/compat.cpp \
 	src/mame/sound/swp30.cpp \
 	src/mame/video/hd44780.cpp \
+	src/mame/machine/sci4.cpp \
 	src/mame/cpu/sh.cpp \
 	src/mame/cpu/sh2.cpp \
 	src/mame/cpu/sh7042.cpp \

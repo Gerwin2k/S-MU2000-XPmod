@@ -62,6 +62,10 @@ public:
 	// こちらは組み立て側（mu2000.cpp）から呼ぶので公開している
 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
 
+	// S-MU2000: 外部（SCI4 など）から割り込み線を上げ下げする。
+	// MAME では set_inputline() で配線していたところ
+	virtual void execute_set_input(int irqline, int state) override;
+
 	// 実行ループ用。次に周辺を動かすサイクル数（0 なら予定なし）
 	u64 event_cycles() const { return m_event_cycles; }
 	u16 do_read_adc(int port) { return m_read_adc[port](); }
@@ -121,7 +125,7 @@ protected:
 	virtual void device_start() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
 	virtual void sh2_exception_internal(const char *message, int irqline, int vector) override;
-	virtual void execute_set_input(int irqline, int state) override;
+
 
 private:
 	required_device<sh_intc_device> m_intc;

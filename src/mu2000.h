@@ -15,6 +15,7 @@
 #include "compat/membus.h"
 #include "mame/cpu/sh7042.h"
 #include "mame/sound/swp30.h"
+#include "mame/machine/sci4.h"
 #include "mame/video/hd44780.h"
 
 #include <deque>
@@ -44,7 +45,10 @@ public:
 	void midi_in(u8 byte) { m_midi_queue.push_back(byte); }
 	bool midi_idle() const { return m_midi_bit < 0 && m_midi_queue.empty(); }
 
-	// 1 サンプル（44.1kHz 相当）ぶん進めて、DAC 出力を返す
+	// 1 サンプル（44.1kHz 相当）ぶん進めて、DAC 出力を返す。
+	// 値は MAME 内部と同じ目盛りで、全振幅が DAC_FULL_SCALE。
+	// 16bit にするときは >> 2（MAME の put_int_clamp(..., 1<<17) と同じ）
+	static constexpr s32 DAC_FULL_SCALE = 1 << 17;
 	void run_sample(s32 &left, s32 &right);
 
 	sh7043a_device &cpu()  { return *m_cpu; }
@@ -63,10 +67,13 @@ private:
 	void start_devices();
 
 	machine_config  m_config;
+	running_machine m_machine;   // 時計とタイマの置き場
 	required_device<sh7043a_device> m_cpu_finder;
 	sh7043a_device *m_cpu = nullptr;
 
 	swp30_device m_swpm, m_swps;   // マスタ 0x800000 / スレーブ 0x802000
+	required_device<sci4_device> m_sci4_finder;
+	sci4_device *m_sci4 = nullptr;   // PLG ボード用 0xf00000
 	mem_bus      m_bus;
 
 	std::vector<u8>  m_prog;        // プログラム ROM 4MB
@@ -86,6 +93,10 @@ private:
 
 	u16  lcd_port_r();
 	void lcd_port_w(u16 data);
+
+	// SCI4 の割り込み。0 と 1 は OR して CPU の IRQ0 へ（MAME の input_merger）
+	int  m_sci_irq[2] = { 0, 0 };
+	void update_sci_irq();
 
 	std::string m_error;
 	std::FILE  *m_swp_trace = nullptr;

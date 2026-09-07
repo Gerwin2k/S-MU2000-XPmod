@@ -195,6 +195,9 @@ int main(int argc, char **argv)
 
 		s32 l = 0, r = 0;
 		mu.run_sample(l, r);
+		// DAC の全振幅は 1<<17。16bit に落とす（MAME の 1<<17 目盛りと同じ）
+		l = l * 32768 / mu2000::DAC_FULL_SCALE;
+		r = r * 32768 / mu2000::DAC_FULL_SCALE;
 		pcm.push_back(s16(std::clamp(l, -32768, 32767)));
 		pcm.push_back(s16(std::clamp(r, -32768, 32767)));
 
@@ -204,6 +207,12 @@ int main(int argc, char **argv)
 
 	if (tf)
 		std::fclose(tf);
+
+	if (smu2000::g_verbose)
+		std::printf("最大値  AWM2=%d  MEG=%d  DAC=%d\n",
+		            mu.swpm().m_dbg_awm_max, mu.swpm().m_dbg_meg_max, mu.swpm().m_dbg_adc_max),
+		std::printf("        MEG入力=%d  MELO=%d\n",
+		            mu.swpm().m_dbg_megin_max, mu.swpm().m_dbg_melo_max);
 
 	write_wav(wav, pcm, rate);
 	std::printf("書き出した: %s（%.1f 秒）\n", wav.c_str(), double(total) / rate);

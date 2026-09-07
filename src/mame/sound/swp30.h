@@ -36,6 +36,10 @@ public:
 	// 1 サンプル進めて、DAC 出力 2ch を返す
 	void run_sample(s32 &left, s32 &right);
 
+	// S-MU2000: 音が出ないときの手掛かり
+	s32 m_dbg_adc_max = 0, m_dbg_meg_max = 0, m_dbg_awm_max = 0;
+	s32 m_dbg_megin_max = 0, m_dbg_melo_max = 0;
+
 private:
 	// S-MU2000: device_start/reset, state_*, disassembler, rom_region の宣言は削除
 
@@ -301,7 +305,6 @@ private:
 	// S-MU2000: address_space の代わりにフラットな領域を直接持つ
 	running_machine m_machine;
 	region_ptr<u16> m_sintab;
-	std::vector<u64> m_meg_program;      // MEG のプログラム（9bit 空間）
 	std::vector<u16> m_reverb_ram;       // リバーブ RAM（18bit 空間）
 
 	memory_access< 9, 3, -3, ENDIANNESS_LITTLE>::cache m_program_cache;

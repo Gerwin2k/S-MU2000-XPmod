@@ -1718,10 +1718,14 @@ swp30_device::swp30_device()
 	m_meg_program_changed = true;
 
 	// MEG のプログラム空間(9bit, 64bit幅)とリバーブ RAM(18bit, 16bit幅)は
-	// もとは address_map で組まれていた。ここでは実体を持つ。
-	m_meg_program.assign(1 << 9, 0);
+	// もとは address_map で組まれていた。ここでは実体を直に指す。
+	//
+	// プログラムの実体は m_meg->m_program。MAME は AS_PROGRAM に
+	//   map(0x000, 0x17f).r(FUNC(swp30_device::meg_prg_map_r));
+	// を貼って、そこから m_meg->m_program[address] を返していた。
+	// 別の空配列を指していると命令が全部 0 になり、MEG が何も出さない
 	m_reverb_ram.assign(1 << 18, 0);
-	m_program_cache.set(m_meg_program.data(), m_meg_program.size() * sizeof(u64));
+	m_program_cache.set(m_meg->m_program.data(), m_meg->m_program.size() * sizeof(u64));
 	m_reverb_cache.set_writable(m_reverb_ram.data(), m_reverb_ram.size() * sizeof(u16));
 
 	// 1 サンプル分だけのバッファ。出力 20ch(DAC 4 + MELO 16)、入力 16ch(MELI)
@@ -3347,6 +3351,18 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 	// DAC は出力 0-3 の先頭 2 本。scale は 1<<17。
 	left  = m_adc[0];
 	right = m_adc[1];
+
+	// S-MU2000: 音が出ないときの手掛かり。-v のときだけ最大値を覚える
+	if(::smu2000::g_verbose) {
+		for(int i=0; i != 4; i++)
+			if(std::abs(m_adc[i]) > m_dbg_adc_max) m_dbg_adc_max = std::abs(m_adc[i]);
+		for(int i=0; i != 4; i++)
+			if(std::abs(m_meg->m_m[0x30+i]) > m_dbg_meg_max) m_dbg_meg_max = std::abs(m_meg->m_m[0x30+i]);
+		for(int i=0; i != 16; i++) {
+			if(std::abs(m_meg->m_m[0x20+i]) > m_dbg_megin_max) m_dbg_megin_max = std::abs(m_meg->m_m[0x20+i]);
+			if(std::abs(m_melo[i]) > m_dbg_melo_max) m_dbg_melo_max = std::abs(m_melo[i]);
+		}
+	}
 }
 
 void swp30_device::adc_step()
@@ -3359,6 +3375,9 @@ void swp30_device::sample_step()
 {
 	std::array<s32, 0x40> samples_per_chan;
 	awm2_step(samples_per_chan);
+	if(::smu2000::g_verbose)
+		for(int i=0; i != 0x40; i++)
+			if(std::abs(samples_per_chan[i]) > m_dbg_awm_max) m_dbg_awm_max = std::abs(samples_per_chan[i]);
 	adc_step();
 	mixer_step(samples_per_chan);
 	m_meg->lfo_step();

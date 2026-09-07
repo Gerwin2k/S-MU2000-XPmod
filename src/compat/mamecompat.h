@@ -254,6 +254,7 @@ inline void log_fmt(A &&...args)
 // MAME のデバイス基底。周辺が実際に使うのは clock() と machine() だけだった
 // （save_item と logerror はマクロで無効化済み）。
 class running_machine;
+class emu_timer;
 
 class machine_config;
 
@@ -285,6 +286,14 @@ public:
 	virtual void device_reset() {}
 	// サブデバイスの生成。こちらは実体を直に作るので中身は使わない
 	virtual void device_add_mconfig(machine_config &) {}
+
+	// MAME の timer_alloc(FUNC(cb), this)。呼び出し側の running_machine に預ける
+	template <typename T, typename U>
+	emu_timer *timer_alloc(void (T::*cb)(s32), const char *, U *obj)
+	{
+		T *self = static_cast<T *>(obj);
+		return machine().make_timer([self, cb](s32 p) { (self->*cb)(p); });
+	}
 
 private:
 	u32 m_clock = 0;
@@ -472,13 +481,29 @@ struct attotime
 inline const attotime attotime::never = [] { attotime a; a.m_never = true; return a; }();
 inline const attotime attotime::zero  = attotime();
 
-// MAME のタイマ。今は型として要るだけで、時刻は呼び出し側が進める
-struct emu_timer
+// MAME のタイマ。MAME ではスケジューラが鳴らしていた。
+// こちらは実行ループが「次に鳴る時刻」を見て CPU を区切り、時が来たら鳴らす。
+// 時刻は CPU のサイクル数で持つ（アト秒の丸めを持ち込まないため）。
+class running_machine;
+
+class emu_timer
 {
-	attotime expire = attotime::never;
-	void adjust(const attotime &e) { expire = e; }
-	void adjust(const attotime &e, s32) { expire = e; }
-	void enable(bool) {}
+public:
+	emu_timer(running_machine &m, std::function<void(s32)> cb)
+		: m_machine(&m), m_cb(std::move(cb)) {}
+
+	void adjust(const attotime &when, s32 param = 0);
+	void enable(bool on) { if (!on) m_expire = ~u64(0); }
+
+	bool  scheduled() const { return m_expire != ~u64(0); }
+	u64   expire_cycles() const { return m_expire; }
+	void  fire() { m_expire = ~u64(0); if (m_cb) m_cb(m_param); }
+
+private:
+	running_machine *m_machine;
+	std::function<void(s32)> m_cb;
+	u64 m_expire = ~u64(0);      // ~0 は「予定なし」
+	s32 m_param = 0;
 };
 
 // 割り込み線の番号。NMI だけ使う
@@ -526,6 +551,9 @@ public:
 #define DEFINE_DEVICE_TYPE(...)
 #define DEFINE_DEVICE_TYPE_NS(...)
 
+// MAME の FUNC(x) は「関数と名前」を並べて渡すためのもの
+#define FUNC(x) &x, #x
+
 // MAME の finder。tag での結線はしないので、名前だけ通ればよい
 struct finder_base { static constexpr const char *DUMMY_TAG = nullptr; };
 
@@ -562,12 +590,67 @@ public:
 
 	void reset_seed() { m_rand_seed = 0x9d14abd7; }
 
+	// MAME はログに「どこから呼ばれたか」を添えていた。こちらは持たない
+	const char *describe_context() const { return ""; }
+
 	// MAME はデバッガの覗き見で副作用を止める。こちらにデバッガはない
 	bool side_effects_disabled() const { return false; }
 
+	// ---- 時計。CPU のサイクル数で持つ。実行ループが進める
+
+	void set_clock_hz(u32 hz) { m_hz = hz; }
+	u32  clock_hz() const     { return m_hz; }
+	void set_cycles(u64 c)    { m_cycles = c; }
+	u64  cycles() const       { return m_cycles; }
+	attotime time() const     { attotime a; a.t = double(m_cycles) / m_hz; return a; }
+
+	emu_timer *make_timer(std::function<void(s32)> cb)
+	{
+		m_timers.push_back(std::make_unique<emu_timer>(*this, std::move(cb)));
+		return m_timers.back().get();
+	}
+
+	// 次に鳴るタイマのサイクル数。予定がなければ ~0
+	u64 next_timer_cycles() const
+	{
+		u64 best = ~u64(0);
+		for (const auto &t : m_timers)
+			if (t->scheduled() && t->expire_cycles() < best)
+				best = t->expire_cycles();
+		return best;
+	}
+
+	// now までに来ているタイマを鳴らす
+	void run_timers(u64 now)
+	{
+		for (int guard = 0; guard < 64; guard++) {
+			emu_timer *due = nullptr;
+			for (const auto &t : m_timers)
+				if (t->scheduled() && t->expire_cycles() <= now &&
+				    (!due || t->expire_cycles() < due->expire_cycles()))
+					due = t.get();
+			if (!due)
+				return;
+			m_cycles = due->expire_cycles();
+			due->fire();
+		}
+	}
+
 private:
 	u32 m_rand_seed = 0x9d14abd7;
+	u32 m_hz = 28000000;
+	u64 m_cycles = 0;
+	std::vector<std::unique_ptr<emu_timer>> m_timers;
 };
+
+inline void emu_timer::adjust(const attotime &when, s32 param)
+{
+	m_param = param;
+	if (when.is_never())
+		m_expire = ~u64(0);
+	else
+		m_expire = m_machine->cycles() + u64(when.as_double() * m_machine->clock_hz());
+}
 
 // ---- MAME の型名に合わせる --------------------------------------------------
 //

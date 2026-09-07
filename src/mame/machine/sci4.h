@@ -8,6 +8,9 @@
 
 #pragma once
 
+// S-MU2000: MAME 本体の代わりに互換層を使う
+#include "../../compat/mamecompat.h"
+
 class sci4_device : public device_t
 {
 public:
@@ -20,7 +23,9 @@ public:
 	// irq line numbers are 0..3
 	template<int irq> auto write_irq() { return m_irq[irq].bind(); }
 
-	void map(address_map &map) ATTR_COLD;
+	// S-MU2000: address_map の代わりに素の振り分け。中身は sci4.cpp の末尾
+	u8   read8 (offs_t offset);
+	void write8(offs_t offset, u8 data);
 
 protected:
 	virtual void device_start() override ATTR_COLD;

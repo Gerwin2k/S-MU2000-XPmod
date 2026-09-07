@@ -41,6 +41,14 @@ mu2000::mu2000()
 	// 内蔵周辺を作る。MAME の device_add_mconfig をそのまま呼ぶ
 	m_cpu->device_add_mconfig(m_config);
 
+	// PLG ボード用のシリアル。ボードは挿さないが、firmware はレジスタを触る
+	m_sci4 = &m_config.make<sci4_device>(m_sci4_finder);
+
+	// 時計とタイマの置き場を全デバイスに配る
+	m_machine.set_clock_hz(7000000 * 4);
+	for (auto &d : m_config.m_devices)
+		d->set_machine(&m_machine);
+
 	m_ram.assign(0x40000, 0);        // 256KB
 	m_dram.assign(0x80000, 0);       // 512KB
 	m_iram.assign(0x1000, 0);        // CPU 内蔵 4KB
@@ -165,14 +173,12 @@ void mu2000::build_bus()
 		m_bus.add_device(d);
 	}
 
-	// f00000-f0003f: PLG ボード用の SCI4。ボードを挿さないので空
+	// f00000-f0003f: PLG ボード用の SCI4。ボードは挿さないが register は生きている
 	{
 		mem_bus::device d;
 		d.start = 0xf00000; d.end = 0xf0003f;
-		d.r8  = [](offs_t) { return u8(0); };
-		d.r16 = [](offs_t) { return u16(0); };
-		d.w8  = [](offs_t, u8) {};
-		d.w16 = [](offs_t, u16) {};
+		d.r8 = [this](offs_t a) { return m_sci4->read8(a - 0xf00000); };
+		d.w8 = [this](offs_t a, u8 v) { m_sci4->write8(a - 0xf00000, v); };
 		m_bus.add_device(d);
 	}
 
@@ -221,6 +227,11 @@ void mu2000::lcd_port_w(u16 data)
 	m_pe = data;
 }
 
+void mu2000::update_sci_irq()
+{
+	m_cpu->execute_set_input(0, (m_sci_irq[0] || m_sci_irq[1]) ? ASSERT_LINE : CLEAR_LINE);
+}
+
 void mu2000::start_devices()
 {
 	// MAME はスケジューラが順に呼ぶ。こちらは生成順にそのまま呼ぶ
@@ -237,6 +248,12 @@ void mu2000::reset()
 	m_cpu->write_porte().set([this](u16 v) { lcd_port_w(v); });
 
 	m_lcd.reset();
+
+	// SCI4 の割り込み。MAME は 0 と 1 を input_merger で束ねて CPU の IRQ0 に、
+	// 3 を IRQ1 に入れていた
+	m_sci4->write_irq<0>().set([this](int s) { m_sci_irq[0] = s; update_sci_irq(); });
+	m_sci4->write_irq<1>().set([this](int s) { m_sci_irq[1] = s; update_sci_irq(); });
+	m_sci4->write_irq<3>().set([this](int s) { m_cpu->execute_set_input(1, s); });
 
 	m_swpm.reset();
 	m_swps.reset();
@@ -261,6 +278,16 @@ void mu2000::run_cycles(u64 n)
 	int idle = 0;
 	while (n) {
 		const u64 now = m_cpu->total_cycles();
+		m_machine.set_cycles(now);
+
+		// MAME のスケジューラが持っていたタイマ（SCI4 の送受信など）
+		const u64 tmr = m_machine.next_timer_cycles();
+		if (tmr <= now) {
+			m_machine.run_timers(now);
+			m_machine.set_cycles(now);
+			continue;
+		}
+
 		const u64 ev  = m_cpu->event_cycles();
 
 		if (ev && now >= ev) {
@@ -277,6 +304,8 @@ void mu2000::run_cycles(u64 n)
 		u64 chunk = n;
 		if (ev && ev - now < chunk)
 			chunk = ev - now;
+		if (tmr != ~u64(0) && tmr - now < chunk)
+			chunk = tmr - now;
 		if (m_midi_bit >= 0 || !m_midi_queue.empty()) {
 			const u64 left = m_midi_next > now ? m_midi_next - now : 1;
 			if (left < chunk)
