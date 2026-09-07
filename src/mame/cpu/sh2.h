@@ -77,7 +77,6 @@ private:
 
 	virtual void execute_one_f000(uint16_t opcode);
 
-	virtual const opcode_desc* get_desclist(offs_t pc);
 
 
 

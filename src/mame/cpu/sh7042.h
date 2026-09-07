@@ -49,6 +49,9 @@ public:
 	auto read_portf()  { return m_read_port16 [3].bind(); }
 
 	void internal_update();
+
+	// 実行ループ用。次に周辺を動かすサイクル数（0 なら予定なし）
+	u64 event_cycles() const { return m_event_cycles; }
 	u16 do_read_adc(int port) { return m_read_adc[port](); }
 	u16 do_read_port16(int port) { return m_read_port16[port](); }
 	void do_write_port16(int port, u16 data, u16 ddr) { m_write_port16[port](0, data, ddr); }
@@ -125,7 +128,10 @@ private:
 	devcb_read32::array<2> m_read_port32;
 	devcb_write32::array<2> m_write_port32;
 
-	emu_timer *m_event_timer;
+	// S-MU2000: MAME はスケジューラに emu_timer を預けていた。
+	// こちらは「次に internal_update() を呼ぶサイクル数」を覚えるだけにして、
+	// 実行ループがそこを追い越したときに呼ぶ。0 なら予定なし
+	u64 m_event_cycles = 0;
 
 	u16 m_pcf_ah;
 	u32 m_pcf_al;
@@ -137,8 +143,13 @@ private:
 	u16 m_pcf_if;
 
 	// S-MU2000: address_map の代わり。番地で振り分ける
-	u16  internal_r(offs_t a);
-	void internal_w(offs_t a, u16 v);
+	// 内蔵周辺のレジスタ。中身は sh7042_map.hxx（tools/gen_sh7042_map.py が生成）
+	u8   internal_r8 (offs_t a);
+	u16  internal_r16(offs_t a);
+	u32  internal_r32(offs_t a);
+	void internal_w8 (offs_t a, u8 v);
+	void internal_w16(offs_t a, u16 v);
+	void internal_w32(offs_t a, u32 v);
 
 	u16 adc_default(int adc);
 	u16 port16_default_r(int port);

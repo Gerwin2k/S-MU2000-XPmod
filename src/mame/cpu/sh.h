@@ -159,6 +159,10 @@ public:
 	// MAME では device_state_interface が持っていた。周辺がログに出すのに使う
 	u32 pc() const { return m_sh2_state->pc; }
 
+	// S-MU2000: MAME は device_memory_interface でバスを持っていた。
+	// こちらは組み立て側が作った mem_bus を差し込む
+	void set_program_bus(mem_bus *b) { m_program = b; m_decrypted_program = b; }
+
 	// S-MU2000: 経過サイクル。
 	// MAME は machine().time() から逆算していたが、こちらはホストの時計を持たない。
 	// CPU が自分で数え、周辺のタイマ（MTU / CMT）はこの値を基準に動く。
@@ -405,8 +409,7 @@ public:
 
 
 
-	std::function<u16 (offs_t)> m_pr16;
-	std::function<const void * (offs_t)> m_prptr;
+	// S-MU2000: m_pr16 / m_prptr は DRC フロントエンド専用だったので削除した
 	// S-MU2000: address_space の代わりに mem_bus を指す。
 	// 命令フェッチ用の別空間（m_decrypted_program）は MU2000 では同じもの。
 	mem_bus *m_program = nullptr;
@@ -435,7 +438,7 @@ public:
 	void sh2drc_set_options(uint32_t options);
 	void sh2drc_add_pcflush(offs_t address);
 
-	virtual const opcode_desc* get_desclist(offs_t pc) = 0;
+	// S-MU2000: get_desclist は DRC フロントエンド専用だったので削除した
 
 	uint32_t epc(const opcode_desc *desc);
 

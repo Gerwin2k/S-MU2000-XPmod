@@ -27,9 +27,10 @@
 constexpr int SH2_INT_15 = 15;
 
 sh2_device::sh2_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock, int cpu_type, address_map_constructor internal_map, int addrlines, uint32_t address_mask)
-	: sh_common_execution(mconfig, type, tag, owner, clock, ENDIANNESS_BIG, internal_map)
-	, m_program_config("program", ENDIANNESS_BIG, 32, addrlines, 0, internal_map)
 {
+	// S-MU2000: MAME はここでアドレス空間の形（address_space_config）を作っていた。
+	// バスは組み立て側が作って set_program_bus() で渡すので、要るのは clock だけ
+	set_clock(clock);
 	m_cpu_type = cpu_type;
 	m_am = address_mask;
 }
@@ -42,23 +43,8 @@ void sh2_device::device_start()
 {
 	sh_common_execution::device_start();
 
-	m_decrypted_program = has_space(AS_OPCODES) ? &space(AS_OPCODES) : &space(AS_PROGRAM);
-	m_decrypted_program->cache(m_cache32);
-	m_pr16 = [this](offs_t address) -> u16 { return m_cache32.read_word(address); };
-	if (m_decrypted_program->endianness() != ENDIANNESS_NATIVE)
-		m_prptr = [this](offs_t address) -> const void * {
-			const u16 *ptr = reinterpret_cast<u16 *>(m_cache32.read_ptr(address & ~3));
-			if (!(address & 2))
-				ptr++;
-			return ptr;
-		};
-	else
-		m_prptr = [this](offs_t address) -> const void * {
-			const u16 *ptr = reinterpret_cast<u16 *>(m_cache32.read_ptr(address & ~3));
-			if (address & 2)
-				ptr++;
-			return ptr;
-		};
+	// S-MU2000: MAME は命令フェッチ用に別空間とキャッシュを構えていた。
+	// MU2000 は復号なしの単一空間なので、set_program_bus() が両方を指す
 
 	// internals
 	save_item(NAME(m_cpu_off));
@@ -72,7 +58,6 @@ void sh2_device::device_start()
 
 	m_nmi_line_state = 0;
 
-	drc_start();
 }
 
 void sh2_device::device_reset()
@@ -97,25 +82,8 @@ void sh2_device::device_reset()
 	m_cache_dirty = true;
 }
 
-device_memory_interface::space_config_vector sh2_device::memory_space_config() const
-{
-	if (has_configured_map(AS_OPCODES))
-		return space_config_vector
-		{
-			std::make_pair(AS_PROGRAM, &m_program_config),
-			std::make_pair(AS_OPCODES, &m_decrypted_program_config)
-		};
-	else
-		return space_config_vector
-		{
-			std::make_pair(AS_PROGRAM, &m_program_config)
-		};
-}
-
-std::unique_ptr<util::disasm_interface> sh2_device::create_disassembler()
-{
-	return std::make_unique<sh_disassembler>(false);
-}
+// S-MU2000: memory_space_config() と create_disassembler() は MAME のデバッガと
+// メモリ機構のためのもの。どちらも持たないので削除した。
 
 uint8_t sh2_device::read_byte(offs_t offset)
 {

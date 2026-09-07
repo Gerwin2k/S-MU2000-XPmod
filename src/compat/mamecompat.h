@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cmath>
 #include <type_traits>
+#include <cassert>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -68,6 +69,14 @@ struct state_entry_dummy
 	template <typename... A> state_entry_dummy &mask(A &&...)       { return *this; }
 };
 #define state_add(...)      (::state_entry_dummy{})
+
+// デバッガのフック。デバッガを持たないので何もしない
+#define debugger_instruction_hook(...) do {} while(0)
+#define debugger_exception_hook(...)   do {} while(0)
+#define debugger_wait_hook(...)        do {} while(0)
+#define debugger_privilege_hook(...)   do {} while(0)
+// 割り込みを受け取ったことをデバッガに知らせる。ベクタはそのまま返す
+#define standard_irq_callback(irqline, pc) (0)
 
 namespace smu2000 {
 extern bool g_verbose;   // 既定では黙る。デバッグ時だけ true にする
@@ -250,6 +259,9 @@ public:
 	void set_machine(running_machine *m) { m_machine = m; }
 
 	// MAME が呼ぶ初期化。実体側は素直に呼べばよい
+	// MAME はスケジューラが icount を直に触るための口。こちらは CPU が自分で持つ
+	void set_icountptr(int &) {}
+
 	virtual void device_start() {}
 	virtual void device_reset() {}
 	// サブデバイスの生成。こちらは実体を直に作るので中身は使わない
@@ -278,8 +290,20 @@ public:
 	T *lookup() const { return m_target; }
 	bool found() const { return m_target != nullptr; }
 	void set(T *p) { m_target = p; }
-	// MAME は tag（文字列）で結線するが、こちらは実体を直接渡すので何もしない
-	template <typename... A> void set_tag(A &&...) {}
+	// MAME は tag（文字列）で結線するが、こちらは実体を直接渡す。
+	// MAME 側のソースは set_tag(*this) や set_tag(m_intc) の形で呼ぶので、
+	// デバイスそのものと finder の両方を受ける
+	template <typename U> void set_tag(U &&u)
+	{
+		using B = std::remove_cv_t<std::remove_reference_t<U>>;
+		if constexpr (std::is_base_of_v<T, B>)
+			m_target = &u;
+		else if constexpr (std::is_pointer_v<B>)
+			m_target = u;
+		else if constexpr (requires { u.lookup(); })
+			m_target = u.lookup();
+		// それ以外（tag 文字列）は結線に使わないので捨てる
+	}
 private:
 	T *m_target = nullptr;
 };
@@ -321,7 +345,18 @@ public:
 
 	// MAME は cb.bind().set(...) の形で繋ぐ。ここでは自分を返して受け流す
 	devcb_base &bind() { return *this; }
-	template <typename F> devcb_base &set(F &&f) { m_fn = std::forward<F>(f); return *this; }
+	// MAME の書き手は (offset, data, mem_mask) を全部受けるものと、
+	// data だけ受けるものの両方が許される。後者はここで合わせる
+	template <typename F> devcb_base &set(F &&f)
+	{
+		if constexpr (std::is_invocable_v<F &, A...>)
+			m_fn = std::forward<F>(f);
+		else if constexpr (sizeof...(A) == 3)
+			m_fn = [g = std::forward<F>(f)](offs_t, auto data, auto) mutable { g(data); };
+		else
+			static_assert(std::is_invocable_v<F &, A...>, "devcb に繋げない形の関数");
+		return *this;
+	}
 	template <typename F> devcb_base &operator=(F &&f) { return set(std::forward<F>(f)); }
 	void resolve() {}
 	template <typename... X> void resolve_safe(X &&...) {}
@@ -342,6 +377,7 @@ public:
 		template <typename O> array(O &, def_t d) { for (auto &e : m_a) e.set_default(d); }
 		devcb_base       &operator[](int i)       { return m_a[i]; }
 		const devcb_base &operator[](int i) const { return m_a[i]; }
+		constexpr int size() const { return N; }
 	private:
 		std::array<devcb_base, N> m_a;
 	};
@@ -365,9 +401,9 @@ using devcb_write_line = devcb_base<void, int>;
 // 時間。周辺のタイマが型として使うだけで、実際の刻みは呼び出し側が管理する
 struct attotime
 {
-	// 内部はサンプルではなく「秒」。周辺は from_ticks / as_ticks でしか触らない
+	// 内部はサンプルではなく「秒」
 	double t = 0.0;
-	bool   is_never = false;
+	bool   m_never = false;
 
 	static attotime from_ticks(u64 n, u32 hz) { attotime a; a.t = double(n) / double(hz); return a; }
 
@@ -375,21 +411,26 @@ struct attotime
 	static const attotime never;
 	static const attotime zero;
 
-	u64  as_ticks(u32 hz) const { return u64(t * double(hz)); }
-	bool is_never_time() const  { return is_never; }
+	u64    as_ticks(u32 hz) const { return u64(t * double(hz)); }
+	double as_double() const      { return t; }
+	bool   is_never() const       { return m_never; }
+	bool   is_zero() const        { return !m_never && t == 0.0; }
 
-	bool operator==(const attotime &o) const { return is_never == o.is_never && t == o.t; }
+	bool operator==(const attotime &o) const { return m_never == o.m_never && t == o.t; }
 	bool operator!=(const attotime &o) const { return !(*this == o); }
 	bool operator<(const attotime &o) const
 	{
-		if (is_never || o.is_never) return !is_never && o.is_never;
+		if (m_never || o.m_never) return !m_never && o.m_never;
 		return t < o.t;
 	}
 	attotime operator+(const attotime &o) const { attotime a; a.t = t + o.t; return a; }
 	attotime operator-(const attotime &o) const { attotime a; a.t = t - o.t; return a; }
+	// 「この周期 × 周波数」で比を出すのに使われる
+	attotime operator*(double k) const { attotime a; a.t = t * k; return a; }
+	attotime operator/(double k) const { attotime a; a.t = t / k; return a; }
 };
 
-inline const attotime attotime::never = [] { attotime a; a.is_never = true; return a; }();
+inline const attotime attotime::never = [] { attotime a; a.m_never = true; return a; }();
 inline const attotime attotime::zero  = attotime();
 
 // MAME のタイマ。今は型として要るだけで、時刻は呼び出し側が進める
@@ -404,11 +445,45 @@ struct emu_timer
 // 割り込み線の番号。NMI だけ使う
 enum { INPUT_LINE_NMI = -1, INPUT_LINE_IRQ0 = 0 };
 
+// MAME の machine_config はデバイスの木を組み立てる器。
+// こちらは tag の木を持たず、生成した順に所有するだけ。
+// device_start() をこの順に呼べばよい
+class machine_config
+{
+public:
+	template <typename T, typename F, typename... A>
+	T &make(F &finder, A &&...args)
+	{
+		auto owned = std::make_unique<T>(*this, "", nullptr, std::forward<A>(args)...);
+		T &dev = *owned;
+		m_devices.push_back(std::move(owned));
+		finder.set(&dev);
+		return dev;
+	}
+
+	std::vector<std::unique_ptr<device_t>> m_devices;   // 生成順
+};
+
 // MAME はデバイス種別をグローバルな定数として持ち、生成時に渡す。
+// SH_CMT(config, m_cmt, *this, m_intc, 144, 148) のように呼ばれるので、
+// 種別そのものを「生成する関数」にしておくと、取り込んだソースを直さずに済む
+template <typename T>
+class device_creator : public device_type_dummy
+{
+public:
+	template <typename F, typename... A>
+	T &operator()(machine_config &config, F &finder, A &&...args) const
+	{
+		return config.make<T>(finder, std::forward<A>(args)...);
+	}
+	// device_t のコンストラクタには種別として自分を渡す
+	operator const device_type_dummy *() const { return this; }
+};
+
 // こちらは tag での検索をしないので中身は要らないが、名前は参照されるので用意する。
 // ヘッダ側の DECLARE で実体を作り、実装側の DEFINE は空にしておく
-#define DECLARE_DEVICE_TYPE(Type, ...)                 	inline const device_type_dummy Type##_obj{};       	inline const device_type Type = &Type##_obj;
-#define DECLARE_DEVICE_TYPE_NS(Type, ...) DECLARE_DEVICE_TYPE(Type)
+#define DECLARE_DEVICE_TYPE(Type, Class)  inline const device_creator<Class> Type;
+#define DECLARE_DEVICE_TYPE_NS(Type, Class, ...) DECLARE_DEVICE_TYPE(Type, Class)
 #define DEFINE_DEVICE_TYPE(...)
 #define DEFINE_DEVICE_TYPE_NS(...)
 

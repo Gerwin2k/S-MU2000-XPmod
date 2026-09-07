@@ -92,7 +92,8 @@ void sh_common_execution::device_start()
 
 	set_icountptr(m_sh2_state->icount);
 
-	m_program = &space(AS_PROGRAM);
+	// S-MU2000: MAME は space(AS_PROGRAM) で自分のアドレス空間を取っていた。
+	// こちらは呼び出し側が set_program_bus() で渡す
 }
 
 
