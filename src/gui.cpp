@@ -95,6 +95,7 @@ struct engine {
 		}
 
 		drv.apply_buttons(mu, br);
+		drv.pump_midi(mu, br);
 
 		u8 b;
 		while (midi.pop(b))
@@ -127,10 +128,6 @@ struct window_state {
 	ui::audio_out *out = nullptr;
 	std::string midi_name;
 
-	const ui::spot *held = nullptr;    // マウスで押しているボタン
-	bool  dragging_volume = false;
-	int   wheel_angle = 0;
-	double volume = 1.0;
 
 	// 二重書き用
 	HDC     mem_dc = nullptr;
@@ -220,64 +217,37 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			              g_win.midi_name.empty() ? "なし" : g_win.midi_name.c_str());
 		else
 			std::snprintf(status, sizeof(status), "起動中...");
-		g_win.panel.paint(g_win.mem_dc, s, pressed, g_win.volume, g_win.wheel_angle, status);
+		g_win.panel.set_volume(g_win.br->gain());
+		g_win.panel.paint(g_win.mem_dc, s, pressed, status);
 
 		BitBlt(dc, 0, 0, w, h, g_win.mem_dc, 0, 0, SRCCOPY);
 		EndPaint(hwnd, &ps);
 		return 0;
 	}
 
-	case WM_LBUTTONDOWN: {
-		const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-		const ui::spot *sp = g_win.panel.hit(x, y);
-		if (!sp)
-			return 0;
+	case WM_LBUTTONDOWN:
 		SetCapture(hwnd);
-		if (sp->kind == ui::spot_kind::button) {
-			g_win.held = sp;
-			g_win.br->press(sp->button, true);
-		} else if (sp->kind == ui::spot_kind::volume) {
-			g_win.dragging_volume = true;
-			const RECT &r = sp->r;
-			g_win.volume = std::clamp(double(x - r.left) / std::max(1L, r.right - r.left),
-			                          0.0, 1.0);
-			g_win.br->set_gain(float(g_win.volume));
-		}
-		InvalidateRect(hwnd, nullptr, FALSE);
+		if (g_win.panel.press(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), *g_win.br))
+			InvalidateRect(hwnd, nullptr, FALSE);
 		return 0;
-	}
 
 	case WM_MOUSEMOVE:
-		if (g_win.dragging_volume) {
-			const int x = GET_X_LPARAM(lp);
-			for (const ui::spot &sp : g_win.panel.spots())
-				if (sp.kind == ui::spot_kind::volume) {
-					g_win.volume = std::clamp(
-						double(x - sp.r.left) / std::max(1L, sp.r.right - sp.r.left), 0.0, 1.0);
-					g_win.br->set_gain(float(g_win.volume));
-					break;
-				}
+		if (g_win.panel.drag(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), *g_win.br))
 			InvalidateRect(hwnd, nullptr, FALSE);
-		}
 		return 0;
 
 	case WM_LBUTTONUP:
-		if (g_win.held) {
-			g_win.br->press(g_win.held->button, false);
-			g_win.held = nullptr;
-		}
-		g_win.dragging_volume = false;
+		g_win.panel.release(*g_win.br);
 		ReleaseCapture();
 		InvalidateRect(hwnd, nullptr, FALSE);
 		return 0;
 
 	case WM_MOUSEWHEEL: {
+		POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+		ScreenToClient(hwnd, &pt);
 		const int delta = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
-		if (delta) {
-			g_win.br->turn(delta);
-			g_win.wheel_angle = (g_win.wheel_angle + delta * 15) % 360;
+		if (delta && g_win.panel.wheel_at(pt.x, pt.y, delta, *g_win.br))
 			InvalidateRect(hwnd, nullptr, FALSE);
-		}
 		return 0;
 	}
 
@@ -332,7 +302,8 @@ int shot(const std::string &path, int w, int h, ui::bridge &br)
 
 	ui::snapshot s;
 	br.read(s);
-	p.paint(dc, s, 0, 0.8, 0, "");
+	p.set_volume(0.8);
+	p.paint(dc, s, 0, "");
 	GdiFlush();
 
 	const bool ok = ui::write_png(path, static_cast<const u8 *>(bits), w, h, w * 4);
@@ -438,7 +409,6 @@ int main(int argc, char **argv)
 	g_win.eng = &eng;
 	g_win.panel.resize(win_w, win_h);
 	br.set_gain(1.0f);
-	g_win.volume = 1.0;
 
 	eng.publish();
 	ShowWindow(hwnd, SW_SHOW);

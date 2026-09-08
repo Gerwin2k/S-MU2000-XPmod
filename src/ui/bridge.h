@@ -13,7 +13,8 @@
 
 #pragma once
 
-#include "panel.h"
+#include "snapshot.h"
+#include "mu2000.h"
 
 #include <atomic>
 #include <cstring>
@@ -39,6 +40,19 @@ public:
 	// ダイヤルを回した分。音源側が 1 つずつ VALUE を叩いて消化する
 	void turn(int steps) { m_wheel.fetch_add(steps, std::memory_order_relaxed); }
 
+	// 画面から音源へ MIDI を送る（エディタのつまみ）。輪に積むだけ
+	void send(const u8 *bytes, size_t n)
+	{
+		for (size_t i = 0; i < n; i++) {
+			const size_t w = m_mw.load(std::memory_order_relaxed);
+			const size_t next = (w + 1) & MIDI_MASK;
+			if (next == m_mr.load(std::memory_order_acquire))
+				return;                       // 溢れ
+			m_midi[w] = bytes[i];
+			m_mw.store(next, std::memory_order_release);
+		}
+	}
+
 	void set_gain(float g) { m_gain.store(g, std::memory_order_relaxed); }
 	float gain() const     { return m_gain.load(std::memory_order_relaxed); }
 
@@ -58,6 +72,17 @@ public:
 
 	u64 buttons() const { return m_buttons.load(std::memory_order_relaxed); }
 
+	// 音源側から。溜まっている MIDI を 1 バイトずつ
+	bool take_midi(u8 &v)
+	{
+		const size_t r = m_mr.load(std::memory_order_relaxed);
+		if (r == m_mw.load(std::memory_order_acquire))
+			return false;
+		v = m_midi[r];
+		m_mr.store((r + 1) & MIDI_MASK, std::memory_order_release);
+		return true;
+	}
+
 	int take_turn()
 	{
 		int v = m_wheel.load(std::memory_order_relaxed);
@@ -76,6 +101,9 @@ public:
 	}
 
 private:
+	static constexpr size_t MIDI_SIZE = 4096, MIDI_MASK = MIDI_SIZE - 1;
+	u8 m_midi[MIDI_SIZE] = {};
+	std::atomic<size_t>   m_mr{0}, m_mw{0};
 	std::atomic<u64>      m_buttons{0};
 	std::atomic<int>      m_wheel{0};
 	std::atomic<float>    m_gain{1.0f};

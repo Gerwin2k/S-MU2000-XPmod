@@ -90,15 +90,14 @@ void set_str(String128 dst, const char *ascii)
 // ---- 本体
 
 class mu_plugin : public IComponent, public IAudioProcessor,
-                  public IEditController, public IMidiMapping,
-                  public smu2000::vst3::gain_owner
+                  public IEditController, public IMidiMapping
 {
 public:
 	mu_plugin()
 	{
 		for (int32 i = 0; i < kMidiParams; i++)
 			m_value[i] = default_of(i % kCtrlCount);
-		m_gain.store(1.0f);
+		m_engine.panel().set_gain(1.0f);
 		m_gain_now = 1.0f;
 		m_msgs.reserve(8192);
 		m_engine.set_output_rate(smu2000::vst3::NATIVE_RATE);
@@ -245,7 +244,7 @@ public:
 			return kResultOk;   // 空でも困らない
 		if (stream->read(&gain, sizeof(gain), &got) == kResultOk && got == sizeof(gain) &&
 		    gain >= 0.0f && gain <= 1.0f)
-			m_gain.store(gain);
+			m_engine.panel().set_gain(gain);
 		return kResultOk;
 	}
 
@@ -256,7 +255,7 @@ public:
 		if (!stream)
 			return kResultFalse;
 		int32 version = 1;
-		float gain = m_gain.load();
+		float gain = m_engine.panel().gain();
 		int32 written = 0;
 		stream->write(&version, sizeof(version), &written);
 		stream->write(&gain, sizeof(gain), &written);
@@ -418,7 +417,7 @@ public:
 	ParamValue PLUGIN_API getParamNormalized(ParamID id) override
 	{
 		if (id == kGainId)
-			return m_gain.load();
+			return m_engine.panel().gain();
 		if (id == kStatusId) {
 			switch (m_engine.state()) {
 			case smu2000::vst3::status::loading: return 0.0;
@@ -431,7 +430,7 @@ public:
 
 	tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue v) override
 	{
-		if (id == kGainId) { m_gain.store(float(std::clamp(v, 0.0, 1.0))); return kResultOk; }
+		if (id == kGainId) { m_engine.panel().set_gain(float(std::clamp(v, 0.0, 1.0))); return kResultOk; }
 		if (id == kStatusId)
 			return kResultFalse;   // 読むだけ
 		if (id >= ParamID(kMidiParams))
@@ -447,12 +446,10 @@ public:
 	{
 		if (name && std::strcmp(name, ViewType::kEditor) != 0)
 			return nullptr;
-		return new smu2000::vst3::plug_view(m_engine, *this);
+		return new smu2000::vst3::plug_view(m_engine);
 	}
 
-	// gain_owner。画面の音量つまみは Output と同じ値を動かす
-	float ui_gain() const override { return m_gain.load(); }
-	void  set_ui_gain(float g) override { m_gain.store(std::clamp(g, 0.0f, 1.0f)); }
+	// 音量は bridge が 1 つだけ持つ。Output パラメータも画面のつまみも同じ値
 
 	// ---- IMidiMapping
 
@@ -490,9 +487,7 @@ private:
 	std::vector<msg>      m_msgs;
 	double                m_rate = smu2000::vst3::NATIVE_RATE;
 	double                m_value[kMidiParams] = {};
-	// 出力レベル。UI 側で決めて音声側で読む。急に変えると音が跳ねるので
-	// 1 サンプルずつ寄せていく
-	std::atomic<float>    m_gain{1.0f};
+	// 出力レベルは bridge が持つ。ここは 1 サンプルずつ寄せる途中の値
 	float                 m_gain_now = 1.0f;
 	std::atomic<bool>     m_hush{false};
 	// 間に合っているかの記録。音声スレッドだけが触る
@@ -534,7 +529,7 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 				ParamValue v = 0.0;
 				if (pq->getPointCount() > 0 &&
 				    pq->getPoint(pq->getPointCount() - 1, off, v) == kResultOk)
-					m_gain.store(float(std::clamp(v, 0.0, 1.0)));
+					m_engine.panel().set_gain(float(std::clamp(v, 0.0, 1.0)));
 				continue;
 			}
 			if (id >= ParamID(kMidiParams))
@@ -632,7 +627,7 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 
 	// 出力レベル。一気に変えると音が跳ねるので 1 サンプルずつ寄せる
 	if (left) {
-		const float target = m_gain.load(std::memory_order_relaxed);
+		const float target = m_engine.panel().gain();
 		if (target != m_gain_now || target != 1.0f) {
 			const float step = 1.0f / 512.0f;
 			for (int32 i = 0; i < n; i++) {

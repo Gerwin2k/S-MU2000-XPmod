@@ -30,6 +30,14 @@ public:
 		m_applied = want;
 	}
 
+	// エディタから送られた MIDI を音源へ
+	void pump_midi(mu2000 &mu, bridge &br)
+	{
+		u8 b;
+		while (br.take_midi(b))
+			mu.midi_in(b);
+	}
+
 	// 1 サンプルごとに。ホイールで回された分を VALUE の叩きに崩す。
 	// 押し 30ms、離し 20ms。実機を指で連打するのと同じ速さ
 	void tick_wheel(mu2000 &mu, bridge &br, u32 rate)

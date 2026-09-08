@@ -2,12 +2,12 @@
 
 Yamaha MU2000 のソフトウェア音源。DAW に挿して使えることを目指す。
 
-**現在の状態: VST3 として DAW に挿して鳴る。**
+**現在の状態: VST3 として DAW に挿して鳴る。実機のフロントパネル風の画面が付いた。**
 
 実機の firmware をそのまま走らせ、MIDI を受けて発音する。2 分半の実曲を
 MAME の録音と突き合わせて、発音指示 2851 件すべてが一致、振幅も 88.7% の
 区間で 10% 以内に収まっている。実時間再生の CPU 使用率はおよそ 38%。
-画面はまだ無い。
+LCD は本物のフォントで、ボタンもダイヤルも触れる。
 
 ## これは何か
 
@@ -43,7 +43,12 @@ build/live.exe   --list                              MIDI 入力の一覧
 build/render.exe <rom ディレクトリ> <MIDI> <出力 wav>  ファイルを WAV に
 build/midisend.exe <MIDI ファイル> [--port 番号]      MIDI 出力へ実時間で流す
 build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確認
+build/gui.exe    <rom ディレクトリ> [--midi 番号]      実機パネル風の画面で鳴らす
 ```
+
+画面の中身は [doc/gui.md](doc/gui.md)。実機のフロントパネル（LCD・ボタン・
+VALUE ダイヤル）と、SOL2 風のエディタ（フィルタ・エフェクト送り・音色）の
+2 面がある。VST3 の画面も同じもの。
 
 DAW に挿すなら VST3。作り方と ROM の置き場は [doc/vst3.md](doc/vst3.md)。
 置き場は `%LOCALAPPDATA%\Programs\Common\VST3`（利用者ごと）か

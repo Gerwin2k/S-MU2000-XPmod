@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 
 #include "panel.h"
+#include "draw.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,75 +10,6 @@
 namespace ui {
 
 namespace {
-
-// ---- 色
-
-const COLORREF BODY      = RGB(28, 30, 34);
-const COLORREF BODY_TOP  = RGB(44, 47, 53);
-const COLORREF BEZEL     = RGB(12, 12, 12);
-const COLORREF LCD_BACK  = RGB(150, 205, 45);
-const COLORREF LCD_GHOST = RGB(140, 194, 44);   // 消えている点。実物もうっすら見える
-const COLORREF LCD_DOT   = RGB(18, 22, 14);
-const COLORREF LED_OFF   = RGB(20, 28, 10);
-const COLORREF LED_ON    = RGB(178, 255, 51);
-const COLORREF BTN_FACE  = RGB(58, 62, 68);
-const COLORREF BTN_EDGE  = RGB(92, 97, 104);
-const COLORREF BTN_DOWN  = RGB(126, 170, 70);
-const COLORREF TEXT      = RGB(226, 229, 233);
-const COLORREF TEXT_DIM  = RGB(150, 155, 162);
-const COLORREF WHEEL     = RGB(46, 49, 54);
-const COLORREF WHEEL_EDGE= RGB(96, 101, 108);
-
-void fill(HDC dc, const RECT &r, COLORREF c)
-{
-	HBRUSH b = CreateSolidBrush(c);
-	FillRect(dc, &r, b);
-	DeleteObject(b);
-}
-
-// 角を落とした四角。ボタンはこれで描く
-void round_box(HDC dc, const RECT &r, COLORREF face, COLORREF edge, int radius)
-{
-	HBRUSH b = CreateSolidBrush(face);
-	HPEN   p = CreatePen(PS_SOLID, 1, edge);
-	HGDIOBJ ob = SelectObject(dc, b), op = SelectObject(dc, p);
-	RoundRect(dc, r.left, r.top, r.right, r.bottom, radius, radius);
-	SelectObject(dc, ob);
-	SelectObject(dc, op);
-	DeleteObject(b);
-	DeleteObject(p);
-}
-
-void disc(HDC dc, int cx, int cy, int r, COLORREF face, COLORREF edge)
-{
-	HBRUSH b = CreateSolidBrush(face);
-	HPEN   p = CreatePen(PS_SOLID, 2, edge);
-	HGDIOBJ ob = SelectObject(dc, b), op = SelectObject(dc, p);
-	Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
-	SelectObject(dc, ob);
-	SelectObject(dc, op);
-	DeleteObject(b);
-	DeleteObject(p);
-}
-
-// 字は UTF-8 で渡す。DrawTextA だと ANSI と見なされて日本語が化けるので、
-// 一度 UTF-16 に直してから描く
-void text_in(HDC dc, const RECT &r, const char *s, COLORREF c, HFONT f, UINT flags)
-{
-	if (!s || !s[0])
-		return;
-	wchar_t buf[256];
-	const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, buf, 256);
-	if (n <= 0)
-		return;
-
-	HGDIOBJ of = SelectObject(dc, f);
-	SetTextColor(dc, c);
-	SetBkMode(dc, TRANSPARENT);
-	RECT rr = r;
-	DrawTextW(dc, buf, n - 1, &rr, flags);
-	SelectObject(dc, of);
-}
 
 // ---- 配置の表。論理座標（1000 × 300）
 
@@ -139,6 +71,7 @@ const place VALUES[] = {
 
 panel::panel()
 {
+	init_editor_values();
 	resize(LOGICAL_W, LOGICAL_H);
 }
 
@@ -168,24 +101,12 @@ void panel::resize(int w, int h)
 	m_ox = int((m_w - LOGICAL_W * m_scale) / 2);
 	m_oy = int((m_h - LOGICAL_H * m_scale) / 2);
 
-	m_spots.clear();
-	for (const place &p : CATEGORIES)
-		m_spots.push_back({ spot_kind::button, p.b, scale(p.x, p.y, p.w, p.h), p.label, p.sub });
-	for (const place &p : CONTROLS)
-		m_spots.push_back({ spot_kind::button, p.b, scale(p.x, p.y, p.w, p.h), p.label, p.sub });
-	for (const place &p : VALUES)
-		m_spots.push_back({ spot_kind::button, p.b, scale(p.x, p.y, p.w, p.h), p.label, p.sub });
-
 	// LCD は点の並び（横 143 点 × 縦 19 点）に合わせた細長い窓
 	m_lcd    = scale(26, 24, 432, 68);
 	m_volume = scale(26, 106, 380, 22);
-	m_status = scale(26, 138, 470, 18);
+	m_status = scale(26, 224, 700, 18);
 	m_hint   = scale(26, 158, 470, 18);
 	m_wheel  = scale(828, 20, 128, 128);
-	// ダイヤルは丸だが、当たり判定は外接する四角で足りる
-	m_spots.push_back({ spot_kind::wheel,  mu2000::button::count, m_wheel,  "VALUE", "" });
-	m_spots.push_back({ spot_kind::volume, mu2000::button::count, m_volume, "VOLUME", "" });
-
 	for (int i = 0; i < 6; i++)
 		m_leds[i] = scale(472 + (i & 1) * 22, 26 + (i / 2) * 24, 13, 13);
 
@@ -198,6 +119,42 @@ void panel::resize(int w, int h)
 	};
 	m_font_label = make_font(int(11 * m_scale), FW_SEMIBOLD);
 	m_font_small = make_font(int(9  * m_scale), FW_NORMAL);
+
+	build_spots();
+}
+
+// 触れる場所は面ごとに違う。掴んでいる途中に作り直すと迷子になるので離す
+void panel::build_spots()
+{
+	m_held = nullptr;
+	m_spots.clear();
+
+	// 面を選ぶつまみは両方の面に置く
+	m_spots.push_back({ spot_kind::tab, mu2000::button::count, CTL_TAB_FRONT,
+	                    scale(700, 2, 96, 18), "パネル", "" });
+	m_spots.push_back({ spot_kind::tab, mu2000::button::count, CTL_TAB_EDIT,
+	                    scale(800, 2, 96, 18), "エディタ", "" });
+
+	if (m_page == page::editor) {
+		build_editor_spots();
+		return;
+	}
+
+	for (const place &p : CATEGORIES)
+		m_spots.push_back({ spot_kind::button, p.b, CTL_NONE,
+		                    scale(p.x, p.y, p.w, p.h), p.label, p.sub });
+	for (const place &p : CONTROLS)
+		m_spots.push_back({ spot_kind::button, p.b, CTL_NONE,
+		                    scale(p.x, p.y, p.w, p.h), p.label, p.sub });
+	for (const place &p : VALUES)
+		m_spots.push_back({ spot_kind::button, p.b, CTL_NONE,
+		                    scale(p.x, p.y, p.w, p.h), p.label, p.sub });
+
+	// ダイヤルは丸だが、当たり判定は外接する四角で足りる
+	m_spots.push_back({ spot_kind::wheel,  mu2000::button::count, CTL_NONE,
+	                    m_wheel,  "VALUE", "" });
+	m_spots.push_back({ spot_kind::volume, mu2000::button::count, CTL_NONE,
+	                    m_volume, "VOLUME", "" });
 }
 
 const spot *panel::hit(int x, int y) const
@@ -218,6 +175,19 @@ const spot *panel::hit(int x, int y) const
 	return nullptr;
 }
 
+
+void panel::draw_tabs(HDC dc) const
+{
+	for (const spot &sp : m_spots) {
+		if (sp.kind != spot_kind::tab)
+			continue;
+		const bool on = (sp.ctl == CTL_TAB_EDIT) == (m_page == page::editor);
+		round_box(dc, sp.r, on ? RGB(70, 76, 84) : RGB(38, 41, 46),
+		          on ? ACCENT : RGB(70, 74, 80), int(4 * m_scale));
+		text_in(dc, sp.r, sp.label, on ? TEXT : TEXT_DIM, m_font_small,
+		        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+	}
+}
 
 void panel::draw_lcd(HDC dc, const snapshot &s) const
 {
@@ -339,8 +309,8 @@ void panel::draw_volume(HDC dc, double v) const
 	text_in(dc, lab, "VOLUME", TEXT_DIM, m_font_small, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
-void panel::paint(HDC dc, const snapshot &s, u64 pressed, double volume,
-                  int wheel_angle, const char *status) const
+void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
+                        const char *status) const
 {
 	RECT all{ 0, 0, m_w, m_h };
 	fill(dc, all, BODY);
@@ -369,7 +339,8 @@ void panel::paint(HDC dc, const snapshot &s, u64 pressed, double volume,
 		draw_button(dc, sp, (pressed >> int(sp.button)) & 1);
 	}
 
-	draw_wheel(dc, wheel_angle);
+	draw_wheel(dc, m_wheel_angle);
+	draw_tabs(dc);
 	draw_volume(dc, volume);
 
 	if (status && status[0])
@@ -379,6 +350,15 @@ void panel::paint(HDC dc, const snapshot &s, u64 pressed, double volume,
 		        "ホイール = VALUE ／ クリックでボタン ／ キー: A=PLAY E=EDIT U=UTIL "
 		        "F=EFFECT [ ] =PART",
 		        RGB(104, 109, 116), m_font_small, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+
+void panel::paint(HDC dc, const snapshot &s, u64 pressed, const char *status) const
+{
+	if (m_page == page::editor)
+		paint_editor(dc, status);
+	else
+		paint_front(dc, s, pressed, m_volume_now, status);
 }
 
 } // namespace ui

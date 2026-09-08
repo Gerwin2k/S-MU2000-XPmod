@@ -20,19 +20,10 @@
 namespace smu2000 {
 namespace vst3 {
 
-// 画面から音量を動かしたときの受け皿。プラグイン本体が実装する
-class gain_owner
-{
-public:
-	virtual ~gain_owner() = default;
-	virtual float ui_gain() const = 0;
-	virtual void  set_ui_gain(float g) = 0;
-};
-
 class plug_view : public Steinberg::IPlugView
 {
 public:
-	plug_view(engine &eng, gain_owner &owner);
+	explicit plug_view(engine &eng);
 	virtual ~plug_view();
 
 	// FUnknown
@@ -61,14 +52,10 @@ private:
 	LRESULT handle(HWND h, UINT msg, WPARAM wp, LPARAM lp);
 	void paint(HWND h);
 
-	engine     &m_engine;
-	gain_owner &m_owner;
+	engine &m_engine;
 
 	HWND  m_hwnd = nullptr;
 	ui::panel m_panel;
-	const ui::spot *m_held = nullptr;
-	bool  m_drag_volume = false;
-	int   m_wheel_angle = 0;
 
 	HDC     m_mem_dc = nullptr;
 	HBITMAP m_mem_bmp = nullptr;

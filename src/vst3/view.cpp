@@ -74,8 +74,8 @@ mu2000::button key_to_button(WPARAM vk, bool &ok)
 } // namespace
 
 
-plug_view::plug_view(engine &eng, gain_owner &owner)
-	: m_engine(eng), m_owner(owner)
+plug_view::plug_view(engine &eng)
+	: m_engine(eng)
 {
 	m_panel.resize(m_w, m_h);
 }
@@ -224,8 +224,8 @@ void plug_view::paint(HWND h)
 	char status[160];
 	std::snprintf(status, sizeof(status), "%s", m_engine.message().c_str());
 
-	m_panel.paint(m_mem_dc, s, m_engine.panel().buttons(),
-	              m_owner.ui_gain(), m_wheel_angle, status);
+	m_panel.set_volume(m_engine.panel().gain());
+	m_panel.paint(m_mem_dc, s, m_engine.panel().buttons(), status);
 	BitBlt(dc, 0, 0, w, hh, m_mem_dc, 0, 0, SRCCOPY);
 	EndPaint(h, &ps);
 }
@@ -251,55 +251,29 @@ LRESULT plug_view::handle(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 		InvalidateRect(h, nullptr, FALSE);
 		return 0;
 
-	case WM_LBUTTONDOWN: {
-		const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-		const ui::spot *sp = m_panel.hit(x, y);
-		if (!sp)
-			return 0;
+	case WM_LBUTTONDOWN:
 		SetCapture(h);
-		if (sp->kind == ui::spot_kind::button) {
-			m_held = sp;
-			br.press(sp->button, true);
-		} else if (sp->kind == ui::spot_kind::volume) {
-			m_drag_volume = true;
-			const double v = double(x - sp->r.left) / std::max(1L, sp->r.right - sp->r.left);
-			m_owner.set_ui_gain(float(std::clamp(v, 0.0, 1.0)));
-		}
-		InvalidateRect(h, nullptr, FALSE);
+		if (m_panel.press(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), br))
+			InvalidateRect(h, nullptr, FALSE);
 		return 0;
-	}
 
 	case WM_MOUSEMOVE:
-		if (m_drag_volume) {
-			const int x = GET_X_LPARAM(lp);
-			for (const ui::spot &sp : m_panel.spots())
-				if (sp.kind == ui::spot_kind::volume) {
-					const double v = double(x - sp.r.left) /
-					                 std::max(1L, sp.r.right - sp.r.left);
-					m_owner.set_ui_gain(float(std::clamp(v, 0.0, 1.0)));
-					break;
-				}
+		if (m_panel.drag(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), br))
 			InvalidateRect(h, nullptr, FALSE);
-		}
 		return 0;
 
 	case WM_LBUTTONUP:
-		if (m_held) {
-			br.press(m_held->button, false);
-			m_held = nullptr;
-		}
-		m_drag_volume = false;
+		m_panel.release(br);
 		ReleaseCapture();
 		InvalidateRect(h, nullptr, FALSE);
 		return 0;
 
 	case WM_MOUSEWHEEL: {
+		POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+		ScreenToClient(h, &pt);
 		const int delta = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
-		if (delta) {
-			br.turn(delta);
-			m_wheel_angle = (m_wheel_angle + delta * 15) % 360;
+		if (delta && m_panel.wheel_at(pt.x, pt.y, delta, br))
 			InvalidateRect(h, nullptr, FALSE);
-		}
 		return 0;
 	}
 

@@ -404,6 +404,7 @@ void engine::fill(float *left, float *right, int n)
 		return;
 	}
 	m_drv.apply_buttons(*m_mu, m_bridge);
+	m_drv.pump_midi(*m_mu, m_bridge);
 
 	if (!m_pending.empty()) {
 		for (uint8_t b : m_pending)
