@@ -15,8 +15,9 @@ namespace ui {
 constexpr int LOGICAL_W = 1000;
 constexpr int LOGICAL_H = 400;
 
-// LCD の窓。firmware は 2 行 40 桁で使うが、出ているのは 24 桁ぶん
-constexpr int LCD_ROWS = 2, LCD_COLS = 24;
+// LCD。firmware は 2 行 40 桁で使う。実機の窓に出るのは 24 桁ぶんで、
+// そのうち左 20 桁が文字の並ぶところ、残り 4 桁が絵記号のセグメント部
+constexpr int LCD_ROWS = 2, LCD_COLS = 24, TEXT_COLS = 20;
 constexpr int CELL_W = 5, CELL_H = 8;
 
 struct snapshot {

@@ -238,34 +238,51 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	round_box(dc, bez, RGB(60, 58, 52), RGB(110, 106, 96), int(5 * m_scale));
 	fill(dc, m_lcd, LCD_BACK);
 
-	// 点の大きさを窓に合わせる。横 24 桁 ×(5 点 + 隙間 1)、縦 2 行 ×(8 点 + 隙間 3)
-	const int cols_dots = LCD_COLS * (CELL_W + 1) - 1;
-	const int rows_dots = LCD_ROWS * CELL_H + 3;
+	// 実機の窓は、文字の並ぶところと、絵記号のセグメント部に分かれている。
+	//
+	//   文字   2 行 × 20 桁。**行と行のあいだに隙間は無い**。
+	//          レベルメータのバーは上下の行にまたがって伸びるので、
+	//          空けるとバーが切れる（実機は繋がっている）
+	//   記号   両行の 20-23 桁。実機ではここが下のセグメント部に出ていて、
+	//          楽器の絵やパン・リバーブの目盛りになる
+	const int cols_dots = TEXT_COLS * (CELL_W + 1) - 1;
+	const int rows_dots = LCD_ROWS * CELL_H;
 	const int aw = m_lcd.right - m_lcd.left, ah = m_lcd.bottom - m_lcd.top;
 	const int pad = std::max(2, int(6 * m_scale));
+	// 下のセグメント部にも場所を取る（点 10 個ぶん）
 	const int d = std::max(1, std::min((aw - pad * 2) / cols_dots,
-	                                   (ah - pad * 2) / rows_dots));
+	                                   (ah - pad * 2) / (rows_dots + 12)));
 	const int x0 = m_lcd.left + (aw - d * cols_dots) / 2;
-	const int y0 = m_lcd.top  + (ah - d * rows_dots) / 2;
-	const int dot = std::max(1, d - std::max(1, d / 6));
+	const int y0 = m_lcd.top + pad;
 
 	HBRUSH ghost = CreateSolidBrush(LCD_GHOST);
 	HBRUSH lit   = CreateSolidBrush(LCD_DOT);
-	for (int row = 0; row < LCD_ROWS; row++) {
-		for (int col = 0; col < LCD_COLS; col++) {
-			const u8 *cell = s.dots + (row * LCD_COLS + col) * CELL_H;
-			for (int y = 0; y < CELL_H; y++) {
-				for (int x = 0; x < CELL_W; x++) {
-					RECT r;
-					r.left   = x0 + (col * (CELL_W + 1) + x) * d;
-					r.top    = y0 + (row * (CELL_H + 3) + y) * d;
-					r.right  = r.left + dot;
-					r.bottom = r.top + dot;
-					FillRect(dc, &r, (s.lcd_on && BIT(cell[y], 4 - x)) ? lit : ghost);
-				}
+
+	auto cell = [&](int row, int col, int px, int py) {
+		const u8 *c = s.dots + (row * LCD_COLS + col) * CELL_H;
+		for (int y = 0; y < CELL_H; y++)
+			for (int x = 0; x < CELL_W; x++) {
+				RECT r;
+				r.left   = px + x * d;
+				r.top    = py + y * d;
+				r.right  = r.left + std::max(1, d - std::max(1, d / 6));
+				r.bottom = r.top  + std::max(1, d - std::max(1, d / 6));
+				FillRect(dc, &r, (s.lcd_on && BIT(c[y], 4 - x)) ? lit : ghost);
 			}
-		}
-	}
+	};
+
+	// 文字の並ぶところ
+	for (int row = 0; row < LCD_ROWS; row++)
+		for (int col = 0; col < TEXT_COLS; col++)
+			cell(row, col, x0 + col * (CELL_W + 1) * d, y0 + row * CELL_H * d);
+
+	// セグメント部。実機ではここが独立した絵記号の帯になっている
+	const int sy = y0 + (rows_dots + 4) * d;
+	for (int row = 0; row < LCD_ROWS; row++)
+		for (int col = TEXT_COLS; col < LCD_COLS; col++)
+			cell(row, col, x0 + (col - TEXT_COLS) * (CELL_W + 1) * d,
+			     sy + row * CELL_H * d);
+
 	DeleteObject(ghost);
 	DeleteObject(lit);
 
