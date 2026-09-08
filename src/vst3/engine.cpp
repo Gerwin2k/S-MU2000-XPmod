@@ -68,6 +68,10 @@ std::string read_pointer_file(const std::string &path)
 	if (!std::fgets(line, sizeof(line), f)) { std::fclose(f); return {}; }
 	std::fclose(f);
 	std::string s(line);
+	// メモ帳などが付ける BOM を落とす。これがあると場所を見失う
+	if (s.size() >= 3 && (unsigned char)s[0] == 0xef && (unsigned char)s[1] == 0xbb &&
+	    (unsigned char)s[2] == 0xbf)
+		s.erase(0, 3);
 	while (!s.empty() && (s.back() == '\r' || s.back() == '\n' ||
 	                      s.back() == ' '  || s.back() == '\t'))
 		s.pop_back();
@@ -91,9 +95,12 @@ void logf(const char *fmt, ...)
 	static const std::string path = log_path();
 	if (path.empty())
 		return;
+	const bool fresh = !is_file(path);
 	std::FILE *f = std::fopen(path.c_str(), "ab");
 	if (!f)
 		return;
+	if (fresh)
+		std::fwrite("\xef\xbb\xbf", 1, 3, f);   // UTF-8 の印。無いと化けて読まれる
 	SYSTEMTIME t;
 	GetLocalTime(&t);
 	std::fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d  ", t.wYear, t.wMonth, t.wDay,
@@ -119,14 +126,14 @@ std::string find_roms(std::string &tried)
 	const std::string dir = module_dir();
 	if (!dir.empty()) {
 		// 2. バンドルの Resources。
-		//    <名前>.vst3/Contents/x86_64-win/ に DLL がいるので 2 つ上
-		cand.push_back(dir + "\\..\\..\\Resources");
-		cand.push_back(dir + "\\..\\..\\Resources\\roms");
+		//    <名前>.vst3/Contents/x86_64-win/ に DLL がいるので 1 つ上
+		cand.push_back(dir + "\\..\\Resources");
+		cand.push_back(dir + "\\..\\Resources\\roms");
 		// 3. DLL のすぐ横
 		cand.push_back(dir + "\\roms");
 		cand.push_back(dir);
 		// 4. 場所を書いた紙
-		const std::string notes[2] = { dir + "\\..\\..\\Resources\\roms.txt",
+		const std::string notes[2] = { dir + "\\..\\Resources\\roms.txt",
 		                               dir + "\\roms.txt" };
 		for (const std::string &p : notes) {
 			const std::string s = read_pointer_file(p);
@@ -174,6 +181,11 @@ engine::~engine()
 std::string engine::message() const
 {
 	return state() == status::loading ? std::string("起動中") : m_message;
+}
+
+void engine::log_line(const char *text)
+{
+	logf("%s", text);
 }
 
 void engine::start()

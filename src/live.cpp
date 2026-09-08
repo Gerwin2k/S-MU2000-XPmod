@@ -263,8 +263,9 @@ int run_wasapi(generator &gen, double seconds, int latency_ms)
 		if (FAILED(client->GetCurrentPadding(&padding)))
 			break;
 		// 残量がゼロなら、デバイスは前の分を鳴らし終えて待たされた。
-		// これが本当の音切れ。生成に何 ms かかったかより、こちらが答え
-		if (padding == 0)
+		// これが本当の音切れ。生成に何 ms かかったかより、こちらが答え。
+		// ただし鳴らし始めの 1 杯目は、まだ渡した音が減っていないので数えない
+		if (padding == 0 && gen.produced > buf_frames)
 			gen.starved++;
 		const UINT32 want = buf_frames - padding;
 		if (!want)

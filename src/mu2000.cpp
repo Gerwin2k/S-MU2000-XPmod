@@ -75,6 +75,7 @@ void mu2000::set_threaded(bool on)
 	if (!on) {
 		m_slave_quit = true;
 		m_slave_go++;
+		m_slave_go.notify_one();
 		m_slave_thread.join();
 		m_slave_quit = false;
 		return;
@@ -82,15 +83,29 @@ void mu2000::set_threaded(bool on)
 	m_slave_thread = std::thread([this] { slave_loop(); });
 }
 
+// 空振りを何回続けたら眠るか。0 以下なら永久に回す（比較用）
+#ifndef SLAVE_SPINS
+#define SLAVE_SPINS 20000
+#endif
+
 void mu2000::slave_loop()
 {
 	u64 seen = 0;
 	for (;;) {
-		// 合図を待つ。眠ると 44100 回/秒には間に合わないので回して待つ
+		// 合図を待つ。1 サンプルの中の待ちは 1 マイクロ秒に満たないので、
+		// まず回して待つ。眠っていては 44100 回/秒には間に合わない。
+		//
+		// ただし DAW の中では、1 ブロック作り終えてから次に呼ばれるまでの
+		// 数ミリ秒がまるごと空く。そこまで回し続けると 1 コアを常時
+		// 焼くことになるので、しばらく空振りしたら本当に眠る
+		int spins = 0;
 		while (m_slave_go.load(std::memory_order_acquire) == seen) {
 			if (m_slave_quit.load(std::memory_order_relaxed))
 				return;
-			_mm_pause();
+			if (SLAVE_SPINS <= 0 || ++spins < SLAVE_SPINS)
+				_mm_pause();
+			else
+				m_slave_go.wait(seen, std::memory_order_acquire);
 		}
 		seen = m_slave_go.load(std::memory_order_acquire);
 		if (m_slave_quit.load(std::memory_order_relaxed))
@@ -449,6 +464,7 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	if (m_slave_thread.joinable()) {
 		const u64 tag = m_slave_go.load(std::memory_order_relaxed) + 1;
 		m_slave_go.store(tag, std::memory_order_release);
+		m_slave_go.notify_one();   // 眠っていたら起こす。起きていれば素通り
 		m_swpm.run_sample(lm, rm);
 		while (m_slave_done.load(std::memory_order_acquire) != tag)
 			_mm_pause();

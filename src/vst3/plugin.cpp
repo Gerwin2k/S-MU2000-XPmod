@@ -33,6 +33,8 @@
 #include <cstring>
 #include <vector>
 
+#include <windows.h>
+
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 
@@ -89,6 +91,9 @@ public:
 			m_value[i] = default_of(i % kCtrlCount);
 		m_msgs.reserve(8192);
 		m_engine.set_output_rate(smu2000::vst3::NATIVE_RATE);
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		m_qpc_freq = f.QuadPart;
 	}
 
 	virtual ~mu_plugin() = default;
@@ -192,11 +197,31 @@ public:
 
 	tresult PLUGIN_API setActive(TBool state) override
 	{
-		if (state)
+		if (state) {
 			m_engine.start();
-		else
+		} else {
 			m_hush.store(true);
+			report();
+		}
 		return kResultOk;
+	}
+
+	// 画面が無いので、間に合っていたかどうかは止めるときに記録へ書く
+	void report()
+	{
+		if (!m_produced)
+			return;
+		const double audio = double(m_produced) / m_rate;
+		const double busy  = double(m_busy_ticks) / double(m_qpc_freq);
+		char line[256];
+		std::snprintf(line, sizeof(line),
+		              "%.0f Hz で %.0f 秒ぶん: CPU %.1f%%、1 ブロックの最悪 %.2f ms、"
+		              "間に合わなかった回数 %llu",
+		              m_rate, audio, 100.0 * busy / audio,
+		              1000.0 * double(m_worst_ticks) / double(m_qpc_freq),
+		              (unsigned long long)m_late);
+		m_engine.log_line(line);
+		m_busy_ticks = m_produced = m_worst_ticks = m_late = 0;
 	}
 
 	tresult PLUGIN_API setState(IBStream *) override { return kResultOk; }
@@ -378,15 +403,24 @@ private:
 	double                m_rate = smu2000::vst3::NATIVE_RATE;
 	double                m_value[kParamCount] = {};
 	std::atomic<bool>     m_hush{false};
+	// 間に合っているかの記録。音声スレッドだけが触る
+	uint64                m_busy_ticks = 0, m_produced = 0, m_worst_ticks = 0, m_late = 0;
+	int64                 m_qpc_freq = 1;
 	int32                 m_refs = 1;
 };
 
 
 tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 {
-	AudioBusBuffers *out = (data.numOutputs > 0) ? &data.outputs[0] : nullptr;
+	// 64bit 浮動小数は受けないと答えてある。それでも来たら音を出さない
+	// （倍精度の配列を単精度として書けば壊れる）
+	AudioBusBuffers *out = (data.numOutputs > 0 &&
+	                        data.symbolicSampleSize == kSample32) ? &data.outputs[0] : nullptr;
 	float *left  = (out && out->numChannels > 0) ? out->channelBuffers32[0] : nullptr;
 	float *right = (out && out->numChannels > 1) ? out->channelBuffers32[1] : left;
+
+	LARGE_INTEGER t0;
+	QueryPerformanceCounter(&t0);
 
 	if (m_hush.exchange(false))
 		m_engine.all_notes_off();
@@ -494,6 +528,15 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 	}
 	if (left && done < n)
 		m_engine.fill(left + done, right + done, n - done);
+
+	// 間に合っているかの目安。setActive(false) のときに記録へ書く
+	LARGE_INTEGER t1;
+	QueryPerformanceCounter(&t1);
+	const uint64 took = uint64(t1.QuadPart - t0.QuadPart);
+	m_busy_ticks += took;
+	m_produced   += uint64(n);
+	if (took > m_worst_ticks) m_worst_ticks = took;
+	if (double(took) / double(m_qpc_freq) > double(n) / m_rate) m_late++;
 
 	if (out) {
 		out->silenceFlags = 0;

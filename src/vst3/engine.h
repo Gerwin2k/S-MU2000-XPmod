@@ -61,6 +61,9 @@ public:
 	// n サンプルぶん作る。左右は別々の配列（VST3 はそういう渡し方をする）
 	void fill(float *left, float *right, int n);
 
+	// 記録（%LOCALAPPDATA%\S-MU2000\log.txt）へ 1 行書く。画面が無いのでここが窓口
+	void log_line(const char *text);
+
 	// 再生位置が飛んだ、止まった等。変換器の中身だけ捨てる
 	void flush_resampler();
 
