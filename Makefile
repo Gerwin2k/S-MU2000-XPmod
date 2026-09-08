@@ -48,7 +48,7 @@ OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
 # vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
 all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
-     $(BUILD)/live.exe $(BUILD)/midisend.exe $(BUILD)/panel.exe \
+     $(BUILD)/live.exe $(BUILD)/midisend.exe $(BUILD)/panel.exe $(BUILD)/gui.exe \
      vst3 $(BUILD)/vst3probe.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
@@ -67,6 +67,14 @@ $(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/s
 $(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/panel.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+# gui は実機のフロントパネル風の画面を出す
+UI_SRCS := src/ui/panel.cpp src/ui/png.cpp src/ui/audio_out.cpp src/ui/midi_in.cpp
+UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
+
+$(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(UI_OBJS) $(BUILD)/src/gui.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32
 
 # midisend は MIDI ファイルを実時間で MIDI 出力へ流す（live の試験用）
 $(BUILD)/midisend.exe: $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o
@@ -137,6 +145,6 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(VST3_OBJS:.o=.d) $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/panel.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
+-include $(VST3_OBJS:.o=.d) $(UI_OBJS:.o=.d) $(BUILD)/src/gui.d $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/panel.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
 
 .PHONY: all clean regen vst3 install-vst3 probe
