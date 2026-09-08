@@ -46,6 +46,9 @@ build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確�
 ```
 
 DAW に挿すなら VST3。作り方と ROM の置き場は [doc/vst3.md](doc/vst3.md)。
+置き場は `%LOCALAPPDATA%\Programs\Common\VST3`（利用者ごと）か
+`C:\Program Files\Common Files\VST3`（全員）。ROM は同梱できないので、
+バンドルの `Contents/Resources/roms.txt` に置き場所を 1 行書く。
 
 ```
 make vst3           build/S-MU2000.vst3/ にバンドルができる
@@ -96,7 +99,8 @@ VST3 のインターフェース定義（`third_party/vst3/pluginterfaces`）は
 ## 上流への還元
 
 MU2000 を鳴らす過程で MAME の SWP30 に 2 つのバグを見つけ、実機の測定値をもとに
-修正した。上流へ送る予定。
+修正した。[mamedev/mame#16075](https://github.com/mamedev/mame/pull/16075) として
+取り込まれている。
 
 | 症状 | 原因 |
 |---|---|
