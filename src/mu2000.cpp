@@ -317,27 +317,29 @@ void mu2000::fill_missing_glyphs(std::vector<u8> &rom)
 				return false;
 		return true;
 	};
+	// 1 マスに 2 本。**バーの幅は 2 ドット**。左は 0-1 列、右は 3-4 列
 	auto bar = [&](int code, int left, int right) {
 		for (int y = 0; y < 8; y++) {
 			u8 v = 0;
-			if (left  > 0 && y >= 8 - left)  v |= 0x18;   // 左 2 ドット
-			if (right > 0 && y >= 8 - right) v |= 0x03;   // 右 2 ドット
+			if (y >= 8 - left)  v |= 0x18;
+			if (y >= 8 - right) v |= 0x03;
 			rom[code * 16 + y] = v;
 		}
 	};
-	auto wide = [&](int code, int h) {
-		for (int y = 0; y < 8; y++)
-			rom[code * 16 + y] = u8((h > 0 && y >= 8 - h) ? 0x1f : 0);
-	};
 
-	for (int h = 0; h <= 8; h++)
-		if (blank(0x80 + h))
-			wide(0x80 + h, h);
-
+	// レベルメータの字。この LCD の字の絵は手に入らないので、firmware が
+	// 何を書くかを**測って**割り出した（doc/gui.md）。
+	//
+	//   コード = 0x7f + 9a + b   （a, b は 0-8）
+	//   a = 左のバーの点の数、b = 右のバーの点の数
+	//
+	// 上の行と下の行で同じ表を使う。バーが上の行まで届かないときは
+	// その側が 0、全部消えているマスには空白 (0x20) が入る。
+	// 鳴っていないパートも 1 点だけ出る（a = b = 1、コード 0x89）
 	for (int a = 0; a <= 8; a++)
 		for (int b = 0; b <= 8; b++) {
-			const int code = 0x89 + a * 9 + b;
-			if (code <= 0xff && blank(code))
+			const int code = 0x7f + a * 9 + b;
+			if (blank(code))
 				bar(code, a, b);
 		}
 }
