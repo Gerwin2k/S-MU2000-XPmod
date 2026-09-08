@@ -53,7 +53,14 @@ constexpr const char *kVersion    = "0.1.0.0";
 // まである。チャンネルごとにこれだけのパラメータを並べる
 constexpr int32 kCtrlCount = 131;
 constexpr int32 kChannels  = 16;
-constexpr int32 kParamCount = kChannels * kCtrlCount;
+constexpr int32 kMidiParams = kChannels * kCtrlCount;
+
+// 画面を持たないので、ホストの汎用パネルに出す物がこれだけ要る。
+//   出力レベル … 音源の外で掛ける素の掛け算
+//   状態      … 起動中か、鳴る用意ができたか、ROM が無いか。読むだけ
+constexpr ParamID kGainId   = 4096;
+constexpr ParamID kStatusId = 4097;
+constexpr int32   kParamCount = kMidiParams + 2;
 
 ParamID param_of(int32 ch, int32 ctrl) { return ParamID(ch * kCtrlCount + ctrl); }
 
@@ -87,8 +94,10 @@ class mu_plugin : public IComponent, public IAudioProcessor,
 public:
 	mu_plugin()
 	{
-		for (int32 i = 0; i < kParamCount; i++)
+		for (int32 i = 0; i < kMidiParams; i++)
 			m_value[i] = default_of(i % kCtrlCount);
+		m_gain.store(1.0f);
+		m_gain_now = 1.0f;
 		m_msgs.reserve(8192);
 		m_engine.set_output_rate(smu2000::vst3::NATIVE_RATE);
 		LARGE_INTEGER f;
@@ -224,16 +233,31 @@ public:
 		m_busy_ticks = m_produced = m_worst_ticks = m_late = 0;
 	}
 
-	tresult PLUGIN_API setState(IBStream *) override { return kResultOk; }
+	tresult PLUGIN_API setState(IBStream *stream) override
+	{
+		if (!stream)
+			return kResultFalse;
+		int32 version = 0, got = 0;
+		float gain = 1.0f;
+		if (stream->read(&version, sizeof(version), &got) != kResultOk || got != sizeof(version))
+			return kResultOk;   // 空でも困らない
+		if (stream->read(&gain, sizeof(gain), &got) == kResultOk && got == sizeof(gain) &&
+		    gain >= 0.0f && gain <= 1.0f)
+			m_gain.store(gain);
+		return kResultOk;
+	}
 
 	tresult PLUGIN_API getState(IBStream *stream) override
 	{
-		// 音源の中身（RAM や音色）はまだ保存できない。版番号だけ書いておく
+		// 音源の中身（RAM や音色）はまだ保存できない。
+		// 版番号と出力レベルだけ。曲を開き直すと音色は MIDI から作り直しになる
 		if (!stream)
 			return kResultFalse;
-		const int32 version = 1;
+		int32 version = 1;
+		float gain = m_gain.load();
 		int32 written = 0;
-		stream->write(const_cast<int32 *>(&version), sizeof(version), &written);
+		stream->write(&version, sizeof(version), &written);
+		stream->write(&gain, sizeof(gain), &written);
 		return kResultOk;
 	}
 
@@ -291,6 +315,24 @@ public:
 	{
 		if (index < 0 || index >= kParamCount)
 			return kInvalidArgument;
+		if (index >= kMidiParams) {
+			std::memset(&info, 0, sizeof(info));
+			if (index == kMidiParams) {
+				info.id = kGainId;
+				set_str(info.title, "Output");
+				set_str(info.shortTitle, "Out");
+				set_str(info.units, "%");
+				info.defaultNormalizedValue = 1.0;
+				info.flags = ParameterInfo::kCanAutomate;
+			} else {
+				info.id = kStatusId;
+				set_str(info.title, "Status");
+				set_str(info.shortTitle, "Stat");
+				info.stepCount = 2;
+				info.flags = ParameterInfo::kIsReadOnly;
+			}
+			return kResultOk;
+		}
 		const int32 ch = index / kCtrlCount, ctrl = index % kCtrlCount;
 
 		char name[64];
@@ -313,7 +355,19 @@ public:
 
 	tresult PLUGIN_API getParamStringByValue(ParamID id, ParamValue v, String128 str) override
 	{
-		if (id >= ParamID(kParamCount))
+		if (id == kStatusId) {
+			// ここが唯一の「表に見える」窓口。無音の理由がこれで分かる
+			const int k = int(std::lround(v * 2.0));
+			set_str(str, k == 0 ? "Booting" : k == 1 ? "Ready" : "No ROM");
+			return kResultOk;
+		}
+		if (id == kGainId) {
+			char g[32];
+			std::snprintf(g, sizeof(g), "%.0f", v * 100.0);
+			set_str(str, g);
+			return kResultOk;
+		}
+		if (id >= ParamID(kMidiParams))
 			return kInvalidArgument;
 		char buf[32];
 		if (id % kCtrlCount == 129)
@@ -326,7 +380,11 @@ public:
 
 	tresult PLUGIN_API getParamValueByString(ParamID id, TChar *str, ParamValue &v) override
 	{
-		if (id >= ParamID(kParamCount) || !str)
+		if (!str)
+			return kInvalidArgument;
+		if (id == kGainId || id == kStatusId)
+			return kResultFalse;
+		if (id >= ParamID(kMidiParams))
 			return kInvalidArgument;
 		char buf[32];
 		int i = 0;
@@ -341,22 +399,40 @@ public:
 
 	ParamValue PLUGIN_API normalizedParamToPlain(ParamID id, ParamValue v) override
 	{
+		if (id == kGainId)   return v * 100.0;
+		if (id == kStatusId) return std::lround(v * 2.0);
 		return (id % kCtrlCount == 129) ? std::lround(v * 16383.0) - 8192.0
 		                                : std::lround(v * 127.0);
 	}
 
 	ParamValue PLUGIN_API plainParamToNormalized(ParamID id, ParamValue plain) override
 	{
+		if (id == kGainId)   return std::clamp(plain / 100.0, 0.0, 1.0);
+		if (id == kStatusId) return std::clamp(plain / 2.0, 0.0, 1.0);
 		return (id % kCtrlCount == 129) ? std::clamp((plain + 8192.0) / 16383.0, 0.0, 1.0)
 		                                : std::clamp(plain / 127.0, 0.0, 1.0);
 	}
 
 	ParamValue PLUGIN_API getParamNormalized(ParamID id) override
-	{ return id < ParamID(kParamCount) ? m_value[id] : 0.0; }
+	{
+		if (id == kGainId)
+			return m_gain.load();
+		if (id == kStatusId) {
+			switch (m_engine.state()) {
+			case smu2000::vst3::status::loading: return 0.0;
+			case smu2000::vst3::status::ready:   return 0.5;
+			default:                             return 1.0;
+			}
+		}
+		return id < ParamID(kMidiParams) ? m_value[id] : 0.0;
+	}
 
 	tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue v) override
 	{
-		if (id >= ParamID(kParamCount))
+		if (id == kGainId) { m_gain.store(float(std::clamp(v, 0.0, 1.0))); return kResultOk; }
+		if (id == kStatusId)
+			return kResultFalse;   // 読むだけ
+		if (id >= ParamID(kMidiParams))
 			return kInvalidArgument;
 		m_value[id] = v;
 		return kResultOk;
@@ -401,7 +477,11 @@ private:
 	smu2000::vst3::engine m_engine;
 	std::vector<msg>      m_msgs;
 	double                m_rate = smu2000::vst3::NATIVE_RATE;
-	double                m_value[kParamCount] = {};
+	double                m_value[kMidiParams] = {};
+	// 出力レベル。UI 側で決めて音声側で読む。急に変えると音が跳ねるので
+	// 1 サンプルずつ寄せていく
+	std::atomic<float>    m_gain{1.0f};
+	float                 m_gain_now = 1.0f;
 	std::atomic<bool>     m_hush{false};
 	// 間に合っているかの記録。音声スレッドだけが触る
 	uint64                m_busy_ticks = 0, m_produced = 0, m_worst_ticks = 0, m_late = 0;
@@ -436,7 +516,16 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 			if (!pq)
 				continue;
 			const ParamID id = pq->getParameterId();
-			if (id >= ParamID(kParamCount))
+			if (id == kGainId) {
+				// 出力レベルは音源に流さない。外で掛ける。最後の値だけ見る
+				int32 off = 0;
+				ParamValue v = 0.0;
+				if (pq->getPointCount() > 0 &&
+				    pq->getPoint(pq->getPointCount() - 1, off, v) == kResultOk)
+					m_gain.store(float(std::clamp(v, 0.0, 1.0)));
+				continue;
+			}
+			if (id >= ParamID(kMidiParams))
 				continue;
 			const int32 ch = int32(id) / kCtrlCount, ctrl = int32(id) % kCtrlCount;
 			const int32 np = pq->getPointCount();
@@ -528,6 +617,20 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 	}
 	if (left && done < n)
 		m_engine.fill(left + done, right + done, n - done);
+
+	// 出力レベル。一気に変えると音が跳ねるので 1 サンプルずつ寄せる
+	if (left) {
+		const float target = m_gain.load(std::memory_order_relaxed);
+		if (target != m_gain_now || target != 1.0f) {
+			const float step = 1.0f / 512.0f;
+			for (int32 i = 0; i < n; i++) {
+				if (m_gain_now < target) m_gain_now = std::min(target, m_gain_now + step);
+				else if (m_gain_now > target) m_gain_now = std::max(target, m_gain_now - step);
+				left[i]  *= m_gain_now;
+				right[i] *= m_gain_now;
+			}
+		}
+	}
 
 	// 間に合っているかの目安。setActive(false) のときに記録へ書く
 	LARGE_INTEGER t1;

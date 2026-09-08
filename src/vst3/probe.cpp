@@ -300,6 +300,8 @@ int run_torture(IPluginFactory *fac, const TUID cid)
 			e->getParamStringByValue(pi.id, 0.5, s);
 			ParamValue v = 0.0;
 			e->getParamValueByString(pi.id, s, v);
+			if (pi.flags & ParameterInfo::kIsReadOnly)
+				continue;              // 読むだけのものは書けなくて当たり前
 			e->setParamNormalized(pi.id, 0.25);
 			if (e->getParamNormalized(pi.id) != 0.25) { std::printf("NG: 値が残らない %u\n", unsigned(pi.id)); bad++; break; }
 		}
