@@ -25,26 +25,26 @@ struct knob_place { int ctl; double x, y; const char *label; };
 
 // つまみ 18 個。6 列 × 3 行。番号は XG の標準的な割り当て
 const knob_place KNOBS[] = {
-	{   7, 336,  52, "Volume"    },
-	{  10, 440,  52, "Pan"       },
-	{  11, 544,  52, "Express"   },
-	{  91, 648,  52, "Reverb"    },
-	{  93, 752,  52, "Chorus"    },
-	{  94, 856,  52, "Variation" },
+	{   7, 336,  74, "Volume"    },
+	{  10, 440,  74, "Pan"       },
+	{  11, 544,  74, "Express"   },
+	{  91, 648,  74, "Reverb"    },
+	{  93, 752,  74, "Chorus"    },
+	{  94, 856,  74, "Variation" },
 
-	{  74, 336, 120, "Cutoff"    },
-	{  71, 440, 120, "Resonance" },
-	{  73, 544, 120, "Attack"    },
-	{  75, 648, 120, "Decay"     },
-	{  72, 752, 120, "Release"   },
-	{  76, 856, 120, "Vib Rate"  },
+	{  74, 336, 158, "Cutoff"    },
+	{  71, 440, 158, "Resonance" },
+	{  73, 544, 158, "Attack"    },
+	{  75, 648, 158, "Decay"     },
+	{  72, 752, 158, "Release"   },
+	{  76, 856, 158, "Vib Rate"  },
 
-	{  77, 336, 188, "Vib Depth" },
-	{  78, 440, 188, "Vib Delay" },
-	{   5, 544, 188, "Porta"     },
-	{   1, 648, 188, "Modulation" },
-	{ CTL_BANK_MSB, 752, 188, "Bank"    },
-	{ CTL_PROGRAM,  856, 188, "Program" },
+	{  77, 336, 242, "Vib Depth" },
+	{  78, 440, 242, "Vib Delay" },
+	{   5, 544, 242, "Porta"     },
+	{   1, 648, 242, "Modulation" },
+	{ CTL_BANK_MSB, 752, 242, "Bank"    },
+	{ CTL_PROGRAM,  856, 242, "Program" },
 };
 
 // XG の初期値。MU2000 の電源投入時に近づけてある
@@ -152,11 +152,11 @@ void panel::paint_editor(HDC dc, const char *status) const
 {
 	RECT all{ 0, 0, m_w, m_h };
 	fill(dc, all, BODY);
-	RECT top{ 0, 0, m_w, m_oy + int(20 * m_scale) };
+	RECT top{ 0, 0, m_w, m_oy + int(24 * m_scale) };
 	fill(dc, top, BODY_TOP);
 
 	// パート
-	RECT lab = scale(26, 26, 120, 16);
+	RECT lab = scale(26, 42, 120, 16);
 	text_in(dc, lab, "PART", TEXT_DIM, m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
 
 	for (const spot &sp : m_spots) {
@@ -187,10 +187,10 @@ void panel::paint_editor(HDC dc, const char *status) const
 	char line1[128];
 	std::snprintf(line1, sizeof(line1), "Part %d   Bank %d   Voice %d   Volume %d",
 	              m_part + 1, m_bank[m_part], m_prog[m_part] + 1, m_cc[m_part][7]);
-	RECT info = scale(26, 128, 290, 18);
+	RECT info = scale(26, 200, 320, 18);
 	text_in(dc, info, line1, TEXT, m_font_small, DT_LEFT | DT_VCENTER | DT_WORDBREAK);
 
-	RECT hint = scale(26, 176, 290, 40);
+	RECT hint = scale(26, 288, 320, 46);
 	text_in(dc, hint,
 	        "つまみは上下にドラッグ、またはホイール。\n"
 	        "送っているのは XG のコントロールチェンジそのもの。",
@@ -319,7 +319,7 @@ void panel::build_editor_spots()
 {
 	for (int i = 0; i < 16; i++)
 		m_spots.push_back({ spot_kind::part, mu2000::button::count, CTL_PART + i,
-		                    scale(26 + (i % 8) * 34, 44 + (i / 8) * 30, 30, 26), "", "" });
+		                    scale(26 + (i % 8) * 36, 44 + (i / 8) * 30, 30, 26), "", "" });
 
 	// 枠は 80 × 66。丸の中心は上から 26、名前と値はその下
 	for (const knob_place &k : KNOBS)
@@ -327,9 +327,9 @@ void panel::build_editor_spots()
 		                    scale(k.x - 40, k.y - 26, 80, 66), k.label, "" });
 
 	m_spots.push_back({ spot_kind::action, mu2000::button::count, CTL_XG_RESET,
-	                    scale(26, 150, 120, 22), "XG リセット", "" });
+	                    scale(26, 250, 130, 24), "XG リセット", "" });
 	m_spots.push_back({ spot_kind::action, mu2000::button::count, CTL_ALL_OFF,
-	                    scale(152, 150, 120, 22), "オールノートオフ", "" });
+	                    scale(162, 250, 150, 24), "オールノートオフ", "" });
 }
 
 void panel::init_editor_values()

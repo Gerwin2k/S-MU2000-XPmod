@@ -86,6 +86,7 @@ public:
 
 private:
 	RECT scale(double x, double y, double w, double h) const;
+	POINT at(double x, double y) const;
 	void build_spots();
 	void build_editor_spots();
 	void init_editor_values();

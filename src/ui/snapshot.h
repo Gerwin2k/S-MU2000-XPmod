@@ -13,7 +13,7 @@
 namespace ui {
 
 constexpr int LOGICAL_W = 1000;
-constexpr int LOGICAL_H = 250;
+constexpr int LOGICAL_H = 400;
 
 // LCD の窓。firmware は 2 行 40 桁で使うが、出ているのは 24 桁ぶん
 constexpr int LCD_ROWS = 2, LCD_COLS = 24;
