@@ -100,7 +100,8 @@ VST3_INC  := -I third_party/vst3
 
 VST3_SDK_SRCS := 	third_party/vst3/pluginterfaces/base/funknown.cpp 	third_party/vst3/pluginterfaces/base/coreiids.cpp 	third_party/vst3/pluginterfaces/base/conststringtable.cpp 	third_party/vst3/pluginterfaces/base/ustring.cpp
 
-VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp $(VST3_SDK_SRCS)
+VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp \
+             src/vst3/view.cpp src/ui/panel.cpp $(VST3_SDK_SRCS)
 VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
 
 $(BUILD)/vst3obj/%.o: %.cpp
@@ -111,7 +112,7 @@ vst3: $(VST3_BIN)
 
 $(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32
+	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32
 	@mkdir -p $(VST3_DIR)/Contents/Resources
 	@cp -f doc/vst3-readme.txt $(VST3_DIR)/Contents/Resources/README.txt 2>/dev/null || true
 

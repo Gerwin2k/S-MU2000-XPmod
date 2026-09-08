@@ -286,14 +286,20 @@ u16 mu2000::leds() const
 
 bool mu2000::load_lcd_font(const std::string &path)
 {
-	std::vector<u8> rom;
-	if (!read_file(path, rom, 0x1000)) {
+	auto rom = std::make_shared<std::vector<u8>>();
+	if (!read_file(path, *rom, 0x1000)) {
 		m_error = "LCD の字を読めない（4KB でないか、見つからない）: " + path;
 		return false;
 	}
-	m_lcd_font = std::move(rom);
-	m_lcd.set_cgrom(m_lcd_font.data(), m_lcd_font.size());
+	set_lcd_font(std::move(rom));
 	return true;
+}
+
+void mu2000::set_lcd_font(u8rom p)
+{
+	m_lcd_font = std::move(p);
+	if (m_lcd_font)
+		m_lcd.set_cgrom(m_lcd_font->data(), m_lcd_font->size());
 }
 
 
@@ -458,6 +464,9 @@ void mu2000::reset()
 	m_sci4->write_irq<1>().set([this](int s) { m_sci_irq[1] = s; update_sci_irq(); });
 	m_sci4->write_irq<3>().set([this](int s) { m_cpu->execute_set_input(1, s); });
 
+	// 2 個のチップで乱数の数列を分ける。同じ種だと雑音まで揃ってしまう
+	m_swpm.set_rand_seed(0x9d14abd7);
+	m_swps.set_rand_seed(0x6c1f35e9);
 	m_swpm.reset();
 	m_swps.reset();
 

@@ -1599,18 +1599,18 @@ void swp30_device::lfo_block::clear()
 	m_r_amplitude = 0;
 }
 
-void swp30_device::lfo_block::keyon(running_machine &machine)
+void swp30_device::lfo_block::keyon(swp30_device &swp)
 {
-	m_counter = machine.rand() & 0x3ffff;
+	m_counter = swp.rand() & 0x3ffff;
 	switch(m_type) {
 	case 0: m_state = m_counter >> 6; break;
 	case 1: m_state = m_counter & 0x20000 ? (~m_counter >> 5) & 0xffe : (m_counter >> 5) & 0xffe; break;
 	case 2: m_state = m_counter & 0x20000 ? 0xfff : 0; break;
-	case 3: m_state = machine.rand() & 0xfff; break;
+	case 3: m_state = swp.rand() & 0xfff; break;
 	}
 }
 
-void swp30_device::lfo_block::step(running_machine &machine)
+void swp30_device::lfo_block::step(swp30_device &swp)
 {
 	u32 pc = m_counter;
 	m_counter = (m_counter + m_step) & 0x3ffff;
@@ -1620,7 +1620,7 @@ void swp30_device::lfo_block::step(running_machine &machine)
 	case 0: m_state = m_counter >> 6; break;
 	case 1: m_state = m_counter & 0x20000 ? (~m_counter >> 5) & 0xffe : (m_counter >> 5) & 0xffe; break;
 	case 2: m_state = m_counter & 0x20000 ? 0xfff : 0; break;
-	case 3: if((pc ^ m_counter) & 0x3fe00) m_state = machine.rand() & 0xfff; break;
+	case 3: if((pc ^ m_counter) & 0x3fe00) m_state = swp.rand() & 0xfff; break;
 	}
 }
 
@@ -1700,7 +1700,7 @@ void swp30_device::awm2_step(std::array<s32, 0x40> &samples_per_chan)
 		s32 sample3 = m_iir1[chan].step(sample2);
 		s32 sample4 = volume_apply(m_envelope[chan].step(m_meg->m_sample_counter) + lfo.get_amplitude(), sample3);
 
-		lfo.step(machine());
+		lfo.step(*this);
 		samples_per_chan[chan] = sample4;
 	}
 }
@@ -1782,6 +1782,7 @@ void swp30_device::meg_state::reset()
 
 void swp30_device::reset()
 {
+	m_rand_seed = m_rand_seed_base;
 	m_keyon_mask = 0;
 
 
@@ -2038,7 +2039,7 @@ void swp30_device::keyon_w(u16)
 			m_filter   [chan].keyon();
 			m_iir1     [chan].keyon();
 			m_envelope [chan].keyon();
-			m_lfo      [chan].keyon(machine());
+			m_lfo      [chan].keyon(*this);
 
 			if(1)
 				logerror("[%08d] keyon %02x %s\n", m_meg->m_sample_counter, chan, m_streaming[chan].describe());
@@ -3113,7 +3114,7 @@ s16 swp30_device::meg_state::m1_expand(s16 v)
 void swp30_device::meg_state::call_rand(void *ms)
 {
 	auto *ms1 = static_cast<meg_state *>(ms);
-	ms1->m_retval = ms1->m_swp->machine().rand();
+	ms1->m_retval = ms1->m_swp->rand();
 }
 
 void swp30_device::meg_state::call_revram_encode(void *ms)
@@ -3275,11 +3276,11 @@ void swp30_device::meg_state::step()
 			v = get_lfo(m_pc >> 4);
 			break;
 		case 4: v = m_ram_read; break;
-		case 5: v = m_swp->machine().rand() & 0xffffff; if(v & 0x00800000) v |= 0xff000000; break;
+		case 5: v = m_swp->rand() & 0xffffff; if(v & 0x00800000) v |= 0xff000000; break;
 		case 6: {
 			s64 p = m_p;
 			if(!d.no_noise)
-				p += m_swp->machine().rand() & 0x07e0;
+				p += m_swp->rand() & 0x07e0;
 			v = (p >> 15) & 0xffffff;
 			if(v & 0x00800000)
 				v |= 0xff000000;
@@ -3298,7 +3299,7 @@ void swp30_device::meg_state::step()
 		else {
 			s64 p = m_p;
 			if(!d.no_noise)
-				p += m_swp->machine().rand() & 0x07e0;
+				p += m_swp->rand() & 0x07e0;
 			v = (p >> 15) & 0xffffff;
 			if(v & 0x00800000)
 				v |= 0xff000000;

@@ -13,9 +13,14 @@
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstmessage.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 
 namespace Steinberg {
+
+DEF_CLASS_IID (IPlugView)
+DEF_CLASS_IID (IPlugFrame)
+
 namespace Vst {
 
 DEF_CLASS_IID (IComponent)

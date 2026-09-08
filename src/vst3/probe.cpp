@@ -11,6 +11,7 @@
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -20,12 +21,14 @@
 #include "smf.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -192,6 +195,105 @@ private:
 	std::vector<uint8> m_buf;
 	int32 m_pos = 0;
 };
+
+// ---- 画面を窓に出してみる。
+// ホストのふりをして親ウィンドウを作り、そこへプラグインの画面を貼る。
+// 音は出さないが、LCD が動くよう process を実時間で回しておく
+
+std::atomic<bool> g_view_quit{false};
+
+LRESULT CALLBACK host_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+	if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
+	if (msg == WM_SIZE) {
+		// 親が変わったら中身も合わせる（DAW も同じことをする）
+		HWND child = GetWindow(h, GW_CHILD);
+		if (child)
+			MoveWindow(child, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+		return 0;
+	}
+	return DefWindowProcA(h, msg, wp, lp);
+}
+
+int run_view(IComponent *comp, IAudioProcessor *proc, IEditController *ctrl, int seconds)
+{
+	std::printf("\n---- 画面を出してみる ----\n");
+	if (!ctrl) { std::printf("NG: IEditController が無い\n"); return 1; }
+
+	IPlugView *view = ctrl->createView(ViewType::kEditor);
+	if (!view) { std::printf("NG: 画面を作れない\n"); return 1; }
+	std::printf("OK: createView\n");
+
+	if (view->isPlatformTypeSupported(kPlatformTypeHWND) != kResultTrue) {
+		std::printf("NG: HWND に対応していない\n");
+		view->release();
+		return 1;
+	}
+	ViewRect vr{};
+	view->getSize(&vr);
+	std::printf("OK: 大きさ %d × %d、伸縮 %s\n", vr.getWidth(), vr.getHeight(),
+	            view->canResize() == kResultTrue ? "できる" : "できない");
+
+	WNDCLASSA wc{};
+	wc.lpfnWndProc   = host_proc;
+	wc.hInstance     = GetModuleHandleA(nullptr);
+	wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
+	wc.lpszClassName = "SMU2000ProbeHost";
+	RegisterClassA(&wc);
+
+	RECT want{ 0, 0, vr.getWidth(), vr.getHeight() };
+	AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
+	HWND host = CreateWindowA("SMU2000ProbeHost", "S-MU2000 probe host",
+	                          WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+	                          want.right - want.left, want.bottom - want.top,
+	                          nullptr, nullptr, wc.hInstance, nullptr);
+	if (!host) { std::printf("NG: 親の窓を作れない\n"); view->release(); return 1; }
+
+	if (view->attached(host, kPlatformTypeHWND) != kResultOk) {
+		std::printf("NG: attached\n");
+		DestroyWindow(host);
+		view->release();
+		return 1;
+	}
+	std::printf("OK: attached\n");
+	ShowWindow(host, SW_SHOW);
+
+	// LCD が動くよう、実時間で process を回す
+	std::thread pump([&] {
+		std::vector<float> l(512), r(512);
+		float *ch[2] = { l.data(), r.data() };
+		AudioBusBuffers ab{};
+		ab.numChannels = 2; ab.channelBuffers32 = ch;
+		ProcessData pd{};
+		pd.symbolicSampleSize = kSample32;
+		pd.numSamples = 512; pd.numOutputs = 1; pd.outputs = &ab;
+		while (!g_view_quit.load()) {
+			proc->process(pd);
+			Sleep(11);                     // 512 / 44100 ≒ 11.6ms
+		}
+	});
+
+	const DWORD end = GetTickCount() + DWORD(seconds) * 1000;
+	MSG msg;
+	while (GetTickCount() < end) {
+		while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
+			if (msg.message == WM_QUIT) goto stop;
+			TranslateMessage(&msg);
+			DispatchMessageA(&msg);
+		}
+		Sleep(10);
+	}
+stop:
+	g_view_quit.store(true);
+	pump.join();
+
+	view->removed();
+	std::printf("OK: removed\n");
+	DestroyWindow(host);
+	view->release();
+	std::printf("---- 画面はここまで ----\n");
+	return 0;
+}
 
 int run_torture(IPluginFactory *fac, const TUID cid)
 {
@@ -397,11 +499,14 @@ int main(int argc, char **argv)
 	int block = 512;
 	double extra = 3.0;      // 曲の後ろに足す残響ぶん
 	bool torture = false;
+	int  view_seconds = 0;
 	for (int i = 2; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--rate") && i + 1 < argc) rate = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--block") && i + 1 < argc) block = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--tail") && i + 1 < argc) extra = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--torture")) torture = true;
+		else if (!std::strcmp(argv[i], "--view")) view_seconds =
+		    (i + 1 < argc && argv[i + 1][0] != '-') ? std::atoi(argv[++i]) : 20;
 		else if (mid.empty()) mid = argv[i];
 		else if (wav.empty()) wav = argv[i];
 	}
@@ -505,6 +610,18 @@ int main(int argc, char **argv)
 	proc->setProcessing(true);
 	std::printf("遅れ %u サンプル / 残響 %u サンプル\n",
 	            proc->getLatencySamples(), proc->getTailSamples());
+
+	if (view_seconds > 0) {
+		proc->setProcessing(false);
+		const int rc = run_view(comp, proc, ctrl, view_seconds);
+		comp->setActive(false);
+		comp->terminate();
+		if (proc) proc->release();
+		if (ctrl) ctrl->release();
+		if (map)  map->release();
+		comp->release();
+		return rc;
+	}
 
 	if (torture) {
 		proc->setProcessing(false);

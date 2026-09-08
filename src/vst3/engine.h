@@ -13,6 +13,9 @@
 
 #pragma once
 
+#include "ui/bridge.h"
+#include "ui/driver.h"
+
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -62,7 +65,10 @@ public:
 	// n サンプルぶん作る。左右は別々の配列（VST3 はそういう渡し方をする）
 	void fill(float *left, float *right, int n);
 
-	// 記録（%LOCALAPPDATA%\S-MU2000\log.txt）へ 1 行書く。画面が無いのでここが窓口
+	// パネルの画面と触れ合う口。ボタンは画面から、LCD の写しはこちらから
+	ui::bridge &panel() { return m_bridge; }
+
+	// 記録（%LOCALAPPDATA%\S-MU2000\log.txt）へ 1 行書く
 	void log_line(const char *text);
 
 	// 再生位置が飛んだ、止まった等。変換器の中身だけ捨てる
@@ -100,6 +106,9 @@ private:
 	double  m_cutoff = 1.0;
 	bool    m_direct = true;       // 変換なし
 	uint32_t m_latency = 0;
+
+	ui::bridge m_bridge;
+	ui::driver m_drv;
 
 	// 起動前に来た MIDI。音声スレッドしか触らない
 	std::vector<uint8_t> m_pending;

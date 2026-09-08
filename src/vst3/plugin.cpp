@@ -16,6 +16,7 @@
 // 教えてやる必要がある。受け取った側でまた MIDI のバイト列に組み直して音源へ渡す。
 
 #include "engine.h"
+#include "view.h"
 
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/base/ibstream.h"
@@ -89,7 +90,8 @@ void set_str(String128 dst, const char *ascii)
 // ---- 本体
 
 class mu_plugin : public IComponent, public IAudioProcessor,
-                  public IEditController, public IMidiMapping
+                  public IEditController, public IMidiMapping,
+                  public smu2000::vst3::gain_owner
 {
 public:
 	mu_plugin()
@@ -440,7 +442,17 @@ public:
 
 	tresult PLUGIN_API setComponentHandler(IComponentHandler *) override { return kResultOk; }
 
-	IPlugView *PLUGIN_API createView(FIDString) override { return nullptr; }
+	// 画面。実機のフロントパネル風。中身は gui.exe と同じ ui::panel
+	IPlugView *PLUGIN_API createView(FIDString name) override
+	{
+		if (name && std::strcmp(name, ViewType::kEditor) != 0)
+			return nullptr;
+		return new smu2000::vst3::plug_view(m_engine, *this);
+	}
+
+	// gain_owner。画面の音量つまみは Output と同じ値を動かす
+	float ui_gain() const override { return m_gain.load(); }
+	void  set_ui_gain(float g) override { m_gain.store(std::clamp(g, 0.0f, 1.0f)); }
 
 	// ---- IMidiMapping
 

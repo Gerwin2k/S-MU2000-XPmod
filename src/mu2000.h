@@ -43,6 +43,8 @@ public:
 	void set_program_rom(u8rom p);
 	void set_wave_rom(u8rom p);
 	void set_sintab_rom(u16rom p);
+	u8rom  lcd_font()    const { return m_lcd_font; }
+	void set_lcd_font(u8rom p);
 
 	// CPU から見えるままの 4MB（MU2000 リポジトリの roms/mu2000_flash.bin）
 	bool load_program(const std::string &path);
@@ -144,7 +146,7 @@ private:
 	u8  m_sws[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	u8   ledsw_r() const;
 	u16 m_pe = 0;
-	std::vector<u8> m_lcd_font;   // HD44780 の CGROM 4KB
+	u8rom m_lcd_font;             // HD44780 の CGROM 4KB
 
 	u16  lcd_port_r();
 	void lcd_port_w(u16 data);

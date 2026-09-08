@@ -32,8 +32,25 @@ public:
 
 	void reset();
 
-	// S-MU2000: swp30 が machine() を使うのは乱数のためだけ。
-	// MAME と同じ数列でないと波形が一致しないので、同じ実装を持たせる。
+	// S-MU2000: swp30 が乱数を使うのは 2 か所だけ
+	// （LFO のランダム波形と MEG のノイズ）。
+	//
+	// MAME は machine の 1 本の数列を全デバイスで分け合うが、こちらは
+	// **チップごとに数列を持つ**。MU2000 の SWP30 は 2 個あり、片方を別の
+	// スレッドで回しているので、1 本を分け合うと
+	//   ・どちらがどの値を引くかが実行のたびに変わり、出力が再現しない
+	//   ・同じ変数を 2 スレッドで読み書きする競合そのものになる
+	// 使い道が雑音と LFO の初期位相なので、数列が MAME と違っても
+	// 鳴る音は変わらない。種はチップごとに分けてある。
+	// 数列の作り方は MAME の running_machine::rand() と同じ
+	u32 rand()
+	{
+		m_rand_seed = 1664525 * m_rand_seed + 1013904223;
+		// 下位ビットは周期が短くよく使われるので 16bit 回転して返す
+		return (m_rand_seed >> 16) | (m_rand_seed << 16);
+	}
+	void set_rand_seed(u32 seed) { m_rand_seed_base = seed; m_rand_seed = seed; }
+
 	running_machine &machine() { return m_machine; }
 
 	// 1 サンプル進めて、DAC 出力 2ch を返す
@@ -238,10 +255,10 @@ private:
 		s8 m_pitch_depth;
 
 		void clear();
-		void keyon(running_machine &machine);
+		void keyon(swp30_device &swp);
 		u16 get_amplitude() const;
 		s16 get_pitch() const;
-		void step(running_machine &machine);
+		void step(swp30_device &swp);
 
 		void type_step_pitch_w(u16 data);
 		void amplitude_w(u16 data);
@@ -341,6 +358,8 @@ private:
 
 	// S-MU2000: address_space の代わりにフラットな領域を直接持つ
 	running_machine m_machine;
+	// このチップだけの乱数。reset で種に戻す
+	u32 m_rand_seed = 0x9d14abd7, m_rand_seed_base = 0x9d14abd7;
 	region_ptr<u16> m_sintab;
 	std::vector<u16> m_reverb_ram;       // リバーブ RAM（18bit 空間）
 

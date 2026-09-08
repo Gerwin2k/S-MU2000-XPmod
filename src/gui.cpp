@@ -15,6 +15,7 @@
 #include "mu2000.h"
 #include "ui/audio_out.h"
 #include "ui/bridge.h"
+#include "ui/driver.h"
 #include "ui/midi_in.h"
 #include "ui/panel.h"
 #include "ui/png.h"
@@ -43,13 +44,7 @@ struct engine {
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
 	std::string      message = "起動中...";
 
-	// ホイールで VALUE を叩くための小さな状態
-	int  tap_left = 0;                // 押し続ける残りサンプル
-	int  gap_left = 0;
-	mu2000::button tap_button = mu2000::button::count;
-
-	u64 since_publish = 0;
-	u64 last_applied = 0;
+	ui::driver drv;
 
 	engine(ui::bridge &b, ui::midi_in &m) : br(b), midi(m) {}
 
@@ -85,21 +80,10 @@ struct engine {
 
 	void publish()
 	{
-		ui::snapshot s;
-		hd44780_device &lcd = mu.lcd();
-		const u8 *img = lcd.render();
-		const int cols = lcd.line_size();
-		for (int row = 0; row < ui::LCD_ROWS; row++)
-			for (int col = 0; col < ui::LCD_COLS; col++)
-				for (int y = 0; y < ui::CELL_H; y++)
-					s.dots[(row * ui::LCD_COLS + col) * ui::CELL_H + y] =
-						img[16 * (row * cols + col) + y];
-		s.leds   = mu.leds();
-		s.lcd_on = lcd.display_on();
-		s.ready  = state.load() == 1;
-		if (state.load() != 1)
-			std::snprintf(s.message, sizeof(s.message), "%s", message.c_str());
-		br.publish(s);
+		if (state.load() == 1)
+			ui::driver::publish_now(mu, br, true, nullptr);
+		else
+			ui::driver::publish_message(br, message.c_str());
 	}
 
 	// 音声デバイスに頼まれた分だけ進める
@@ -110,14 +94,7 @@ struct engine {
 			return;
 		}
 
-		// 画面から押されているボタンを反映する
-		const u64 want = br.buttons();
-		if (want != last_applied) {
-			for (int i = 0; i < int(mu2000::button::count); i++)
-				if (((want ^ last_applied) >> i) & 1)
-					mu.set_button(mu2000::button(i), ((want >> i) & 1) != 0);
-			last_applied = want;
-		}
+		drv.apply_buttons(mu, br);
 
 		u8 b;
 		while (midi.pop(b))
@@ -126,23 +103,7 @@ struct engine {
 		const float g = br.gain();
 
 		for (u32 i = 0; i < n; i++) {
-			// ホイールぶんの VALUE 叩き。押し 30ms、離し 20ms
-			if (tap_left > 0) {
-				if (--tap_left == 0) {
-					mu.set_button(tap_button, false);
-					gap_left = int(0.020 * RATE);
-				}
-			} else if (gap_left > 0) {
-				--gap_left;
-			} else {
-				const int step = br.take_turn();
-				if (step) {
-					tap_button = (step > 0) ? mu2000::button::value_plus
-					                        : mu2000::button::value_minus;
-					mu.set_button(tap_button, true);
-					tap_left = int(0.030 * RATE);
-				}
-			}
+			drv.tick_wheel(mu, br, RATE);
 
 			s32 l = 0, r = 0;
 			mu.run_sample(l, r);
@@ -152,12 +113,7 @@ struct engine {
 			out[i * 2 + 1] = s16(r < -32768 ? -32768 : r > 32767 ? 32767 : r);
 		}
 
-		// 画面へ。25ms ごとで十分
-		since_publish += n;
-		if (since_publish >= RATE / 40) {
-			since_publish = 0;
-			publish();
-		}
+		drv.publish(mu, br, n, RATE, true, nullptr);
 	}
 };
 

@@ -173,6 +173,7 @@ namespace {
 struct rom_set {
 	mu2000::u8rom  prog, wave;
 	mu2000::u16rom sintab;
+	mu2000::u8rom  font;
 	std::string    warn;
 };
 
@@ -221,10 +222,12 @@ void engine::boot()
 		m_message = "ROM が見つからない。探した場所:\n" + tried +
 		            "環境変数 S_MU2000_ROMS で場所を指定できる";
 		logf("ROM が見つからない。探した場所:\n%s", tried.c_str());
+		ui::driver::publish_message(m_bridge, "ROM が見つからない");
 		m_state.store(status::failed, std::memory_order_release);
 		return;
 	}
 	logf("ROM: %s", dir.c_str());
+	ui::driver::publish_message(m_bridge, "ROM 読み込み中");
 
 	mu2000 *mu = new mu2000;
 	std::string warn;
@@ -240,6 +243,7 @@ void engine::boot()
 			mu->set_program_rom(shared->prog);
 			mu->set_wave_rom(shared->wave);
 			mu->set_sintab_rom(shared->sintab);
+			mu->set_lcd_font(shared->font);
 			warn = shared->warn;
 			logf("ROM は読み込み済みのものを借りた");
 		} else {
@@ -255,10 +259,15 @@ void engine::boot()
 				warn = mu->error();
 				logf("警告: %s", warn.c_str());
 			}
+			// LCD の字の絵。無くても音は出るが、画面に何も映らなくなる
+			if (!mu->load_lcd_font(dir + "\\hd44780u_b04.bin") &&
+			    !mu->load_lcd_font(dir + "\\standin\\hd44780u_b04.bin"))
+				logf("警告: %s", mu->error().c_str());
 			shared = std::make_shared<rom_set>();
 			shared->prog   = mu->program_rom();
 			shared->wave   = mu->wave_rom();
 			shared->sintab = mu->sintab_rom();
+			shared->font   = mu->lcd_font();
 			shared->warn   = warn;
 			g_rom_dir = dir;
 			g_roms    = shared;
@@ -269,6 +278,8 @@ void engine::boot()
 
 	mu->set_threaded(true);
 	mu->reset();
+
+	ui::driver::publish_message(m_bridge, "MU2000 起動中");
 
 	// 起動を待つ。ここを待たずに MIDI を流すと音色指定が全部捨てられる
 	LARGE_INTEGER t0;
@@ -303,6 +314,7 @@ void engine::boot()
 	m_message = warn.empty() ? std::string("ROM: ") + dir
 	                         : std::string("ROM: ") + dir + "\n警告: " + warn;
 	m_state.store(status::ready, std::memory_order_release);
+	ui::driver::publish_now(*m_mu, m_bridge, true, nullptr);
 }
 
 
@@ -347,6 +359,7 @@ void engine::flush_resampler()
 
 void engine::one_sample(float &l, float &r)
 {
+	m_drv.tick_wheel(*m_mu, m_bridge, u32(NATIVE_RATE));
 	s32 li = 0, ri = 0;
 	m_mu->run_sample(li, ri);
 	const float k = 1.0f / float(mu2000::DAC_FULL_SCALE);
@@ -390,6 +403,8 @@ void engine::fill(float *left, float *right, int n)
 		std::memset(right, 0, size_t(n) * sizeof(float));
 		return;
 	}
+	m_drv.apply_buttons(*m_mu, m_bridge);
+
 	if (!m_pending.empty()) {
 		for (uint8_t b : m_pending)
 			m_mu->midi_in(b);
@@ -399,6 +414,7 @@ void engine::fill(float *left, float *right, int n)
 	if (m_direct) {
 		for (int i = 0; i < n; i++)
 			one_sample(left[i], right[i]);
+		m_drv.publish(*m_mu, m_bridge, u32(n), u32(NATIVE_RATE), true, nullptr);
 		return;
 	}
 
@@ -432,6 +448,8 @@ void engine::fill(float *left, float *right, int n)
 		right[i] = std::clamp(float(ar), -1.0f, 1.0f);
 		m_pos += m_step;
 	}
+
+	m_drv.publish(*m_mu, m_bridge, u32(n), u32(NATIVE_RATE), true, nullptr);
 
 	// 桁が落ちる前に原点を戻す。RING の倍数だけずらせば環の並びは変わらない
 	if (m_pos > double(1 << 28)) {
