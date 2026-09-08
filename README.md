@@ -54,6 +54,7 @@ build/gui.exe    --list                              MIDI の入口と出口の�
 選んだものは `%LOCALAPPDATA%\S-MU2000\gui.ini` に覚えておく。
 
 画面の中身は [doc/gui.md](doc/gui.md)。3 面ある。
+パネルの絵を自分で直すなら [doc/panel-editing.md](doc/panel-editing.md)。
 
 * **パネル** … 実機のフロントパネル（LCD・ボタン 35 個・大きなダイヤル）
 * **エディタ** … SOL2 風。パート別のフィルタ・EG・エフェクト送り・音色

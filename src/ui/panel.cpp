@@ -847,11 +847,49 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	draw_tabs(dc);
 }
 
+// 論理座標の方眼。50 ごとに線、100 ごとに濃い線と数字を入れる。
+// 絵の位置を直すときは、これを出して読み取ってから表を書き換える
+void panel::draw_grid(HDC dc) const
+{
+	HPEN thin = CreatePen(PS_SOLID, 1, RGB(255, 80, 80));
+	HPEN bold = CreatePen(PS_SOLID, 1, RGB(255, 0, 0));
+	HGDIOBJ op = SelectObject(dc, thin);
+	SetBkMode(dc, TRANSPARENT);
+
+	for (int x = 0; x <= LOGICAL_W; x += 50) {
+		SelectObject(dc, (x % 100) ? thin : bold);
+		const POINT a = at(x, 0), b = at(x, LOGICAL_H);
+		MoveToEx(dc, a.x, a.y, nullptr);
+		LineTo(dc, b.x, b.y);
+	}
+	for (int y = 0; y <= LOGICAL_H; y += 50) {
+		SelectObject(dc, (y % 100) ? thin : bold);
+		const POINT a = at(0, y), b = at(LOGICAL_W, y);
+		MoveToEx(dc, a.x, a.y, nullptr);
+		LineTo(dc, b.x, b.y);
+	}
+	for (int x = 0; x <= LOGICAL_W; x += 100)
+		for (int y = 0; y <= LOGICAL_H; y += 100) {
+			char n[32];
+			std::snprintf(n, sizeof(n), "%d,%d", x, y);
+			RECT r{ at(x + 2, y + 1).x, at(x + 2, y + 1).y,
+			        at(x + 60, y + 12).x, at(x + 60, y + 12).y };
+			text_in(dc, r, n, RGB(200, 0, 0), m_font_small,
+			        DT_LEFT | DT_TOP | DT_SINGLELINE);
+		}
+
+	SelectObject(dc, op);
+	DeleteObject(thin);
+	DeleteObject(bold);
+}
+
 void panel::paint(HDC dc, const snapshot &s, u64 pressed, const char *status) const
 {
 	if (m_page == page::editor)       paint_editor(dc, status);
 	else if (m_page == page::effects) paint_effects(dc, status);
 	else                              paint_front(dc, s, pressed, m_volume_now, status);
+	if (m_grid)
+		draw_grid(dc);
 }
 
 } // namespace ui

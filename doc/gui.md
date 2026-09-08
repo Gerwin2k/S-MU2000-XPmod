@@ -9,7 +9,11 @@ build/gui.exe <rom ディレクトリ> [--midi 番号] [--midiout 番号]
               [--latency ミリ秒] [--size 1400x360]
 build/gui.exe --list                      MIDI の入口と出口の一覧
 build/gui.exe <rom> --boot --shot 絵.png   窓を出さずに絵だけ書き出す
+build/gui.exe --shot 絵.png --grid        ROM 無しで絵だけ。方眼を重ねる
 ```
+
+パネルの絵を自分で直すなら [doc/panel-editing.md](panel-editing.md)。
+位置はぜんぶ `src/ui/panel.cpp` の先頭の表にある。
 
 ## MIDI の口を選ぶ
 

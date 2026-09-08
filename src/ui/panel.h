@@ -79,6 +79,9 @@ public:
 	// 音量つまみの見え方。音源側の値をそのまま渡してもらう
 	void set_volume(double v) { m_volume_now = v; }
 
+	// 論理座標の方眼を重ねる。絵の位置を直すときの物差し（doc/panel-editing.md）
+	void set_grid(bool on) { m_grid = on; }
+
 	// 実際の窓の座標から、触れる場所を探す
 	const spot *hit(int x, int y) const;
 
@@ -115,6 +118,7 @@ private:
 	void paint_effects(HDC dc, const char *status) const;
 
 	void draw_lcd(HDC dc, const snapshot &s) const;
+	void draw_grid(HDC dc) const;
 	void draw_button(HDC dc, const spot &sp, bool down) const;
 	void draw_wheel(HDC dc, int angle) const;
 	void draw_volume(HDC dc, double v) const;
@@ -155,6 +159,7 @@ private:
 	HFONT m_font_label = nullptr, m_font_small = nullptr;
 	// 目盛りの番号用。バー 1 本ぶんの幅に 2 桁を収める
 	HFONT m_font_tiny  = nullptr;
+	bool  m_grid = false;
 };
 
 } // namespace ui

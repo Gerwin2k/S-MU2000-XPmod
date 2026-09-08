@@ -476,10 +476,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 // ---- 窓を出さずに絵だけ書き出す。見た目を直すときに使う
 
-int shot(const std::string &path, int w, int h, ui::bridge &br)
+int shot(const std::string &path, int w, int h, ui::bridge &br, bool grid)
 {
 	ui::panel p;
 	p.resize(w, h);
+	p.set_grid(grid);
 
 	BITMAPINFO bi{};
 	bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -523,6 +524,7 @@ int main(int argc, char **argv)
 	int mout_dev = -2;
 	int latency = 30;
 	int win_w = 1400, win_h = 360;
+	bool grid = false;
 	bool boot_for_shot = false;
 	std::string shot_mid;
 	double shot_secs = 0.0;
@@ -549,6 +551,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
+		else if (!std::strcmp(argv[i], "--grid")) grid = true;
 		else if (!std::strcmp(argv[i], "--mid") && i + 2 < argc) {
 			shot_mid = argv[++i];
 			shot_secs = std::atof(argv[++i]);
@@ -569,7 +572,7 @@ int main(int argc, char **argv)
 		ui::snapshot s;
 		std::snprintf(s.message, sizeof(s.message), "S-MU2000");
 		br.publish(s);
-		return shot(shot_path, win_w, win_h, br);
+		return shot(shot_path, win_w, win_h, br, grid);
 	}
 
 	if (dir.empty()) {
@@ -623,7 +626,7 @@ int main(int argc, char **argv)
 		}
 
 		eng.publish();
-		return shot(shot_path, win_w, win_h, br);
+		return shot(shot_path, win_w, win_h, br, grid);
 	}
 
 	// ---- 窓を出す
