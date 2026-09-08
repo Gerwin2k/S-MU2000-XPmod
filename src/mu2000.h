@@ -45,6 +45,8 @@ public:
 	void set_sintab_rom(u16rom p);
 	u8rom  lcd_font()    const { return m_lcd_font; }
 	void set_lcd_font(u8rom p);
+	// 代用フォントに欠けているレベルメータの字を規則から起こす
+	static void fill_missing_glyphs(std::vector<u8> &rom);
 
 	// CPU から見えるままの 4MB（MU2000 リポジトリの roms/mu2000_flash.bin）
 	bool load_program(const std::string &path);

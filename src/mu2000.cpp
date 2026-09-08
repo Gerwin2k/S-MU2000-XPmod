@@ -295,9 +295,62 @@ bool mu2000::load_lcd_font(const std::string &path)
 	return true;
 }
 
+// 代用の字の絵に足りない分を起こす。
+//
+// MU2000 の firmware は、LCD 下段の左 9 マスにレベルメータを描く。
+// 1 マスに 2 本のバーが入っていて、文字コードが
+//
+//     0x89 + 9 × 左の高さ + 右の高さ      （高さは 0-8）
+//
+// になっている。無音だと全マス 0x89（両方 0）、鳴らすと 0xcf（両方いっぱい）
+// まで上がる。実機の CGROM にはその絵が入っているが、こちらが持っている
+// 代用フォントは ASCII しか無くて空白になってしまうので、規則から起こす。
+// 0x80-0x88 は幅いっぱいの 1 本バーとして使われている。
+//
+// **本物の CGROM（MAME の mulcd.zip の hd44780u_b04.bin）を置けば、
+// そちらが優先される**。空いているところだけ埋める
+void mu2000::fill_missing_glyphs(std::vector<u8> &rom)
+{
+	auto blank = [&](int code) {
+		for (int y = 0; y < 8; y++)
+			if (rom[code * 16 + y] & 0x1f)
+				return false;
+		return true;
+	};
+	auto bar = [&](int code, int left, int right) {
+		for (int y = 0; y < 8; y++) {
+			u8 v = 0;
+			if (left  > 0 && y >= 8 - left)  v |= 0x18;   // 左 2 ドット
+			if (right > 0 && y >= 8 - right) v |= 0x03;   // 右 2 ドット
+			rom[code * 16 + y] = v;
+		}
+	};
+	auto wide = [&](int code, int h) {
+		for (int y = 0; y < 8; y++)
+			rom[code * 16 + y] = u8((h > 0 && y >= 8 - h) ? 0x1f : 0);
+	};
+
+	for (int h = 0; h <= 8; h++)
+		if (blank(0x80 + h))
+			wide(0x80 + h, h);
+
+	for (int a = 0; a <= 8; a++)
+		for (int b = 0; b <= 8; b++) {
+			const int code = 0x89 + a * 9 + b;
+			if (code <= 0xff && blank(code))
+				bar(code, a, b);
+		}
+}
+
 void mu2000::set_lcd_font(u8rom p)
 {
-	m_lcd_font = std::move(p);
+	if (p && p->size() >= 0x1000) {
+		auto patched = std::make_shared<std::vector<u8>>(*p);
+		fill_missing_glyphs(*patched);
+		m_lcd_font = std::move(patched);
+	} else {
+		m_lcd_font = std::move(p);
+	}
 	if (m_lcd_font)
 		m_lcd.set_cgrom(m_lcd_font->data(), m_lcd_font->size());
 }

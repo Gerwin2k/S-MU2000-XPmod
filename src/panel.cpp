@@ -14,6 +14,7 @@
 // 24 桁より先には何も書かれないことを起動画面で確かめた。
 
 #include "mu2000.h"
+#include "smf.h"
 
 #include <cstdio>
 #include <cstring>
@@ -102,6 +103,23 @@ void show_lcd(mu2000 &mu)
 		std::printf("\n");
 	}
 
+	// 生の DDRAM を 40 桁ぶん全部。窓の外に何が書かれているかを見る
+	std::printf("\nDDRAM 40 桁ぶん（. は空白、# は 0x20 未満の作り字）\n");
+	for (int line = 0; line < lines; line++) {
+		std::printf("  %d |", line);
+		for (int pos = 0; pos < 40; pos++) {
+			const u8 c = dd[line * 0x40 + pos];
+			std::putchar(c == 0x20 ? '.' : (c < 0x20 ? '#' : (c < 0x7f ? char(c) : '?')));
+		}
+		std::printf("|\n");
+	}
+	for (int line = 0; line < lines; line++) {
+		std::printf("  %d 16進:", line);
+		for (int pos = 0; pos < 26; pos++)
+			std::printf(" %02x", dd[line * 0x40 + pos]);
+		std::printf("\n");
+	}
+
 	const u16 led = mu.leds();
 	std::printf("LED:");
 	for (int i = 0; i < 10; i++)
@@ -119,6 +137,9 @@ int main(int argc, char **argv)
 	int turn = 0;
 	double hold = 0.0;
 	std::string holdkey;
+	std::string midfile;
+	double play = 0.0;
+	bool watch = false;
 	double settle = 1.0;
 
 	for (int i = 1; i < argc; i++) {
@@ -127,6 +148,8 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--turn") && i + 1 < argc) turn = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--hold") && i + 2 < argc) { holdkey = argv[++i]; hold = std::atof(argv[++i]); }
 		else if (!std::strcmp(argv[i], "--settle") && i + 1 < argc) settle = std::atof(argv[++i]);
+		else if (!std::strcmp(argv[i], "--mid") && i + 2 < argc) { midfile = argv[++i]; play = std::atof(argv[++i]); }
+		else if (!std::strcmp(argv[i], "--watch")) watch = true;
 		else if (dir.empty()) dir = argv[i];
 	}
 
@@ -200,6 +223,47 @@ int main(int argc, char **argv)
 				}
 			if (!found)
 				std::fprintf(stderr, "知らないボタン: %s\n", k.c_str());
+		}
+	}
+
+	if (!midfile.empty()) {
+		static u32 seen[80][256] = {};
+		std::vector<smf::event> evs;
+		std::string err;
+		if (!smf::load(midfile, evs, err)) {
+			std::fprintf(stderr, "%s\n", err.c_str());
+		} else {
+			std::printf("MIDI %zu 件を %.1f 秒まで流す\n", evs.size(), play);
+			size_t at = 0;
+			const size_t total = size_t(play * RATE);
+			s32 l, r;
+			for (size_t i = 0; i < total; i++) {
+				const double now = double(i) / RATE;
+				while (at < evs.size() && evs[at].time <= now) {
+					for (u8 b : evs[at].bytes) mu.midi_in(b);
+					at++;
+				}
+				mu.run_sample(l, r);
+				// どのマスにどの文字コードが出たかを数える
+				if (watch && (i % 441) == 0) {
+					const u8 *dd = mu.lcd().ddram();
+					for (int ln = 0; ln < 2; ln++)
+						for (int pos = 0; pos < 40; pos++)
+							seen[ln * 40 + pos][dd[ln * 0x40 + pos]]++;
+				}
+			}
+		}
+		if (watch) {
+			std::printf("\n出た文字コード（マス、コードと回数）\n");
+			for (int c = 0; c < 80; c++) {
+				int kinds = 0;
+				for (int v = 0; v < 256; v++) if (seen[c][v]) kinds++;
+				if (kinds <= 1) continue;
+				std::printf("  %d:%02d ", c / 40, c % 40);
+				for (int v = 0; v < 256; v++)
+					if (seen[c][v]) std::printf(" %02x*%u", v, seen[c][v]);
+				std::printf("\n");
+			}
 		}
 	}
 

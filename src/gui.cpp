@@ -13,6 +13,7 @@
 // ジョグダイヤルは無く VALUE -/+ のボタンなので、回した分だけ叩いている。
 
 #include "mu2000.h"
+#include "smf.h"
 #include "ui/audio_out.h"
 #include "ui/bridge.h"
 #include "ui/driver.h"
@@ -327,6 +328,8 @@ int main(int argc, char **argv)
 	int latency = 30;
 	int win_w = 1400, win_h = 360;
 	bool boot_for_shot = false;
+	std::string shot_mid;
+	double shot_secs = 0.0;
 
 	for (int i = 1; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--list")) {
@@ -343,6 +346,11 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
+		else if (!std::strcmp(argv[i], "--mid") && i + 2 < argc) {
+			shot_mid = argv[++i];
+			shot_secs = std::atof(argv[++i]);
+			boot_for_shot = true;
+		}
 		else if (!std::strcmp(argv[i], "--size") && i + 1 < argc) {
 			if (std::sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) { win_w = 1400; win_h = 360; }
 		}
@@ -378,6 +386,36 @@ int main(int argc, char **argv)
 	if (!shot_path.empty()) {
 		if (!eng.boot()) { std::fprintf(stderr, "%s\n", eng.message.c_str()); return 1; }
 		eng.state.store(1);
+
+		// 起動直後は表示が動いている途中。少し空回しして落ち着かせる
+		{
+			s32 l, r;
+			for (size_t i = 0; i < size_t(2.0 * RATE); i++)
+				eng.mu.run_sample(l, r);
+		}
+
+		// レベルメータを出したいので、指定があれば MIDI を流しておく
+		if (!shot_mid.empty()) {
+			std::vector<smf::event> evs;
+			std::string err;
+			if (!smf::load(shot_mid, evs, err)) {
+				std::fprintf(stderr, "%s\n", err.c_str());
+			} else {
+				std::printf("MIDI %zu 件を %.1f 秒ぶん流す\n", evs.size(), shot_secs);
+				size_t at = 0;
+				s32 l, r;
+				for (size_t i = 0; i < size_t(shot_secs * RATE); i++) {
+					const double now = double(i) / RATE;
+					while (at < evs.size() && evs[at].time <= now) {
+						for (u8 b : evs[at].bytes)
+							eng.mu.midi_in(b);
+						at++;
+					}
+					eng.mu.run_sample(l, r);
+				}
+			}
+		}
+
 		eng.publish();
 		return shot(shot_path, win_w, win_h, br);
 	}

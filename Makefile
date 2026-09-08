@@ -64,7 +64,7 @@ $(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/s
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 # panel はフロントパネル（LCD とボタン）を文字だけで動かす
-$(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/panel.o
+$(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/panel.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -73,7 +73,7 @@ UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp 
            src/ui/audio_out.cpp src/ui/midi_in.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 
-$(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(UI_OBJS) $(BUILD)/src/gui.o
+$(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(BUILD)/src/gui.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32
 
