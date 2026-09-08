@@ -473,21 +473,27 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			bar(BIT(seg, 6),  x,         mid - t / 2,  x + w,     mid + t - t / 2);  // g
 		};
 
-		// 送り量の扇。**半円ではなく縦に細長い楕円**を 8 枚重ねたもので、
-		// 細長い Wi-Fi の印のように見える。下から N 枚を点ける
+		// 送り量の扇。**半円ではなく、中心角 45 度くらいの細い扇**を
+		// 8 枚重ねたもの。細長い Wi-Fi の印のように見える。下から N 枚を点ける
 		auto fan = [&](int which, const bool *on8) {
 			const int w  = lw(which);
 			const int cx = lx(which) + w / 2;
 			const int cy = sy + seg_h - std::max(1, int(m_scale));
-			const int rx = w / 2;
+			// 45 度ぶんだけ描くので、いちばん外の弧が枠いっぱいになるよう
+			// 楕円は枠より大きく取る（sin 22.5 度 = 0.3827）
+			const double half = 22.5 * 3.14159265 / 180.0;
+			const int rx = int((w / 2) / std::sin(half));
 			const int ry = seg_h - std::max(1, int(m_scale));
 			for (int k = 0; k < 8; k++) {
-				const int ax = std::max(1, rx * (k + 1) / 8);
-				const int ay = std::max(1, ry * (k + 1) / 8);
+				const int ax = std::max(2, rx * (k + 1) / 8);
+				const int ay = std::max(2, ry * (k + 1) / 8);
+				const int ex = int(std::sin(half) * ax);
+				const int ey = int(std::cos(half) * ay);
 				HPEN p = CreatePen(PS_SOLID, std::max(1, int(1.2 * m_scale)),
 				                   on8[k] ? LCD_DOT : LCD_GHOST);
 				HGDIOBJ op = SelectObject(dc, p);
-				Arc(dc, cx - ax, cy - ay, cx + ax, cy + ay, cx + ax, cy, cx - ax, cy);
+				Arc(dc, cx - ax, cy - ay, cx + ax, cy + ay,
+				    cx + ex, cy - ey, cx - ex, cy - ey);
 				SelectObject(dc, op);
 				DeleteObject(p);
 			}

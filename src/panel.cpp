@@ -67,6 +67,23 @@ void tap(mu2000 &mu, mu2000::button b)
 	idle(mu, 0.12);
 }
 
+// 23 桁目の制御ビット（決まった形のセグメント）を 1 行にまとめて出す。
+// 列 A-D は bit3-bit0、行は上の桁の 0-7 と下の桁の 0-7 をつないだ 0-15
+void show_ctl(mu2000 &mu, const char *tag)
+{
+	const u8 *dd = mu.lcd().ddram();
+	const u8 *cg = mu.lcd().cgram();
+	std::printf("  %-22s ", tag);
+	for (int row = 0; row < 16; row++) {
+		const u8 code = dd[(row / 8) * 0x40 + 23];
+		const u8 v = (code < 8) ? cg[code * 8 + (row % 8)] : 0;
+		for (int col = 0; col < 4; col++)
+			std::putchar(BIT(v, 3 - col) ? '#' : '.');
+		std::putchar(' ');
+	}
+	std::printf("\n");
+}
+
 void show_lcd(mu2000 &mu)
 {
 	hd44780_device &lcd = mu.lcd();
@@ -228,9 +245,9 @@ int main(int argc, char **argv)
 			bool found = false;
 			for (const alias &a : ALIASES)
 				if (k == a.key) {
-					std::printf("\n--- %s ---\n", mu2000::button_name(a.b));
 					tap(mu, a.b);
 					idle(mu, 0.3);
+					show_ctl(mu, mu2000::button_name(a.b));
 					found = true;
 					break;
 				}
