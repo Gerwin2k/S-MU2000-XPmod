@@ -48,12 +48,22 @@ const char *CAT_LABEL[18] = {
 	"Synth effects", "Ethnic", "Percussive", "SFX", "Model excl.", "Drum",
 };
 
-// LCD の下に印刷されている見出し
-struct column { double x; const char *label; };
+// LCD の下段に並ぶもの。窓の内側の左端からの割合で置く。
+// 窓の下に印刷されている札も、ここから位置を取って揃える
+// 位置と幅は、上の面の**点 1 つぶん**を単位にした、窓の内側の左端からの
+// 数。実機の写真を測って割り出した（上の面は 17 桁 × 6 点 − 1 = 101 点）。
+//
+// 塊のあいだは 2 点、楽器のかたちの前は 3 点あける。
+// 塊の中の桁は**詰めて並べる**（上の面のように 1 点あけない）
+const int LOW_X[LOW_COUNT] = {  0, 12, 30, 45, 51, 56, 63, 70, 77, 84, 97 };
+const int LOW_W[LOW_COUNT] = { 10, 15, 14,  4,  4,  6,  6,  6,  6, 11,  3 };
+
+// 窓の下に印刷されている札。どの並びの真ん中に置くか
+struct column { int at; const char *label; };
 const column COLUMNS[] = {
-	{ 345, "PART" }, { 425, "BANK/PGM#" }, { 486, "VOL" }, { 514, "EXP" },
-	{ 540, "PAN" },  { 566, "REV" },       { 592, "CHO" }, { 618, "VAR" },
-	{ 645, "KEY" },
+	{ LOW_PART, "PART" }, { LOW_ICON, "BANK/PGM#" }, { LOW_VOL, "VOL" },
+	{ LOW_EXP,  "EXP"  }, { LOW_PAN,  "PAN" },       { LOW_REV, "REV" },
+	{ LOW_CHO,  "CHO"  }, { LOW_VAR,  "VAR" },       { LOW_KEY, "KEY" },
 };
 
 // 右上の 6 個。丸い押しボタンで、中に LED が入っている。
@@ -253,32 +263,44 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	round_box(dc, bez, RGB(60, 58, 52), RGB(110, 106, 96), int(5 * m_scale));
 	fill(dc, m_lcd, LCD_BACK);
 
-	// 実機の窓の中は 3 段になっている。
+	// 実機の窓は、DDRAM の桁がそのまま横一列に並んでいるのではない。
+	// ボタンを押して確かめた割り振りは（doc/gui.md）
 	//
-	//   1. 文字 2 行 × 20 桁。**行のあいだに隙間は無い**。レベルメータの
-	//      バーが上下にまたがって伸びるので、空けるとバーが切れる
-	//   2. 窓に印刷された目盛り（A1A2 と 1-32、BANK、PGM#）
-	//   3. 絵記号のセグメント部。DDRAM の 20-23 桁が当たる。
-	//      **こちらはマスのあいだにも隙間が無い**。楽器のかたちなどが
-	//      何マスにもまたがった 1 枚の絵になっているため
+	//   上の面（点の並び。2 行、桁のあいだは 1 点、**行のあいだは空けない**）
+	//     0-8   レベルメータ。1 マス 2 本で 18 本（A1 A2 と 1-16）
+	//     9-16  文字 8 桁。1 行目が音色名、2 行目が ▶000◀001
+	//           表示の仕方によっては、ここにも 19-32 番のバーが出る
+	//   下の面（別のところに出る）
+	//     行 0 の 17-18   部の番号「01」
+	//     行 1 の 17-19   「A01」
+	//     20-23（両行）   楽器のかたち。**点が縦に半分の細かさ**
+	//
+	//   行 0 の 19 桁目が何なのかは、まだ分かっていない
 	const int aw = m_lcd.right - m_lcd.left, ah = m_lcd.bottom - m_lcd.top;
 	const int pad = std::max(2, int(5 * m_scale));
 
-	const int text_cols = TEXT_COLS * (CELL_W + 1) - 1;   // 桁のあいだは 1 点空ける
-	const int seg_cols  = (LCD_COLS - TEXT_COLS) * CELL_W;
-	int d = std::max(1, (aw - pad * 2) / text_cols);
-	// 縦は 文字 16 点 + 目盛り + セグメント 16 点（1.3 倍）
-	while (d > 1 && d * 16 + d * 4 + int(d * 1.3) * 16 > ah - pad * 2)
+	// 点の大きさ。上の面 17 桁ぶんが横幅に収まるように決める
+	const int top_dots = TOP_COLS * (CELL_W + 1) - 1;      // 桁のあいだ 1 点
+	int d = std::max(1, (aw - pad * 2) / top_dots);
+	// 縦は 文字 16 点 ＋ 目盛り 6 点 ＋ 下の面 8 点
+	while (d > 1 && d * 16 + d * 6 + d * 8 > ah - pad * 2)
 		d--;
-	const int sd = std::max(1, int(d * 1.3));            // セグメント側の点
+	const int dot = std::max(1, d - std::max(1, d / 6));   // 点のあいだの隙間
 
-	const int x0 = m_lcd.left + pad;
-	const int y0 = m_lcd.top + pad;
-	const int dot = std::max(1, d - std::max(1, d / 6));
+	// 目盛りの帯は 2 段。上に目盛りと番号、下に MIC / BANK / PGM#
+	const int tick_h = std::max(2, int(2.5 * m_scale));
+	const int line_h = std::max(6, int(8.5 * m_scale));
+	const int scale_h = tick_h + line_h * 2;
+	const int stack_h = 16 * d + scale_h + 8 * d;
+	// 点は正方形のままにして、余った幅は左右に振り分ける
+	const int x0 = m_lcd.left + std::max(pad, (aw - top_dots * d) / 2);
+	const int y0 = m_lcd.top + std::max(pad, (ah - stack_h) / 2);
 
 	HBRUSH ghost = CreateSolidBrush(LCD_GHOST);
+	HBRUSH faint = CreateSolidBrush(RGB(147, 202, 45));    // 絵の区画の消え点
 	HBRUSH lit   = CreateSolidBrush(LCD_DOT);
 
+	// 1 マスぶんの点を描く。step は点の間隔、size は点の大きさ
 	auto cell = [&](int row, int col, int px, int py, int step, int size, HBRUSH back) {
 		const u8 *c = s.dots + (row * LCD_COLS + col) * CELL_H;
 		for (int y = 0; y < CELL_H; y++)
@@ -292,112 +314,134 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			}
 	};
 
-	// 1. 文字
+	// ---- 上の面。メータ 9 マス ＋ 文字 8 桁。行のあいだは空けない
 	for (int row = 0; row < LCD_ROWS; row++)
-		for (int col = 0; col < TEXT_COLS; col++)
+		for (int col = 0; col < TOP_COLS; col++)
 			cell(row, col, x0 + col * (CELL_W + 1) * d, y0 + row * CELL_H * d, d, dot, ghost);
 
-	// 2. 窓に印刷された目盛り。常に見えている
-	const int scale_y = y0 + 16 * d + d / 2;
+	// ---- 窓に印刷されている目盛り。A1 A2 と 1-32 で、バー 1 本に 1 目盛り。
+	// 実機は数字を全部刷ってあるが、この大きさだと潰れるので節目だけにする
+	const int scale_y = y0 + 16 * d;
 	{
-		RECT r{ x0, scale_y, x0 + int(28 * m_scale), scale_y + int(7 * m_scale) };
-		text_in(dc, r, "A1A2", RGB(70, 92, 30), m_font_small,
-		        DT_LEFT | DT_TOP | DT_SINGLELINE);
-		// メータ 9 マスのぶんに 1-32 の目盛りを振る
-		const int mx0 = x0 + int(30 * m_scale);
-		const int mx1 = x0 + 9 * (CELL_W + 1) * d + int(60 * m_scale);
 		HPEN p = CreatePen(PS_SOLID, 1, RGB(90, 118, 38));
 		HGDIOBJ op = SelectObject(dc, p);
-		for (int i = 0; i < 32; i++) {
-			const int tx = mx0 + (mx1 - mx0) * i / 32;
-			MoveToEx(dc, tx, scale_y, nullptr);
-			LineTo(dc, tx, scale_y + std::max(2, int(3 * m_scale)));
-			if ((i + 1) % 5 == 0 || i == 0) {
-				char n[8];
-				std::snprintf(n, sizeof(n), "%d", i + 1);
-				RECT t{ tx - int(6 * m_scale), scale_y + int(3 * m_scale),
-				        tx + int(6 * m_scale), scale_y + int(11 * m_scale) };
-				text_in(dc, t, n, RGB(70, 92, 30), m_font_small,
-				        DT_CENTER | DT_TOP | DT_SINGLELINE);
-			}
+		const int tick = tick_h;
+		for (int i = 0; i < TOP_COLS * 2; i++) {
+			// i 本目のバーは、マス i/2 の左半分か右半分
+			const int col = i / 2;
+			const int bx  = x0 + col * (CELL_W + 1) * d + ((i & 1) ? 3 * d : 0) + d / 2;
+			MoveToEx(dc, bx, scale_y, nullptr);
+			LineTo(dc, bx, scale_y + tick);
+
+			const int part = i - 1;                 // A1 A2 のぶんを引く
+			if (i >= 2 && part != 1 && part % 5 != 0)
+				continue;
+			char n[8];
+			std::snprintf(n, sizeof(n), i < 2 ? "A%d" : "%d", i < 2 ? i + 1 : part);
+			RECT t{ bx - int(8 * m_scale), scale_y + tick,
+			        bx + int(8 * m_scale), scale_y + tick + line_h };
+			text_in(dc, t, n, RGB(70, 92, 30), m_font_small,
+			        DT_CENTER | DT_TOP | DT_SINGLELINE);
 		}
 		SelectObject(dc, op);
 		DeleteObject(p);
 
-		RECT b{ x0 + 12 * (CELL_W + 1) * d, scale_y, x0 + 17 * (CELL_W + 1) * d,
-		        scale_y + int(7 * m_scale) };
+		// MIC は目盛りの帯の下の段、左端。実機もここに小さく出ている
+		const int line2 = scale_y + tick + line_h;
+		RECT mic{ x0, line2, x0 + int(20 * m_scale), line2 + line_h };
+		text_in(dc, mic, "MIC", RGB(70, 92, 30), m_font_small,
+		        DT_LEFT | DT_TOP | DT_SINGLELINE);
+
+		// BANK と PGM# は、文字 2 行目の桁に合わせて印刷されている
+		RECT b{ x0 + 10 * (CELL_W + 1) * d, line2, x0 + 14 * (CELL_W + 1) * d,
+		        line2 + line_h };
 		text_in(dc, b, "BANK", RGB(70, 92, 30), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
-		RECT g{ x0 + 16 * (CELL_W + 1) * d, scale_y, x0 + 20 * (CELL_W + 1) * d,
-		        scale_y + int(7 * m_scale) };
+		RECT g{ x0 + 14 * (CELL_W + 1) * d, line2, x0 + 18 * (CELL_W + 1) * d,
+		        line2 + line_h };
 		text_in(dc, g, "PGM#", RGB(70, 92, 30), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
 	}
 
-	// 3. 絵記号のセグメント部。**マスのあいだを空けない**。
-	// 窓の下に印刷されている札（PART / VOL / EXP / PAN / REV / CHO / VAR / KEY）と
-	// 位置を揃える。実機もその並びになっている
-	const int sy = scale_y + int(11 * m_scale);
-	const int seg_h = 16 * sd;
+	// ---- 下の面
+	const int sy = scale_y + scale_h;
+	const int seg_h = 8 * d;                       // 文字 1 行ぶんの高さ
+	auto lx = [&](int which) { return x0 + LOW_X[which] * d; };
+	auto lw = [&](int which) { return LOW_W[which] * d; };
 
-	// 楽器のかたち。firmware が CGRAM に描いた 8 マスが 1 枚の絵になっている。
-	// 消えている点は背景とほぼ同じ色で塗る。ここだけ四角く色が変わって
-	// 「箱に入った絵」に見えてしまうため
-	const int icon_x = at(266, 0).x;
-	HBRUSH faint = CreateSolidBrush(RGB(147, 202, 45));
-	for (int row = 0; row < LCD_ROWS; row++)
-		for (int col = TEXT_COLS; col < LCD_COLS; col++)
-			cell(row, col, icon_x + (col - TEXT_COLS) * CELL_W * sd, sy + row * CELL_H * sd,
-			     sd, sd, faint);
-	DeleteObject(faint);
+	// 部の番号「01」と「A01」。塊の中の桁は**詰めて**並べる
+	for (int i = 0; i < 2; i++)
+		cell(0, TOP_COLS + i, lx(LOW_PART) + i * CELL_W * d, sy, d, dot, ghost);
+	for (int i = 0; i < 3; i++)
+		cell(1, TOP_COLS + i, lx(LOW_BANK) + i * CELL_W * d, sy, d, dot, ghost);
 
-	// ここから下は、実機では独立したセグメント。こちらの HD44780 には
-	// 流れてこない（MAME もこの区画は持っていない）ので、
-	// **消えている状態の形だけ**を薄く描く。実物も消えた区画はうっすら見える
+	// 楽器のかたち。20-23 桁の両行が 1 枚の絵になっている。
+	// **点が文字より細かく、正方形でもない**。横は 20 点ぶんを LOW_W ぶんに、
+	// 縦は 16 点ぶんを文字 1 行（8 点）に詰める
+	{
+		const int ix = lx(LOW_ICON), iw = lw(LOW_ICON);
+		const int cols = LCD_COLS - (TOP_COLS + 3);
+		const int nx = cols * CELL_W, ny = LCD_ROWS * CELL_H;
+		for (int row = 0; row < LCD_ROWS; row++)
+			for (int col = TOP_COLS + 3; col < LCD_COLS; col++) {
+				const u8 *c = s.dots + (row * LCD_COLS + col) * CELL_H;
+				for (int y = 0; y < CELL_H; y++) {
+					const int yy = row * CELL_H + y;
+					RECT r;
+					r.top    = sy + yy * seg_h / ny;
+					r.bottom = sy + (yy + 1) * seg_h / ny;
+					if (r.bottom <= r.top)
+						r.bottom = r.top + 1;
+					for (int x = 0; x < CELL_W; x++) {
+						const int xx = (col - TOP_COLS - 3) * CELL_W + x;
+						r.left  = ix + xx * iw / nx;
+						r.right = ix + (xx + 1) * iw / nx;
+						if (r.right <= r.left)
+							r.right = r.left + 1;
+						FillRect(dc, &r, (s.lcd_on && BIT(c[y], 4 - x)) ? lit : faint);
+					}
+				}
+			}
+	}
+
+	// ---- ここから右は、実機では独立したセグメント。HD44780 には流れて
+	// こない（MAME もこの区画を持っていない）ので、**消えている形だけ**を
+	// 薄く描く。実物も消えた区画はうっすら見えるので、見た目としては近い
 	{
 		HBRUSH off = CreateSolidBrush(LCD_GHOST);
 		HPEN   pen = CreatePen(PS_SOLID, std::max(1, int(1.5 * m_scale)), LCD_GHOST);
 		HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
 		HGDIOBJ op = SelectObject(dc, pen);
 
+		const int t = std::max(1, int(1.6 * m_scale));
+
 		// 7 セグメントの「8」。消えている桁はこう見える
-		auto digit = [&](double lx, double lw, int top, int h) {
-			const int x = at(lx, 0).x, w = at(lx + lw, 0).x - x;
-			const int t = std::max(1, int(1.6 * m_scale));
-			const int mid = top + h / 2;
+		auto digit = [&](int x, int w) {
+			const int top = sy, h = seg_h, mid = top + h / 2;
 			RECT r;
-			r = { x, top, x + w, top + t };                       FillRect(dc, &r, off);
-			r = { x, mid - t / 2, x + w, mid + t - t / 2 };       FillRect(dc, &r, off);
-			r = { x, top + h - t, x + w, top + h };               FillRect(dc, &r, off);
-			r = { x, top, x + t, mid };                           FillRect(dc, &r, off);
-			r = { x + w - t, top, x + w, mid };                   FillRect(dc, &r, off);
-			r = { x, mid, x + t, top + h };                       FillRect(dc, &r, off);
-			r = { x + w - t, mid, x + w, top + h };               FillRect(dc, &r, off);
+			r = { x, top, x + w, top + t };                  FillRect(dc, &r, off);
+			r = { x, mid - t / 2, x + w, mid + t - t / 2 };  FillRect(dc, &r, off);
+			r = { x, top + h - t, x + w, top + h };          FillRect(dc, &r, off);
+			r = { x, top, x + t, mid };                      FillRect(dc, &r, off);
+			r = { x + w - t, top, x + w, mid };              FillRect(dc, &r, off);
+			r = { x, mid, x + t, top + h };                  FillRect(dc, &r, off);
+			r = { x + w - t, mid, x + w, top + h };          FillRect(dc, &r, off);
 		};
 
-		// 窓の下の札に合わせて桁を並べる。lx は札の中心
-		auto digits = [&](double center, int n, double pitch, double w) {
-			const double left = center - (n * pitch - (pitch - w)) / 2;
-			for (int i = 0; i < n; i++)
-				digit(left + i * pitch, w, sy + seg_h / 5, seg_h * 4 / 5);
-		};
-
-		digits(345, 2, 13, 10);          // PART
-		digits(425, 5, 13, 10);          // BANK / PGM#
-
-		// VOL と EXP の縦棒
-		for (int k = 0; k < 2; k++) {
-			const double bx = (k == 0) ? 480 : 508;
+		// 縦棒のメータ（VOL と EXP）
+		auto bars = [&](int x, int w) {
 			for (int i = 0; i < 7; i++) {
-				RECT r{ at(bx, 0).x, sy + seg_h - (i + 1) * seg_h / 8,
-				        at(bx + 11, 0).x,
-				        sy + seg_h - i * seg_h / 8 - std::max(1, int(1.5 * m_scale)) };
+				RECT r{ x, sy + seg_h - (i + 1) * seg_h / 8,
+				        x + w, sy + seg_h - i * seg_h / 8 - t };
 				FillRect(dc, &r, off);
 			}
-		}
+		};
+
+		bars(lx(LOW_VOL), lw(LOW_VOL));
+		bars(lx(LOW_EXP), lw(LOW_EXP));
 
 		// パンのつまみ
 		{
-			const int cx = at(540, 0).x, cy = sy + seg_h / 2;
-			const int r = std::min<int>(seg_h / 2, at(550, 0).x - at(540, 0).x);
+			const int r  = std::min<int>(seg_h / 2, lw(LOW_PAN) / 2);
+			const int cx = lx(LOW_PAN) + lw(LOW_PAN) / 2, cy = sy + seg_h / 2;
 			Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
 			MoveToEx(dc, cx, cy, nullptr);
 			LineTo(dc, cx, cy - r + 1);
@@ -405,27 +449,47 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 
 		// リバーブ・コーラス・バリエーションの弧。上半分だけ描く
 		for (int k = 0; k < 3; k++) {
-			const int cx = at(566.0 + k * 26, 0).x;
+			const int w  = lw(LOW_REV + k);
+			const int r  = std::min<int>(seg_h - int(2 * m_scale), w / 2);
+			const int cx = lx(LOW_REV + k) + w / 2;
 			const int cy = sy + seg_h - std::max(1, int(m_scale));
-			const int r  = std::min<int>(seg_h - int(2 * m_scale), at(578, 0).x - at(566, 0).x);
 			Arc(dc, cx - r, cy - r, cx + r, cy + r, cx + r, cy, cx - r, cy);
 		}
 
-		digits(645, 3, 13, 10);          // KEY（実機では + 0 のように出る）
+		// キー。1 文字目は ＋ と − だけのセグメント、あと 2 桁は 7 セグ
+		{
+			const int kx = lx(LOW_KEY);
+			const int cy = sy + seg_h / 2;
+			RECT h{ kx, cy - t / 2, kx + 3 * d, cy + t - t / 2 };
+			FillRect(dc, &h, off);
+			RECT v{ kx + 3 * d / 2 - t / 2, cy - 3 * d / 2,
+			        kx + 3 * d / 2 + t - t / 2, cy + 3 * d / 2 };
+			FillRect(dc, &v, off);
+			digit(kx + 4 * d, 3 * d);
+			digit(kx + 8 * d, 3 * d);
+		}
+
+		// いちばん右。XG / TG300B / PERFORM のどれかを ▶ で示す。
+		// パネルに印刷されている 3 つの札と高さを合わせてある
+		{
+			const int mx = lx(LOW_MODE), mw = lw(LOW_MODE);
+			for (int k = 0; k < 3; k++) {
+				const int cy = sy + seg_h * (2 * k + 1) / 6;
+				const int hh = std::max(2, seg_h / 8);
+				const POINT tri[4] = { { mx, cy - hh }, { mx + mw, cy },
+				                       { mx, cy + hh }, { mx, cy - hh } };
+				Polyline(dc, tri, 4);
+			}
+		}
 
 		SelectObject(dc, ob);
 		SelectObject(dc, op);
 		DeleteObject(off);
 		DeleteObject(pen);
 	}
-	{
-		// 窓に印刷されている札
-		RECT mic{ x0, sy + seg_h - int(9 * m_scale), x0 + int(20 * m_scale),
-		          sy + seg_h };
-		text_in(dc, mic, "MIC", RGB(70, 92, 30), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
-	}
 
 	DeleteObject(ghost);
+	DeleteObject(faint);
 	DeleteObject(lit);
 
 	if (s.message[0]) {
@@ -532,9 +596,21 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	text_in(dc, scale(686, 132, 50, 48), "XG\nTG300B\nPERFORM", PANEL_INK,
 	        m_font_small, DT_LEFT | DT_TOP | DT_WORDBREAK);
 
-	for (const column &c : COLUMNS)
-		text_in(dc, scale(c.x - 32, 186, 64, 12), c.label, PANEL_INK, m_font_small,
-		        DT_CENTER | DT_TOP | DT_SINGLELINE);
+	// 窓の下の札は、下段の並びと同じ割合で置く。窓の中身とずれないように
+	{
+		const int pad = std::max(2, int(5 * m_scale));
+		const int top_dots = TOP_COLS * (CELL_W + 1) - 1;
+		const int aw = m_lcd.right - m_lcd.left;
+		const int d = std::max<int>(1, (aw - pad * 2) / top_dots);
+		const int inner_x = m_lcd.left + std::max(pad, (aw - top_dots * d) / 2);
+		const int y = at(0, 186).y, h = int(12 * m_scale), w = int(64 * m_scale);
+		for (const column &c : COLUMNS) {
+			const int cx = inner_x + (LOW_X[c.at] + LOW_W[c.at] / 2) * d;
+			RECT r{ cx - w / 2, y, cx + w / 2, y + h };
+			text_in(dc, r, c.label, PANEL_INK, m_font_small,
+			        DT_CENTER | DT_TOP | DT_SINGLELINE);
+		}
+	}
 
 	for (int i = 0; i < 18; i++)
 		text_in(dc, scale(CAT_X[i % 6] - 34, CAT_Y[i / 6] - 14, 68, 14), CAT_LABEL[i],

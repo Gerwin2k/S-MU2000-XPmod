@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <avrt.h>
 
 namespace ui {
 
@@ -74,6 +75,8 @@ void audio_out::run(int latency_ms)
 	IAudioRenderClient *render = nullptr;
 	HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
 	UINT32 buf_frames = 0;
+	DWORD  mmcss_index = 0;
+	HANDLE mmcss = nullptr;
 
 	auto fail = [this](const char *what, HRESULT hr) {
 		char buf[128];
@@ -122,8 +125,17 @@ void audio_out::run(int latency_ms)
 
 	m_buffer_frames.store(buf_frames);
 
-	// 音声を作るスレッドは優先度を上げる。取りこぼすと音が切れる
+	// 音声を作るスレッドは優先度を上げる。取りこぼすと音が切れる。
+	//
+	// **SetThreadPriority だけでは足りない**。Windows の割り当ては
+	// MMCSS（マルチメディア用の割り当て）が別に持っていて、"Pro Audio" で
+	// 登録しておかないと、他の仕事のために数十ミリ秒まとめて止められる
+	// ことがある。平均の負荷に余裕があっても、そこで音が途切れる
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+	mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcss_index);
+	if (mmcss)
+		AvSetMmThreadPriority(mmcss, AVRT_PRIORITY_CRITICAL);
+	m_mmcss.store(mmcss != nullptr);
 
 	{
 		// 最初に一杯まで埋めてから走らせる
@@ -178,6 +190,8 @@ void audio_out::run(int latency_ms)
 	client->Stop();
 
 done:
+	if (mmcss)
+		AvRevertMmThreadCharacteristics(mmcss);
 	m_running.store(false);
 	if (render) render->Release();
 	if (client) client->Release();

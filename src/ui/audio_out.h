@@ -38,6 +38,8 @@ public:
 	u32 buffer_frames() const { return m_buffer_frames.load(); }
 	u64 produced() const      { return m_produced.load(); }
 	u64 starved() const       { return m_starved.load(); }
+	// MMCSS（Pro Audio）に登録できたか。だめだと途切れやすくなる
+	bool mmcss() const        { return m_mmcss.load(); }
 	double cpu_percent() const;
 	double worst_ms() const;
 
@@ -53,6 +55,7 @@ private:
 	std::atomic<u32> m_buffer_frames{0};
 	std::atomic<u64> m_produced{0}, m_starved{0};
 	std::atomic<u64> m_busy_ticks{0}, m_worst_ticks{0};
+	std::atomic<bool> m_mmcss{false};
 	s64 m_qpc_freq = 1;
 };
 

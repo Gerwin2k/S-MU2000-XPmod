@@ -27,6 +27,7 @@
 #include <mmsystem.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <avrt.h>
 
 namespace {
 
@@ -51,6 +52,20 @@ void list_midi_inputs()
 			std::printf("  %u: %s\n", i, caps.szPname);
 	}
 }
+
+// 音声スレッドを MMCSS へ登録する。SetThreadPriority だけでは、
+// 他の仕事のために数十ミリ秒まとめて止められることがある
+struct mmcss_guard {
+	HANDLE h = nullptr;
+	mmcss_guard()
+	{
+		DWORD idx = 0;
+		h = AvSetMmThreadCharacteristicsW(L"Pro Audio", &idx);
+		if (h) AvSetMmThreadPriority(h, AVRT_PRIORITY_CRITICAL);
+	}
+	~mmcss_guard() { if (h) AvRevertMmThreadCharacteristics(h); }
+};
+
 
 // ---- 音を作る側。どちらの出力方式からもこれを呼ぶ
 
@@ -130,6 +145,7 @@ int run_wasapi(generator &gen, double seconds, int latency_ms)
 	HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
 	UINT32 buf_frames = 0;
 	int rc = 1;
+	mmcss_guard mmcss;      // goto done がまたぐので、宣言はここに置く
 
 	auto fail = [](const char *what, HRESULT hr) {
 		std::fprintf(stderr, "%s に失敗 (0x%08lx)\n", what, (unsigned long)hr);
@@ -279,6 +295,7 @@ int run_waveout(generator &gen, double seconds, int frames, int buffers)
 		std::printf("Ctrl+C で終了\n");
 
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+	mmcss_guard mmcss;
 	gen.cushion_frames = u32(frames) * u32(buffers);
 
 	// 先に全枚を投入し、以後は投入した順に完了を待つ。空きを探し回ると、

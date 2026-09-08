@@ -24,6 +24,7 @@
 #include "ui/midi_in.h"
 #include "ui/midi_out.h"
 #include "ui/panel.h"
+#include "ui/text.h"
 #include "ui/png.h"
 
 #include <algorithm>
@@ -220,19 +221,27 @@ enum : UINT {
 	ID_OUT_NONE = 1900, ID_OUT_BASE = 1901,
 };
 
+// 品書きは **W 版**で作る。ソースは UTF-8 なので、A 版に渡すと
+// CP932 と思われて文字化けする
+void add_item(HMENU m, UINT flags, UINT_PTR id, const char *utf8)
+{
+	const std::wstring w = ui::to_wide(utf8);
+	AppendMenuW(m, flags, id, w.c_str());
+}
+
 void fill_port_menu(HMENU m, const std::vector<std::string> &names, int now,
                     UINT id_none, UINT id_base)
 {
-	AppendMenuA(m, MF_STRING | (now < 0 ? MF_CHECKED : 0), id_none, "使わない");
+	add_item(m, MF_STRING | (now < 0 ? MF_CHECKED : 0), id_none, "使わない");
 	if (names.empty()) {
-		AppendMenuA(m, MF_SEPARATOR, 0, nullptr);
-		AppendMenuA(m, MF_STRING | MF_GRAYED, 0, "（機器が無い）");
+		AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+		add_item(m, MF_STRING | MF_GRAYED, 0, "（機器が無い）");
 		return;
 	}
-	AppendMenuA(m, MF_SEPARATOR, 0, nullptr);
+	AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
 	for (size_t i = 0; i < names.size(); i++)
-		AppendMenuA(m, MF_STRING | (int(i) == now ? MF_CHECKED : 0),
-		            id_base + UINT(i), names[i].c_str());
+		add_item(m, MF_STRING | (int(i) == now ? MF_CHECKED : 0),
+		         id_base + UINT(i), names[i].c_str());
 }
 
 void show_port_menu(HWND hwnd, POINT screen)
@@ -244,8 +253,8 @@ void show_port_menu(HWND hwnd, POINT screen)
 	fill_port_menu(mi, ui::midi_in::list(),  g_win.in_dev,  ID_IN_NONE,  ID_IN_BASE);
 	fill_port_menu(mo, ui::midi_out::list(), g_win.out_dev, ID_OUT_NONE, ID_OUT_BASE);
 
-	AppendMenuA(top, MF_POPUP, UINT_PTR(mi), "MIDI IN（Domino などから受ける）");
-	AppendMenuA(top, MF_POPUP, UINT_PTR(mo), "MIDI OUT（受けたものをそのまま外へ）");
+	add_item(top, MF_POPUP, UINT_PTR(mi), "MIDI IN（Domino などから受ける）");
+	add_item(top, MF_POPUP, UINT_PTR(mo), "MIDI OUT（受けたものをそのまま外へ）");
 
 	TrackPopupMenu(top, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
 	               screen.x, screen.y, 0, hwnd, nullptr);

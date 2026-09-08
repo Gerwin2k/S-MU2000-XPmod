@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 
 #include "midi_out.h"
+#include "text.h"
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -31,9 +32,9 @@ std::vector<std::string> midi_out::list()
 	std::vector<std::string> out;
 	const UINT n = midiOutGetNumDevs();
 	for (UINT i = 0; i < n; i++) {
-		MIDIOUTCAPSA caps{};
-		if (midiOutGetDevCapsA(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR)
-			out.push_back(caps.szPname);
+		MIDIOUTCAPSW caps{};
+		if (midiOutGetDevCapsW(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR)
+			out.push_back(to_utf8(caps.szPname));
 		else
 			out.push_back("?");
 	}
@@ -55,9 +56,9 @@ bool midi_out::open(int device, std::string &err)
 		err = "MIDI 出力を開けない";
 		return false;
 	}
-	MIDIOUTCAPSA caps{};
-	midiOutGetDevCapsA(UINT(device), &caps, sizeof(caps));
-	m_name = caps.szPname;
+	MIDIOUTCAPSW caps{};
+	midiOutGetDevCapsW(UINT(device), &caps, sizeof(caps));
+	m_name = to_utf8(caps.szPname);
 
 	m_read.store(0);
 	m_write.store(0);
