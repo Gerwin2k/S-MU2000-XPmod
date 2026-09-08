@@ -50,13 +50,36 @@ const char *CAT_LABEL[18] = {
 
 // LCD の下段に並ぶもの。窓の内側の左端からの割合で置く。
 // 窓の下に印刷されている札も、ここから位置を取って揃える
-// 位置と幅は、上の面の**点 1 つぶん**を単位にした、窓の内側の左端からの
-// 数。実機の写真を測って割り出した（上の面は 17 桁 × 6 点 − 1 = 101 点）。
+// 位置と幅は、上の面の**点 1 つぶん**を単位にした、窓の内側の左端からの数
+// （上の面は 17 桁 × 6 点 − 1 = 101 点）。
+//
+// 下の面のものは、上の面のパート番号と縦に揃っている。実機を見て教わった
+// 対応は次のとおりで、bar_x() でその位置を出している。
+//
+//   VOL  15 番と左揃え     EXP  18 番と右揃え
+//   REV  24 番と右揃え     CHO  25 番と左揃え     VAR  28-29 番の中央
 //
 // 塊のあいだは 2 点、楽器のかたちの前は 3 点あける。
 // 塊の中の桁は**詰めて並べる**（上の面のように 1 点あけない）
-const int LOW_X[LOW_COUNT] = {  0, 12, 30, 44, 50, 55, 62, 70, 78, 86, 98 };
-const int LOW_W[LOW_COUNT] = { 10, 15, 13,  4,  4,  6,  7,  7,  7, 11,  3 };
+
+// n 番のバーの左端。A1 が 0、A2 が 1、パート 1 が 2 …（点の単位）
+constexpr int bar_x(int i) { return (i / 2) * (CELL_W + 1) + ((i & 1) ? 3 : 0); }
+constexpr int part_x(int n) { return bar_x(n + 1); }
+
+const int LOW_X[LOW_COUNT] = {
+	0,                       // 「01」
+	12,                      // 「A01」
+	30,                      // 楽器のかたち
+	part_x(15),              // VOL   15 番と左揃え
+	part_x(18) + 2 - 2,      // EXP   18 番と右揃え（バーは 2 点幅）
+	61,                      // PAN
+	part_x(24) + 2 - 7,      // REV   24 番と右揃え
+	part_x(25),              // CHO   25 番と左揃え
+	(part_x(28) + part_x(29) + 2) / 2 - 3,   // VAR  28-29 番の中央
+	93,                      // ノートシフト
+	0,                       // モードの ▶（窓の右端に置くので使わない）
+};
+const int LOW_W[LOW_COUNT] = { 10, 15, 15, 2, 2, 8, 7, 7, 7, 8, 3 };
 
 // 窓の下に印刷されている札。どの並びの真ん中に置くか
 struct column { int at; const char *label; };
@@ -288,9 +311,11 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	// 目盛りの帯は 2 段。上に目盛りと番号、下に MIC / LINE / BANK / PGM#
 	const int tick_h = std::max(2, int(2.5 * m_scale));
 	int line_h = std::max(6, int(8.5 * m_scale));
-	while (d > 1 && 16 * d + tick_h + line_h * 2 + 8 * d > ah - pad * 2)
+	// 目盛りの帯は 3 段。番号／MIC と BANK と PGM#／LINE。
+	// **下の面はその下**。ここを詰めると「01」と MIC が重なる
+	while (d > 1 && 16 * d + tick_h + line_h * 3 + 8 * d > ah - pad * 2)
 		d--;
-	const int scale_h = tick_h + line_h * 2;
+	const int scale_h = tick_h + line_h * 3;
 	const int stack_h = 16 * d + scale_h + 8 * d;
 	const int dot = std::max(1, d - std::max(1, d / 6));   // 点のあいだの隙間
 
@@ -361,23 +386,28 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 		SelectObject(dc, op);
 		DeleteObject(p);
 
-		// MIC と LINE。実機では上下に並んでいるが、ここは横に並べる
-		RECT mic{ x0, line2, x0 + int(18 * m_scale), line2 + line_h };
+		// MIC と LINE は左端に上下に並ぶ
+		RECT mic{ x0, line2, x0 + int(20 * m_scale), line2 + line_h };
 		text_in(dc, mic, "MIC", ctl(CD, 1) ? LCD_DOT : LCD_GHOST, m_font_small,
 		        DT_LEFT | DT_TOP | DT_SINGLELINE);
-		RECT lin{ x0 + int(19 * m_scale), line2, x0 + int(42 * m_scale), line2 + line_h };
+		RECT lin{ x0, line2 + line_h, x0 + int(24 * m_scale), line2 + line_h * 2 };
 		text_in(dc, lin, "LINE", ctl(CD, 2) ? LCD_DOT : LCD_GHOST, m_font_small,
 		        DT_LEFT | DT_TOP | DT_SINGLELINE);
 
-		// BANK と PGM# は左右で別のセグメント
-		RECT b{ x0 + 10 * (CELL_W + 1) * d, line2, x0 + 14 * (CELL_W + 1) * d,
-		        line2 + line_h };
-		text_in(dc, b, "BANK", ctl(CD, 0) ? LCD_DOT : LCD_GHOST, m_font_small,
-		        DT_LEFT | DT_TOP | DT_SINGLELINE);
-		RECT g{ x0 + 14 * (CELL_W + 1) * d, line2, x0 + 18 * (CELL_W + 1) * d,
-		        line2 + line_h };
-		text_in(dc, g, "PGM#", ctl(CD, 5) ? LCD_DOT : LCD_GHOST, m_font_small,
-		        DT_LEFT | DT_TOP | DT_SINGLELINE);
+		// BANK と PGM# は 2 つずつあり、パート番号の下に並んでいる。
+		// 左側の組が D0、右側の組が D5 で点け消しされる
+		struct { int part; const char *label; bool right; } marks[] = {
+			{  3, "BANK", false }, { 11, "PGM#", false },
+			{ 19, "BANK", true  }, { 27, "PGM#", true  },
+		};
+		for (const auto &mk : marks) {
+			const int cx = x0 + (part_x(mk.part) + part_x(mk.part + 1) + 2) * d / 2;
+			const int w = int(26 * m_scale);
+			RECT r{ cx - w / 2, line2, cx + w / 2, line2 + line_h };
+			text_in(dc, r, mk.label,
+			        ctl(CD, mk.right ? 5 : 0) ? LCD_DOT : LCD_GHOST, m_font_small,
+			        DT_CENTER | DT_TOP | DT_SINGLELINE);
+		}
 	}
 
 	// ---- 下の面
@@ -443,36 +473,41 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			bar(BIT(seg, 6),  x,         mid - t / 2,  x + w,     mid + t - t / 2);  // g
 		};
 
-		// 送り量の扇。8 本の弧のうち、下から N 本を点ける
+		// 送り量の扇。**半円ではなく縦に細長い楕円**を 8 枚重ねたもので、
+		// 細長い Wi-Fi の印のように見える。下から N 枚を点ける
 		auto fan = [&](int which, const bool *on8) {
 			const int w  = lw(which);
 			const int cx = lx(which) + w / 2;
 			const int cy = sy + seg_h - std::max(1, int(m_scale));
-			// 隣にはみ出さないように、いちばん外の弧を枠に収める
-			const int rmax = std::min<int>(seg_h - int(m_scale), w / 2);
+			const int rx = w / 2;
+			const int ry = seg_h - std::max(1, int(m_scale));
 			for (int k = 0; k < 8; k++) {
-				const int r = std::max(1, rmax * (k + 1) / 8);
+				const int ax = std::max(1, rx * (k + 1) / 8);
+				const int ay = std::max(1, ry * (k + 1) / 8);
 				HPEN p = CreatePen(PS_SOLID, std::max(1, int(1.2 * m_scale)),
 				                   on8[k] ? LCD_DOT : LCD_GHOST);
 				HGDIOBJ op = SelectObject(dc, p);
-				Arc(dc, cx - r, cy - r, cx + r, cy + r, cx + r, cy, cx - r, cy);
+				Arc(dc, cx - ax, cy - ay, cx + ax, cy + ay, cx + ax, cy, cx - ax, cy);
 				SelectObject(dc, op);
 				DeleteObject(p);
 			}
 		};
 
-		// VOL と EXP の縦棒。**この値は HD44780 に流れてこない**ので、
-		// 消えた形だけを描く（実機では別のセグメント駆動になっている）
-		auto bars = [&](int which) {
-			const int x = lx(which), w = lw(which);
-			for (int i = 0; i < 7; i++) {
-				RECT r{ x, sy + seg_h - (i + 1) * seg_h / 8,
-				        x + w, sy + seg_h - i * seg_h / 8 - t };
-				FillRect(dc, &r, off_b);
-			}
-		};
-		bars(LOW_VOL);
-		bars(LOW_EXP);
+		// VOL と EXP。**行 0 の 19 桁目**に、レベルメータと同じ形で
+		// 入っている（左の 2 点が VOL、右の 2 点が EXP）。
+		// 実機では離れた場所に出るので、切り離して描く
+		{
+			const u8 *c = s.dots + (0 * LCD_COLS + TOP_COLS + 2) * CELL_H;
+			for (int y = 0; y < CELL_H; y++)
+				for (int x = 0; x < 2; x++) {
+					RECT rv{ lx(LOW_VOL) + x * d, sy + y * d,
+					         lx(LOW_VOL) + x * d + dot, sy + y * d + dot };
+					FillRect(dc, &rv, (s.lcd_on && BIT(c[y], 4 - x)) ? on_b : off_b);
+					RECT re{ lx(LOW_EXP) + x * d, sy + y * d,
+					         lx(LOW_EXP) + x * d + dot, sy + y * d + dot };
+					FillRect(dc, &re, (s.lcd_on && BIT(c[y], 1 - x)) ? on_b : off_b);
+				}
+		}
 
 		// パン。丸の中の針が 7 か所に飛ぶ。D9(右端) から D15(左端)
 		{
@@ -514,15 +549,20 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			fan(LOW_VAR, var);
 		}
 
-		// ノートシフト。符号（横棒は常時、縦棒が点くと ＋）と 2 桁
+		// ノートシフト。符号（横棒は常時、縦棒が点くと ＋）と 2 桁。
+		// 文字より**一回り小さく**して、モードの ▶ の左に寄せる
+		const int mode_w = 3 * d;
+		const int mode_x = m_lcd.right - pad - mode_w;
 		{
-			const int kx = lx(LOW_KEY);
+			const int kw = 8 * d;
+			const int kx = std::min(lx(LOW_KEY), mode_x - 2 * d - kw);
 			const int cy = sy + seg_h / 2;
-			const int sw = 3 * d;
+			const int sw = 2 * d;
 			RECT h{ kx, cy - t / 2, kx + sw, cy + t - t / 2 };
 			FillRect(dc, &h, brush(ctl(CB, 0)));
-			RECT v{ kx + sw / 2 - t / 2, cy - sw / 2, kx + sw / 2 + t - t / 2, cy + sw / 2 };
+			RECT v{ kx + sw / 2 - t / 2, cy - sw, kx + sw / 2 + t - t / 2, cy + sw };
 			FillRect(dc, &v, brush(ctl(CA, 0)));
+			const int dw = 2 * d, dh = seg_h * 3 / 4, dy = sy + seg_h / 8;
 
 			// 十の位は a/d/e/g がひとまとめ。f は使われない
 			const bool ten_adeg = ctl(CA, 1);
@@ -531,7 +571,7 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			if (ctl(CB, 1)) ten |= 1u << 1;
 			if (ctl(CA, 7)) ten |= 1u << 2;
 			if (ctl(CB, 4)) ten |= 1u << 5;
-			seven(kx + 4 * d, 3 * d, sy, seg_h, ten, true);
+			seven(kx + 3 * d, dw, dy, dh, ten, true);
 
 			unsigned one = 0;
 			if (ctl(CB, 6)) one |= 1u << 0;   // a
@@ -541,13 +581,13 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			if (ctl(CB, 2)) one |= 1u << 4;   // e
 			if (ctl(CB, 7)) one |= 1u << 5;   // f
 			if (ctl(CB, 3)) one |= 1u << 6;   // g
-			seven(kx + 8 * d, 3 * d, sy, seg_h, one, false);
+			seven(kx + 6 * d, dw, dy, dh, one, false);
 		}
 
 		// いちばん右。XG / TG300B(GS) / PERFORM のどれかを ▶ で示す。
 		// PLG のぶんは C2 か D8 のどちらかだが、まだ決められていない
 		{
-			const int mx = lx(LOW_MODE), mw = lw(LOW_MODE);
+			const int mx = mode_x, mw = mode_w;
 			const bool mode[3] = { ctl(CB, 5), ctl(CA, 4), ctl(CA, 5) };
 			for (int k = 0; k < 3; k++) {
 				const int cy = sy + seg_h * (2 * k + 1) / 6;
@@ -584,17 +624,17 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 				Polygon(dc, tri, 3);
 				SelectObject(dc, ob);
 			}
-			// バンク番号とプログラム番号のカーソルは、上の面の文字に付く
-			const int bank_x = x0 + 11 * (CELL_W + 1) * d;
-			const int pgm_x  = x0 + 15 * (CELL_W + 1) * d;
-			const int tops[2] = { bank_x, pgm_x };
+			// バンク番号とプログラム番号のカーソルは**楽器のかたちの上**。
+			// バンクは 4-5 列目、プログラムは 12-13 列目の上（実機を見て教わった）
+			const int ix = lx(LOW_ICON);
+			const int tops[2] = { ix + (3 + 5) * d / 2, ix + (11 + 13) * d / 2 };
 			const bool ton[2] = { ctl(CC, 1), ctl(CC, 0) };
 			for (int k = 0; k < 2; k++) {
 				if (!ton[k])
 					continue;
-				const POINT tri[3] = { { tops[k] - hw, line2 + line_h },
-				                       { tops[k] + hw, line2 + line_h },
-				                       { tops[k], line2 + line_h + hw } };
+				const POINT tri[3] = { { tops[k] - hw, cur_y - hw },
+				                       { tops[k] + hw, cur_y - hw },
+				                       { tops[k], cur_y } };
 				HGDIOBJ ob = SelectObject(dc, lit);
 				Polygon(dc, tri, 3);
 				SelectObject(dc, ob);
