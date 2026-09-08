@@ -214,13 +214,20 @@ bool panel::press(int x, int y, bridge &br)
 
 	switch (sp->kind) {
 	case spot_kind::tab:
-		m_page = (sp->ctl == CTL_TAB_EDIT) ? page::editor : page::front;
+		m_page = (sp->ctl == CTL_TAB_EDIT) ? page::editor
+		       : (sp->ctl == CTL_TAB_FX)   ? page::effects : page::front;
 		build_spots();
 		return true;
 
 	case spot_kind::button:
 		m_held = sp;
 		br.press(sp->button, true);
+		// VALUE −/+ はダイヤルとまったく同じ働き（実測で 1 目盛り = 1 回 = ±1）。
+		// 同じものだと見て分かるよう、絵のダイヤルも一緒に回す
+		if (sp->button == mu2000::button::value_plus)
+			m_wheel_angle = (m_wheel_angle + 15) % 360;
+		else if (sp->button == mu2000::button::value_minus)
+			m_wheel_angle = (m_wheel_angle + 345) % 360;
 		return true;
 
 	case spot_kind::volume:
@@ -239,6 +246,20 @@ bool panel::press(int x, int y, bridge &br)
 		m_drag_y = y;
 		m_drag_from = value_of(sp->ctl);
 		return true;
+
+	case spot_kind::list: {
+		// 左右の端を押すと 1 つずつ。真ん中はホイールで回す
+		const int edge = (sp->r.right - sp->r.left) / 6;
+		int step = 0;
+		if (x < sp->r.left + edge)        step = -1;
+		else if (x >= sp->r.right - edge) step = 1;
+		if (step) {
+			int &v = m_fx[sp->ctl - CTL_FX_FIRST];
+			const int next = std::clamp(v + step, 0, fx_limit(sp->ctl));
+			if (next != v) { v = next; send_fx(sp->ctl, br); }
+		}
+		return true;
+	}
 
 	case spot_kind::action:
 		if (sp->ctl == CTL_XG_RESET) {
@@ -303,13 +324,18 @@ bool panel::wheel_at(int x, int y, int delta, bridge &br)
 		set_value(sp->ctl, value_of(sp->ctl) + delta, br);
 		return true;
 	}
-	if (m_page == page::front) {
-		// パネルの面ではどこで回しても VALUE。実機に回すものが無いので
-		br.turn(delta);
-		m_wheel_angle = (m_wheel_angle + delta * 15) % 360;
+	if (sp && sp->kind == spot_kind::list) {
+		int &v = m_fx[sp->ctl - CTL_FX_FIRST];
+		const int next = std::clamp(v + delta, 0, fx_limit(sp->ctl));
+		if (next != v) { v = next; send_fx(sp->ctl, br); }
 		return true;
 	}
-	return false;
+	// どの面でも、つまみの上でなければダイヤルとして効く。
+	// 実機ではダイヤルと VALUE −/+ は同じ働きなので、
+	// ホイールをどこで回しても VALUE を 1 回叩いたのと同じになる
+	br.turn(delta);
+	m_wheel_angle = (m_wheel_angle + delta * 15) % 360;
+	return true;
 }
 
 

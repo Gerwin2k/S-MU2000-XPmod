@@ -101,6 +101,7 @@ const COLORREF KEY_DOWN   = RGB(150, 140, 95);
 panel::panel()
 {
 	init_editor_values();
+	init_effect_values();
 	resize(LOGICAL_W, LOGICAL_H);
 }
 
@@ -168,14 +169,14 @@ void panel::build_spots()
 
 	// 面を選ぶつまみ。本体の外（下の帯）
 	m_spots.push_back({ spot_kind::tab, mu2000::button::count, CTL_TAB_FRONT,
-	                    scale(800, 386, 94, 13), "パネル", "" });
+	                    scale(700, 386, 94, 13), "パネル", "" });
 	m_spots.push_back({ spot_kind::tab, mu2000::button::count, CTL_TAB_EDIT,
-	                    scale(898, 386, 94, 13), "エディタ", "" });
+	                    scale(800, 386, 94, 13), "エディタ", "" });
+	m_spots.push_back({ spot_kind::tab, mu2000::button::count, CTL_TAB_FX,
+	                    scale(898, 386, 94, 13), "エフェクト", "" });
 
-	if (m_page == page::editor) {
-		build_editor_spots();
-		return;
-	}
+	if (m_page == page::editor) { build_editor_spots(); return; }
+	if (m_page == page::effects) { build_effect_spots(); return; }
 
 	for (int i = 0; i < 18; i++)
 		m_spots.push_back({ spot_kind::button, CAT_B[i], CTL_NONE,
@@ -220,7 +221,9 @@ void panel::draw_tabs(HDC dc) const
 	for (const spot &sp : m_spots) {
 		if (sp.kind != spot_kind::tab)
 			continue;
-		const bool on = (sp.ctl == CTL_TAB_EDIT) == (m_page == page::editor);
+		const bool on = (sp.ctl == CTL_TAB_EDIT   && m_page == page::editor) ||
+		                (sp.ctl == CTL_TAB_FX     && m_page == page::effects) ||
+		                (sp.ctl == CTL_TAB_FRONT  && m_page == page::front);
 		round_box(dc, sp.r, on ? RGB(70, 76, 84) : RGB(38, 41, 46),
 		          on ? ACCENT : RGB(70, 74, 80), int(4 * m_scale));
 		text_in(dc, sp.r, sp.label, on ? TEXT : TEXT_DIM, m_font_small,
@@ -451,10 +454,9 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 
 void panel::paint(HDC dc, const snapshot &s, u64 pressed, const char *status) const
 {
-	if (m_page == page::editor)
-		paint_editor(dc, status);
-	else
-		paint_front(dc, s, pressed, m_volume_now, status);
+	if (m_page == page::editor)       paint_editor(dc, status);
+	else if (m_page == page::effects) paint_effects(dc, status);
+	else                              paint_front(dc, s, pressed, m_volume_now, status);
 }
 
 } // namespace ui

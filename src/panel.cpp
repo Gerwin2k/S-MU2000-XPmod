@@ -117,12 +117,15 @@ int main(int argc, char **argv)
 	std::string dir, keys;
 	bool list = false;
 	int turn = 0;
+	double hold = 0.0;
+	std::string holdkey;
 	double settle = 1.0;
 
 	for (int i = 1; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--keys") && i + 1 < argc) keys = argv[++i];
 		else if (!std::strcmp(argv[i], "--list")) list = true;
 		else if (!std::strcmp(argv[i], "--turn") && i + 1 < argc) turn = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--hold") && i + 2 < argc) { holdkey = argv[++i]; hold = std::atof(argv[++i]); }
 		else if (!std::strcmp(argv[i], "--settle") && i + 1 < argc) settle = std::atof(argv[++i]);
 		else if (dir.empty()) dir = argv[i];
 	}
@@ -198,6 +201,19 @@ int main(int argc, char **argv)
 			if (!found)
 				std::fprintf(stderr, "知らないボタン: %s\n", k.c_str());
 		}
+	}
+
+	if (!holdkey.empty()) {
+		for (const alias &a : ALIASES)
+			if (holdkey == a.key) {
+				std::printf("\n--- %s を %.1f 秒押しっぱなし ---\n",
+				            mu2000::button_name(a.b), hold);
+				mu.set_button(a.b, true);
+				idle(mu, hold);
+				mu.set_button(a.b, false);
+				idle(mu, 0.3);
+				break;
+			}
 	}
 
 	if (turn) {

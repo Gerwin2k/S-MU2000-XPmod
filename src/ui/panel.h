@@ -27,7 +27,7 @@
 
 namespace ui {
 
-enum class page { front, editor };
+enum class page { front, editor, effects };
 
 // つまみが何を動かすか。0-127 はそのままコントロールチェンジの番号
 enum : int {
@@ -37,12 +37,22 @@ enum : int {
 	CTL_PART      = 300,   // +0..15
 	CTL_TAB_FRONT = 400,
 	CTL_TAB_EDIT  = 401,
+	CTL_TAB_FX    = 404,
 	CTL_XG_RESET  = 402,
 	CTL_ALL_OFF   = 403,
+
+	// エフェクト面。XG のシステムエフェクトと MU の インサーション 2 系統
+	CTL_REV_TYPE  = 500, CTL_REV_RET  = 501,
+	CTL_CHO_TYPE  = 502, CTL_CHO_RET  = 503,
+	CTL_VAR_TYPE  = 504, CTL_VAR_CONN = 505, CTL_VAR_PART = 506,
+	CTL_INS1_TYPE = 507, CTL_INS1_PART = 508,
+	CTL_INS2_TYPE = 509, CTL_INS2_PART = 510,
+	CTL_FX_SEND   = 511,
+	CTL_FX_FIRST  = 500, CTL_FX_COUNT = 11,
 };
 
 // 触れる場所
-enum class spot_kind { none, button, wheel, volume, knob, tab, action, part };
+enum class spot_kind { none, button, wheel, volume, knob, tab, action, part, list };
 
 struct spot {
 	spot_kind      kind = spot_kind::none;
@@ -89,11 +99,15 @@ private:
 	POINT at(double x, double y) const;
 	void build_spots();
 	void build_editor_spots();
+	void build_effect_spots();
+	void init_effect_values();
+	void send_all_fx(bridge &br);
 	void init_editor_values();
 
 	void paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	                 const char *status) const;
 	void paint_editor(HDC dc, const char *status) const;
+	void paint_effects(HDC dc, const char *status) const;
 
 	void draw_lcd(HDC dc, const snapshot &s) const;
 	void draw_button(HDC dc, const spot &sp, bool down) const;
@@ -101,6 +115,10 @@ private:
 	void draw_volume(HDC dc, double v) const;
 	void draw_tabs(HDC dc) const;
 	void draw_knob(HDC dc, const spot &sp) const;
+	void draw_list(HDC dc, const spot &sp) const;
+	const char *fx_text(int ctl, int v) const;
+	int  fx_limit(int ctl) const;
+	void send_fx(int ctl, bridge &br);
 
 	int  value_of(int ctl) const;
 	void set_value(int ctl, int v, bridge &br);
@@ -125,6 +143,9 @@ private:
 	u8  m_cc[16][128] = {};
 	u8  m_prog[16] = {};
 	u8  m_bank[16] = {};
+
+	// エフェクト面が覚えている値。並びは CTL_FX_FIRST から
+	int m_fx[CTL_FX_COUNT] = {};
 
 	HFONT m_font_label = nullptr, m_font_small = nullptr;
 };

@@ -46,9 +46,14 @@ build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確�
 build/gui.exe    <rom ディレクトリ> [--midi 番号]      実機パネル風の画面で鳴らす
 ```
 
-画面の中身は [doc/gui.md](doc/gui.md)。実機のフロントパネル（LCD・ボタン・
-VALUE ダイヤル）と、SOL2 風のエディタ（フィルタ・エフェクト送り・音色）の
-2 面がある。VST3 の画面も同じもの。
+画面の中身は [doc/gui.md](doc/gui.md)。3 面ある。
+
+* **パネル** … 実機のフロントパネル（LCD・ボタン 35 個・大きなダイヤル）
+* **エディタ** … SOL2 風。パート別のフィルタ・EG・エフェクト送り・音色
+* **エフェクト** … リバーブ／コーラス／バリエーションと、インサーション 2 系統
+  （番地は実測で確かめてある。[doc/effects.md](doc/effects.md)）
+
+VST3 の画面も同じもの。
 
 DAW に挿すなら VST3。作り方と ROM の置き場は [doc/vst3.md](doc/vst3.md)。
 置き場は `%LOCALAPPDATA%\Programs\Common\VST3`（利用者ごと）か
