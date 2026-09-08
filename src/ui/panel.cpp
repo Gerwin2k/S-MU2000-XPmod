@@ -55,8 +55,8 @@ const char *CAT_LABEL[18] = {
 //
 // 塊のあいだは 2 点、楽器のかたちの前は 3 点あける。
 // 塊の中の桁は**詰めて並べる**（上の面のように 1 点あけない）
-const int LOW_X[LOW_COUNT] = {  0, 12, 30, 45, 51, 56, 63, 70, 77, 84, 97 };
-const int LOW_W[LOW_COUNT] = { 10, 15, 14,  4,  4,  6,  6,  6,  6, 11,  3 };
+const int LOW_X[LOW_COUNT] = {  0, 12, 30, 44, 50, 55, 62, 70, 78, 86, 98 };
+const int LOW_W[LOW_COUNT] = { 10, 15, 13,  4,  4,  6,  7,  7,  7, 11,  3 };
 
 // 窓の下に印刷されている札。どの並びの真ん中に置くか
 struct column { int at; const char *label; };
@@ -120,6 +120,7 @@ panel::~panel()
 {
 	if (m_font_label) DeleteObject(m_font_label);
 	if (m_font_small) DeleteObject(m_font_small);
+	if (m_font_tiny)  DeleteObject(m_font_tiny);
 }
 
 RECT panel::scale(double x, double y, double w, double h) const
@@ -174,14 +175,17 @@ void panel::resize(int w, int h)
 
 	if (m_font_label) DeleteObject(m_font_label);
 	if (m_font_small) DeleteObject(m_font_small);
-	auto make_font = [&](double px, int weight) {
-		return CreateFontA(-std::max(7, int(px * m_scale)), 0, 0, 0, weight,
+	if (m_font_tiny)  DeleteObject(m_font_tiny);
+	auto make_font = [&](double px, int weight, int floor_px = 7) {
+		return CreateFontA(-std::max(floor_px, int(px * m_scale)), 0, 0, 0, weight,
 		                   FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
 		                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH,
 		                   "Segoe UI");
 	};
 	m_font_label = make_font(13, FW_BOLD);
 	m_font_small = make_font(8.5, FW_NORMAL);
+	// 目盛りは 34 個の番号をバーの真下に並べるので、思い切り小さくする
+	m_font_tiny  = make_font(6.5, FW_NORMAL, 5);
 
 	build_spots();
 }
@@ -269,29 +273,27 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	//   上の面（点の並び。2 行、桁のあいだは 1 点、**行のあいだは空けない**）
 	//     0-8   レベルメータ。1 マス 2 本で 18 本（A1 A2 と 1-16）
 	//     9-16  文字 8 桁。1 行目が音色名、2 行目が ▶000◀001
-	//           表示の仕方によっては、ここにも 19-32 番のバーが出る
-	//   下の面（別のところに出る）
+	//   下の面
 	//     行 0 の 17-18   部の番号「01」
 	//     行 1 の 17-19   「A01」
-	//     20-23（両行）   楽器のかたち。**点が縦に半分の細かさ**
-	//
-	//   行 0 の 19 桁目が何なのかは、まだ分かっていない
+	//     20-22（両行）   楽器のかたち。**点が細かく、正方形でもない**
+	//     **23（両行）は絵ではない**。決まった形のセグメントを点けたり
+	//     消したりする 64 個のビットが入っている（下の ctl）
 	const int aw = m_lcd.right - m_lcd.left, ah = m_lcd.bottom - m_lcd.top;
 	const int pad = std::max(2, int(5 * m_scale));
 
 	// 点の大きさ。上の面 17 桁ぶんが横幅に収まるように決める
 	const int top_dots = TOP_COLS * (CELL_W + 1) - 1;      // 桁のあいだ 1 点
 	int d = std::max(1, (aw - pad * 2) / top_dots);
-	// 縦は 文字 16 点 ＋ 目盛り 6 点 ＋ 下の面 8 点
-	while (d > 1 && d * 16 + d * 6 + d * 8 > ah - pad * 2)
-		d--;
-	const int dot = std::max(1, d - std::max(1, d / 6));   // 点のあいだの隙間
-
-	// 目盛りの帯は 2 段。上に目盛りと番号、下に MIC / BANK / PGM#
+	// 目盛りの帯は 2 段。上に目盛りと番号、下に MIC / LINE / BANK / PGM#
 	const int tick_h = std::max(2, int(2.5 * m_scale));
-	const int line_h = std::max(6, int(8.5 * m_scale));
+	int line_h = std::max(6, int(8.5 * m_scale));
+	while (d > 1 && 16 * d + tick_h + line_h * 2 + 8 * d > ah - pad * 2)
+		d--;
 	const int scale_h = tick_h + line_h * 2;
 	const int stack_h = 16 * d + scale_h + 8 * d;
+	const int dot = std::max(1, d - std::max(1, d / 6));   // 点のあいだの隙間
+
 	// 点は正方形のままにして、余った幅は左右に振り分ける
 	const int x0 = m_lcd.left + std::max(pad, (aw - top_dots * d) / 2);
 	const int y0 = m_lcd.top + std::max(pad, (ah - stack_h) / 2);
@@ -299,6 +301,16 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	HBRUSH ghost = CreateSolidBrush(LCD_GHOST);
 	HBRUSH faint = CreateSolidBrush(RGB(147, 202, 45));    // 絵の区画の消え点
 	HBRUSH lit   = CreateSolidBrush(LCD_DOT);
+
+	// 23 桁目の制御ビット。列 A-D は bit3-bit0、行は上の桁の 0-7 と
+	// 下の桁の 0-7 をつないだ 0-15。番地は実測（doc/gui.md）
+	auto ctl = [&](int col, int row) -> bool {
+		if (!s.lcd_on)
+			return false;
+		const u8 v = s.dots[((row / 8) * LCD_COLS + TOP_COLS + 6) * CELL_H + (row % 8)];
+		return BIT(v, 3 - col) != 0;
+	};
+	enum { CA = 0, CB = 1, CC = 2, CD = 3 };
 
 	// 1 マスぶんの点を描く。step は点の間隔、size は点の大きさ
 	auto cell = [&](int row, int col, int px, int py, int step, int size, HBRUSH back) {
@@ -319,46 +331,53 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 		for (int col = 0; col < TOP_COLS; col++)
 			cell(row, col, x0 + col * (CELL_W + 1) * d, y0 + row * CELL_H * d, d, dot, ghost);
 
-	// ---- 窓に印刷されている目盛り。A1 A2 と 1-32 で、バー 1 本に 1 目盛り。
-	// 実機は数字を全部刷ってあるが、この大きさだと潰れるので節目だけにする
+	// ---- 目盛りの帯。ここも**印刷ではなくセグメント**で、点いたり消えたりする
 	const int scale_y = y0 + 16 * d;
+	const int line2 = scale_y + tick_h + line_h;
 	{
-		HPEN p = CreatePen(PS_SOLID, 1, RGB(90, 118, 38));
+		const bool on_scale = ctl(CD, 4);          // 「1」-「32」
+		const bool on_a1a2  = ctl(CD, 3);          // 「A1」「A2」
+		const COLORREF ink_scale = on_scale ? LCD_DOT : LCD_GHOST;
+		const COLORREF ink_a1a2  = on_a1a2  ? LCD_DOT : LCD_GHOST;
+
+		HPEN p = CreatePen(PS_SOLID, 1, on_scale ? LCD_DOT : LCD_GHOST);
 		HGDIOBJ op = SelectObject(dc, p);
-		const int tick = tick_h;
 		for (int i = 0; i < TOP_COLS * 2; i++) {
-			// i 本目のバーは、マス i/2 の左半分か右半分
 			const int col = i / 2;
 			const int bx  = x0 + col * (CELL_W + 1) * d + ((i & 1) ? 3 * d : 0) + d / 2;
-			MoveToEx(dc, bx, scale_y, nullptr);
-			LineTo(dc, bx, scale_y + tick);
-
-			const int part = i - 1;                 // A1 A2 のぶんを引く
-			if (i >= 2 && part != 1 && part % 5 != 0)
-				continue;
+			if (i >= 2 || on_a1a2) {
+				MoveToEx(dc, bx, scale_y, nullptr);
+				LineTo(dc, bx, scale_y + tick_h);
+			}
+			// 番号はパートの番号。**そのバーの真下**に置く
+			const int part = i - 1;
 			char n[8];
 			std::snprintf(n, sizeof(n), i < 2 ? "A%d" : "%d", i < 2 ? i + 1 : part);
-			RECT t{ bx - int(8 * m_scale), scale_y + tick,
-			        bx + int(8 * m_scale), scale_y + tick + line_h };
-			text_in(dc, t, n, RGB(70, 92, 30), m_font_small,
+			RECT t{ bx - 3 * d / 2, scale_y + tick_h,
+			        bx + 3 * d / 2, scale_y + tick_h + line_h };
+			text_in(dc, t, n, i < 2 ? ink_a1a2 : ink_scale, m_font_tiny,
 			        DT_CENTER | DT_TOP | DT_SINGLELINE);
 		}
 		SelectObject(dc, op);
 		DeleteObject(p);
 
-		// MIC は目盛りの帯の下の段、左端。実機もここに小さく出ている
-		const int line2 = scale_y + tick + line_h;
-		RECT mic{ x0, line2, x0 + int(20 * m_scale), line2 + line_h };
-		text_in(dc, mic, "MIC", RGB(70, 92, 30), m_font_small,
+		// MIC と LINE。実機では上下に並んでいるが、ここは横に並べる
+		RECT mic{ x0, line2, x0 + int(18 * m_scale), line2 + line_h };
+		text_in(dc, mic, "MIC", ctl(CD, 1) ? LCD_DOT : LCD_GHOST, m_font_small,
+		        DT_LEFT | DT_TOP | DT_SINGLELINE);
+		RECT lin{ x0 + int(19 * m_scale), line2, x0 + int(42 * m_scale), line2 + line_h };
+		text_in(dc, lin, "LINE", ctl(CD, 2) ? LCD_DOT : LCD_GHOST, m_font_small,
 		        DT_LEFT | DT_TOP | DT_SINGLELINE);
 
-		// BANK と PGM# は、文字 2 行目の桁に合わせて印刷されている
+		// BANK と PGM# は左右で別のセグメント
 		RECT b{ x0 + 10 * (CELL_W + 1) * d, line2, x0 + 14 * (CELL_W + 1) * d,
 		        line2 + line_h };
-		text_in(dc, b, "BANK", RGB(70, 92, 30), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
+		text_in(dc, b, "BANK", ctl(CD, 0) ? LCD_DOT : LCD_GHOST, m_font_small,
+		        DT_LEFT | DT_TOP | DT_SINGLELINE);
 		RECT g{ x0 + 14 * (CELL_W + 1) * d, line2, x0 + 18 * (CELL_W + 1) * d,
 		        line2 + line_h };
-		text_in(dc, g, "PGM#", RGB(70, 92, 30), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
+		text_in(dc, g, "PGM#", ctl(CD, 5) ? LCD_DOT : LCD_GHOST, m_font_small,
+		        DT_LEFT | DT_TOP | DT_SINGLELINE);
 	}
 
 	// ---- 下の面
@@ -373,15 +392,13 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	for (int i = 0; i < 3; i++)
 		cell(1, TOP_COLS + i, lx(LOW_BANK) + i * CELL_W * d, sy, d, dot, ghost);
 
-	// 楽器のかたち。20-23 桁の両行が 1 枚の絵になっている。
-	// **点が文字より細かく、正方形でもない**。横は 20 点ぶんを LOW_W ぶんに、
-	// 縦は 16 点ぶんを文字 1 行（8 点）に詰める
+	// 楽器のかたち。20-22 桁の両行が 1 枚の絵。**23 桁目は絵ではない**ので入れない
 	{
 		const int ix = lx(LOW_ICON), iw = lw(LOW_ICON);
-		const int cols = LCD_COLS - (TOP_COLS + 3);
-		const int nx = cols * CELL_W, ny = LCD_ROWS * CELL_H;
+		const int first = TOP_COLS + 3, last = LCD_COLS - 1;   // 20-22
+		const int nx = (last - first) * CELL_W, ny = LCD_ROWS * CELL_H;
 		for (int row = 0; row < LCD_ROWS; row++)
-			for (int col = TOP_COLS + 3; col < LCD_COLS; col++) {
+			for (int col = first; col < last; col++) {
 				const u8 *c = s.dots + (row * LCD_COLS + col) * CELL_H;
 				for (int y = 0; y < CELL_H; y++) {
 					const int yy = row * CELL_H + y;
@@ -391,7 +408,7 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 					if (r.bottom <= r.top)
 						r.bottom = r.top + 1;
 					for (int x = 0; x < CELL_W; x++) {
-						const int xx = (col - TOP_COLS - 3) * CELL_W + x;
+						const int xx = (col - first) * CELL_W + x;
 						r.left  = ix + xx * iw / nx;
 						r.right = ix + (xx + 1) * iw / nx;
 						if (r.right <= r.left)
@@ -402,90 +419,187 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			}
 	}
 
-	// ---- ここから右は、実機では独立したセグメント。HD44780 には流れて
-	// こない（MAME もこの区画を持っていない）ので、**消えている形だけ**を
-	// 薄く描く。実物も消えた区画はうっすら見えるので、見た目としては近い
+	// ---- 決まった形のセグメント。**23 桁目のビットで点け消しする**
 	{
-		HBRUSH off = CreateSolidBrush(LCD_GHOST);
-		HPEN   pen = CreatePen(PS_SOLID, std::max(1, int(1.5 * m_scale)), LCD_GHOST);
-		HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
-		HGDIOBJ op = SelectObject(dc, pen);
-
+		HBRUSH on_b  = lit;
+		HBRUSH off_b = ghost;
 		const int t = std::max(1, int(1.6 * m_scale));
+		auto brush = [&](bool on) { return on ? on_b : off_b; };
 
-		// 7 セグメントの「8」。消えている桁はこう見える
-		auto digit = [&](int x, int w) {
-			const int top = sy, h = seg_h, mid = top + h / 2;
-			RECT r;
-			r = { x, top, x + w, top + t };                  FillRect(dc, &r, off);
-			r = { x, mid - t / 2, x + w, mid + t - t / 2 };  FillRect(dc, &r, off);
-			r = { x, top + h - t, x + w, top + h };          FillRect(dc, &r, off);
-			r = { x, top, x + t, mid };                      FillRect(dc, &r, off);
-			r = { x + w - t, top, x + w, mid };              FillRect(dc, &r, off);
-			r = { x, mid, x + t, top + h };                  FillRect(dc, &r, off);
-			r = { x + w - t, mid, x + w, top + h };          FillRect(dc, &r, off);
+		// 7 セグメント。seg は a b c d e f g の順のビット
+		auto seven = [&](int x, int w, int top, int h, unsigned seg, bool ganged_adeg) {
+			const int mid = top + h / 2;
+			auto bar = [&](bool on, int l, int tp, int r, int b) {
+				RECT rc{ l, tp, r, b };
+				FillRect(dc, &rc, brush(on));
+			};
+			const bool a = ganged_adeg ? BIT(seg, 0) : BIT(seg, 0);
+			bar(a,            x,         top,          x + w,     top + t);         // a
+			bar(BIT(seg, 1),  x + w - t, top,          x + w,     mid);              // b
+			bar(BIT(seg, 2),  x + w - t, mid,          x + w,     top + h);          // c
+			bar(BIT(seg, 3),  x,         top + h - t,  x + w,     top + h);          // d
+			bar(BIT(seg, 4),  x,         mid,          x + t,     top + h);          // e
+			bar(BIT(seg, 5),  x,         top,          x + t,     mid);              // f
+			bar(BIT(seg, 6),  x,         mid - t / 2,  x + w,     mid + t - t / 2);  // g
 		};
 
-		// 縦棒のメータ（VOL と EXP）
-		auto bars = [&](int x, int w) {
+		// 送り量の扇。8 本の弧のうち、下から N 本を点ける
+		auto fan = [&](int which, const bool *on8) {
+			const int w  = lw(which);
+			const int cx = lx(which) + w / 2;
+			const int cy = sy + seg_h - std::max(1, int(m_scale));
+			// 隣にはみ出さないように、いちばん外の弧を枠に収める
+			const int rmax = std::min<int>(seg_h - int(m_scale), w / 2);
+			for (int k = 0; k < 8; k++) {
+				const int r = std::max(1, rmax * (k + 1) / 8);
+				HPEN p = CreatePen(PS_SOLID, std::max(1, int(1.2 * m_scale)),
+				                   on8[k] ? LCD_DOT : LCD_GHOST);
+				HGDIOBJ op = SelectObject(dc, p);
+				Arc(dc, cx - r, cy - r, cx + r, cy + r, cx + r, cy, cx - r, cy);
+				SelectObject(dc, op);
+				DeleteObject(p);
+			}
+		};
+
+		// VOL と EXP の縦棒。**この値は HD44780 に流れてこない**ので、
+		// 消えた形だけを描く（実機では別のセグメント駆動になっている）
+		auto bars = [&](int which) {
+			const int x = lx(which), w = lw(which);
 			for (int i = 0; i < 7; i++) {
 				RECT r{ x, sy + seg_h - (i + 1) * seg_h / 8,
 				        x + w, sy + seg_h - i * seg_h / 8 - t };
-				FillRect(dc, &r, off);
+				FillRect(dc, &r, off_b);
 			}
 		};
+		bars(LOW_VOL);
+		bars(LOW_EXP);
 
-		bars(lx(LOW_VOL), lw(LOW_VOL));
-		bars(lx(LOW_EXP), lw(LOW_EXP));
-
-		// パンのつまみ
+		// パン。丸の中の針が 7 か所に飛ぶ。D9(右端) から D15(左端)
 		{
-			const int r  = std::min<int>(seg_h / 2, lw(LOW_PAN) / 2);
-			const int cx = lx(LOW_PAN) + lw(LOW_PAN) / 2, cy = sy + seg_h / 2;
+			const int w  = lw(LOW_PAN);
+			const int r  = std::min<int>(seg_h / 2, w / 2);
+			const int cx = lx(LOW_PAN) + w / 2, cy = sy + seg_h / 2;
+			HPEN p = CreatePen(PS_SOLID, std::max(1, int(1.2 * m_scale)), LCD_GHOST);
+			HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+			HGDIOBJ op = SelectObject(dc, p);
 			Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
-			MoveToEx(dc, cx, cy, nullptr);
-			LineTo(dc, cx, cy - r + 1);
+			SelectObject(dc, op);
+			DeleteObject(p);
+			for (int k = 0; k < 7; k++) {
+				// k=0 が左端（D15）、k=6 が右端（D9）
+				const bool on = ctl(CD, 15 - k);
+				const double ang = (-60.0 + 20.0 * k) * 3.14159265 / 180.0;
+				HPEN q = CreatePen(PS_SOLID, std::max(1, int(1.4 * m_scale)),
+				                   on ? LCD_DOT : LCD_GHOST);
+				HGDIOBJ oq = SelectObject(dc, q);
+				MoveToEx(dc, cx, cy, nullptr);
+				LineTo(dc, cx + int(std::sin(ang) * (r - 1)),
+				       cy - int(std::cos(ang) * (r - 1)));
+				SelectObject(dc, oq);
+				DeleteObject(q);
+			}
+			SelectObject(dc, ob);
 		}
 
-		// リバーブ・コーラス・バリエーションの弧。上半分だけ描く
-		for (int k = 0; k < 3; k++) {
-			const int w  = lw(LOW_REV + k);
-			const int r  = std::min<int>(seg_h - int(2 * m_scale), w / 2);
-			const int cx = lx(LOW_REV + k) + w / 2;
-			const int cy = sy + seg_h - std::max(1, int(m_scale));
-			Arc(dc, cx - r, cy - r, cx + r, cy + r, cx + r, cy, cx - r, cy);
+		// リバーブ・コーラス・バリエーションの送り量
+		{
+			bool rev[8], cho[8], var[8];
+			for (int k = 0; k < 8; k++) {
+				rev[k] = ctl(CA, 15 - k);
+				cho[k] = ctl(CB, 15 - k);
+				var[k] = ctl(CC, 15 - k);
+			}
+			fan(LOW_REV, rev);
+			fan(LOW_CHO, cho);
+			fan(LOW_VAR, var);
 		}
 
-		// キー。1 文字目は ＋ と − だけのセグメント、あと 2 桁は 7 セグ
+		// ノートシフト。符号（横棒は常時、縦棒が点くと ＋）と 2 桁
 		{
 			const int kx = lx(LOW_KEY);
 			const int cy = sy + seg_h / 2;
-			RECT h{ kx, cy - t / 2, kx + 3 * d, cy + t - t / 2 };
-			FillRect(dc, &h, off);
-			RECT v{ kx + 3 * d / 2 - t / 2, cy - 3 * d / 2,
-			        kx + 3 * d / 2 + t - t / 2, cy + 3 * d / 2 };
-			FillRect(dc, &v, off);
-			digit(kx + 4 * d, 3 * d);
-			digit(kx + 8 * d, 3 * d);
+			const int sw = 3 * d;
+			RECT h{ kx, cy - t / 2, kx + sw, cy + t - t / 2 };
+			FillRect(dc, &h, brush(ctl(CB, 0)));
+			RECT v{ kx + sw / 2 - t / 2, cy - sw / 2, kx + sw / 2 + t - t / 2, cy + sw / 2 };
+			FillRect(dc, &v, brush(ctl(CA, 0)));
+
+			// 十の位は a/d/e/g がひとまとめ。f は使われない
+			const bool ten_adeg = ctl(CA, 1);
+			unsigned ten = 0;
+			if (ten_adeg) ten |= (1u << 0) | (1u << 3) | (1u << 4) | (1u << 6);
+			if (ctl(CB, 1)) ten |= 1u << 1;
+			if (ctl(CA, 7)) ten |= 1u << 2;
+			if (ctl(CB, 4)) ten |= 1u << 5;
+			seven(kx + 4 * d, 3 * d, sy, seg_h, ten, true);
+
+			unsigned one = 0;
+			if (ctl(CB, 6)) one |= 1u << 0;   // a
+			if (ctl(CA, 6)) one |= 1u << 1;   // b
+			if (ctl(CA, 3)) one |= 1u << 2;   // c
+			if (ctl(CA, 2)) one |= 1u << 3;   // d
+			if (ctl(CB, 2)) one |= 1u << 4;   // e
+			if (ctl(CB, 7)) one |= 1u << 5;   // f
+			if (ctl(CB, 3)) one |= 1u << 6;   // g
+			seven(kx + 8 * d, 3 * d, sy, seg_h, one, false);
 		}
 
-		// いちばん右。XG / TG300B / PERFORM のどれかを ▶ で示す。
-		// パネルに印刷されている 3 つの札と高さを合わせてある
+		// いちばん右。XG / TG300B(GS) / PERFORM のどれかを ▶ で示す。
+		// PLG のぶんは C2 か D8 のどちらかだが、まだ決められていない
 		{
 			const int mx = lx(LOW_MODE), mw = lw(LOW_MODE);
+			const bool mode[3] = { ctl(CB, 5), ctl(CA, 4), ctl(CA, 5) };
 			for (int k = 0; k < 3; k++) {
 				const int cy = sy + seg_h * (2 * k + 1) / 6;
 				const int hh = std::max(2, seg_h / 8);
-				const POINT tri[4] = { { mx, cy - hh }, { mx + mw, cy },
-				                       { mx, cy + hh }, { mx, cy - hh } };
-				Polyline(dc, tri, 4);
+				const POINT tri[3] = { { mx, cy - hh }, { mx + mw, cy }, { mx, cy + hh } };
+				HBRUSH bb = brush(mode[k]);
+				HPEN p = CreatePen(PS_SOLID, 1, mode[k] ? LCD_DOT : LCD_GHOST);
+				HGDIOBJ ob = SelectObject(dc, bb);
+				HGDIOBJ op = SelectObject(dc, p);
+				Polygon(dc, tri, 3);
+				SelectObject(dc, ob);
+				SelectObject(dc, op);
+				DeleteObject(p);
 			}
 		}
 
-		SelectObject(dc, ob);
-		SelectObject(dc, op);
-		DeleteObject(off);
-		DeleteObject(pen);
+		// 下の面の上に出る ▼ のカーソル。いま何を弄っているかを示す
+		{
+			const int cur_y = sy - std::max(2, int(2.5 * m_scale));
+			const int hw = std::max(2, d);
+			struct { int at; bool on; } cur[] = {
+				{ LOW_VOL,  ctl(CC, 3) }, { LOW_EXP, ctl(CC, 4) },
+				{ LOW_PAN,  ctl(CC, 5) }, { LOW_REV, ctl(CC, 6) },
+				{ LOW_CHO,  ctl(CC, 7) }, { LOW_VAR, ctl(CD, 6) },
+				{ LOW_KEY,  ctl(CD, 7) },
+			};
+			for (const auto &c : cur) {
+				if (!c.on)
+					continue;
+				const int cx = lx(c.at) + lw(c.at) / 2;
+				const POINT tri[3] = { { cx - hw, cur_y - hw }, { cx + hw, cur_y - hw },
+				                       { cx, cur_y } };
+				HGDIOBJ ob = SelectObject(dc, lit);
+				Polygon(dc, tri, 3);
+				SelectObject(dc, ob);
+			}
+			// バンク番号とプログラム番号のカーソルは、上の面の文字に付く
+			const int bank_x = x0 + 11 * (CELL_W + 1) * d;
+			const int pgm_x  = x0 + 15 * (CELL_W + 1) * d;
+			const int tops[2] = { bank_x, pgm_x };
+			const bool ton[2] = { ctl(CC, 1), ctl(CC, 0) };
+			for (int k = 0; k < 2; k++) {
+				if (!ton[k])
+					continue;
+				const POINT tri[3] = { { tops[k] - hw, line2 + line_h },
+				                       { tops[k] + hw, line2 + line_h },
+				                       { tops[k], line2 + line_h + hw } };
+				HGDIOBJ ob = SelectObject(dc, lit);
+				Polygon(dc, tri, 3);
+				SelectObject(dc, ob);
+			}
+		}
 	}
 
 	DeleteObject(ghost);

@@ -153,6 +153,8 @@ private:
 	int m_fx[CTL_FX_COUNT] = {};
 
 	HFONT m_font_label = nullptr, m_font_small = nullptr;
+	// 目盛りの番号用。バー 1 本ぶんの幅に 2 桁を収める
+	HFONT m_font_tiny  = nullptr;
 };
 
 } // namespace ui
