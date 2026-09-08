@@ -82,6 +82,11 @@ public:
 	// 実際の窓の座標から、触れる場所を探す
 	const spot *hit(int x, int y) const;
 
+	// パネルに描いてある MIDI IN A のジャック。窓側はここを押されたら
+	// 入出力の口を選ぶ品書きを出す
+	RECT midi_jack() const;
+	bool on_midi_jack(int x, int y) const;
+
 	// ---- 入力。窓からそのまま渡す。戻り値は「描き直しが要るか」
 
 	bool press(int x, int y, bridge &br);

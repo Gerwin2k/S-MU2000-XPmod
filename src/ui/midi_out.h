@@ -1,0 +1,68 @@
+// license:BSD-3-Clause
+//
+// Windows の MIDI 出力へ、音源が受け取ったのと同じものを流す（実機の THRU）。
+//
+// 音声スレッドから Windows の API を直に叩くと、そこで待たされることがある。
+// **音声スレッドは待たせてはいけない**（doc/design.md）ので、
+// 音声スレッドは輪っかにバイトを積むだけにして、別のスレッドが送る。
+// 積むのは音声スレッド、取るのは送りスレッドの一本ずつなので錠は要らない。
+
+#ifndef S_MU2000_UI_MIDI_OUT_H
+#define S_MU2000_UI_MIDI_OUT_H
+
+#pragma once
+
+#include "compat/mamecompat.h"
+
+#include <atomic>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace ui {
+
+class midi_out
+{
+public:
+	~midi_out();
+
+	static std::vector<std::string> list();
+
+	// 番号が負なら開かない（どこへも出さない）
+	bool open(int device, std::string &err);
+	void close();
+
+	bool        is_open() const { return m_open.load(); }
+	std::string device_name() const { return m_name; }
+
+	// 音声スレッドから。1 バイトずつ積む。開いていなければ捨てる
+	void send(u8 v);
+
+private:
+	void run();                       // 送りスレッド
+	void emit(const u8 *p, size_t n); // 組み上がった 1 通を Windows へ
+
+	static constexpr size_t SIZE = 8192, MASK = SIZE - 1;
+	u8 m_buf[SIZE] = {};
+	std::atomic<size_t> m_read{0}, m_write{0};
+
+	void       *m_handle = nullptr;   // HMIDIOUT
+	// 起こす合図。**閉じても捨てない**。閉じるのは窓のスレッド、
+	// 積むのは音声スレッドなので、途中で無くなると掴み損ねる
+	void       *m_wake   = nullptr;   // HANDLE（イベント）
+	std::atomic<bool> m_open{false};
+	std::string m_name;
+	std::thread m_thread;
+	std::atomic<bool> m_quit{false};
+
+	// バイトの並びから 1 通を組み立てる。送りスレッドだけが触る
+	u8     m_msg[3] = {};
+	int    m_have = 0, m_want = 0;
+	u8     m_status = 0;
+	bool   m_in_sysex = false;
+	std::vector<u8> m_sysex;
+};
+
+} // namespace ui
+
+#endif // S_MU2000_UI_MIDI_OUT_H

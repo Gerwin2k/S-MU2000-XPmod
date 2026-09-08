@@ -122,6 +122,20 @@ RECT panel::scale(double x, double y, double w, double h) const
 	return r;
 }
 
+// パネルに描いてある MIDI IN A のジャック（丸と札）を囲む枠
+RECT panel::midi_jack() const
+{
+	return scale(92, 230, 96, 90);
+}
+
+bool panel::on_midi_jack(int x, int y) const
+{
+	if (m_page != page::front)
+		return false;
+	const RECT r = midi_jack();
+	return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+}
+
 // 論理座標の点を実座標へ
 POINT panel::at(double x, double y) const
 {

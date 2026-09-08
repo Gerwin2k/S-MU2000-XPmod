@@ -30,12 +30,21 @@ public:
 		m_applied = want;
 	}
 
-	// エディタから送られた MIDI を音源へ
-	void pump_midi(mu2000 &mu, bridge &br)
+	// エディタから送られた MIDI を音源へ。echo には MIDI 出力の口を渡す
+	// （実機の THRU と同じで、画面から出したものも外へ出る）
+	template <typename F>
+	void pump_midi(mu2000 &mu, bridge &br, F &&echo)
 	{
 		u8 b;
-		while (br.take_midi(b))
+		while (br.take_midi(b)) {
 			mu.midi_in(b);
+			echo(b);
+		}
+	}
+
+	void pump_midi(mu2000 &mu, bridge &br)
+	{
+		pump_midi(mu, br, [](u8) {});
 	}
 
 	// ホイールで回された分をダイヤルへ。実機と同じロータリーエンコーダなので、
