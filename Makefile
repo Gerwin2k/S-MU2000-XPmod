@@ -46,8 +46,9 @@ SRCS := \
 
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
+# vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
 all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
-     $(BUILD)/live.exe $(BUILD)/midisend.exe
+     $(BUILD)/live.exe $(BUILD)/midisend.exe vst3 $(BUILD)/vst3probe.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
 	@mkdir -p $(dir $@)

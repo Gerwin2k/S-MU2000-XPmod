@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <atomic>
 #include <deque>
+#include <memory>
 #include <thread>
 #include <string>
 
@@ -31,6 +32,17 @@ public:
 	~mu2000();
 
 	// ---- ROM。どれも利用者が自分の実機から吸い出したもの
+
+	// ROM は読むだけなので、何台の MU2000 で分け合っても構わない。
+	// 一度読んだものを渡せば、読み直しも 36MB の複製もしなくて済む
+	using u8rom  = std::shared_ptr<std::vector<u8>>;
+	using u16rom = std::shared_ptr<std::vector<u16>>;
+	u8rom  program_rom() const { return m_prog; }
+	u8rom  wave_rom()    const { return m_wave; }
+	u16rom sintab_rom()  const { return m_sintab; }
+	void set_program_rom(u8rom p);
+	void set_wave_rom(u8rom p);
+	void set_sintab_rom(u16rom p);
 
 	// CPU から見えるままの 4MB（MU2000 リポジトリの roms/mu2000_flash.bin）
 	bool load_program(const std::string &path);
@@ -93,9 +105,9 @@ private:
 	sci4_device *m_sci4 = nullptr;   // PLG ボード用 0xf00000
 	mem_bus      m_bus;
 
-	std::vector<u8>  m_prog;        // プログラム ROM 4MB
-	std::vector<u8>  m_wave;        // 波形 ROM 32MB
-	std::vector<u16> m_sintab;
+	u8rom  m_prog;                  // プログラム ROM 4MB
+	u8rom  m_wave;                  // 波形 ROM 32MB
+	u16rom m_sintab;
 	std::vector<u8>  m_ram;         // ワーク RAM  0x400000-0x43ffff
 	std::vector<u8>  m_dram;        // DRAM        0x1000000-0x107ffff
 	std::vector<u8>  m_iram;        // CPU 内蔵    0xfffff000-0xffffffff

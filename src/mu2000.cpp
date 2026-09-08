@@ -120,12 +120,39 @@ void mu2000::slave_loop()
 
 bool mu2000::load_program(const std::string &path)
 {
-	if (!read_file(path, m_prog, 0x400000)) {
+	auto rom = std::make_shared<std::vector<u8>>();
+	if (!read_file(path, *rom, 0x400000)) {
 		m_error = "プログラム ROM を読めない（4MB でないか、見つからない）: " + path;
 		return false;
 	}
-	build_bus();
+	set_program_rom(std::move(rom));
 	return true;
+}
+
+// ROM は読むだけなので、何台の MU2000 で分け合っても構わない。
+// VST3 を複数挿したときに 36MB を人数分持たずに済む
+void mu2000::set_program_rom(u8rom p)
+{
+	m_prog = std::move(p);
+	build_bus();
+}
+
+void mu2000::set_wave_rom(u8rom p)
+{
+	m_wave = std::move(p);
+	if (!m_wave)
+		return;
+	m_swpm.set_wave_rom(m_wave->data(), m_wave->size());
+	m_swps.set_wave_rom(m_wave->data(), m_wave->size());
+}
+
+void mu2000::set_sintab_rom(u16rom p)
+{
+	m_sintab = std::move(p);
+	if (!m_sintab)
+		return;
+	m_swpm.set_sintab(m_sintab->data(), m_sintab->size());
+	m_swps.set_sintab(m_sintab->data(), m_sintab->size());
 }
 
 
@@ -139,7 +166,7 @@ bool mu2000::load_wave(const std::string &dir)
 		"xv364a0.ic49", "xv365a0.ic50", "xw848a0.ic53", "xw849a0.ic54"
 	};
 
-	m_wave.assign(0x2000000, 0);     // 32MB
+	auto rom = std::make_shared<std::vector<u8>>(0x2000000, 0);   // 32MB
 	for (int i = 0; i < 4; i++) {
 		std::vector<u8> part;
 		const std::string path = dir + "/" + names[i];
@@ -151,13 +178,12 @@ bool mu2000::load_wave(const std::string &dir)
 		const size_t off  = (i & 1) ? 2 : 0;
 		for (size_t j = 0; j < part.size(); j += 2) {
 			const size_t dst = base + j * 2 + off;
-			m_wave[dst + 0] = part[j + 0];
-			m_wave[dst + 1] = part[j + 1];
+			(*rom)[dst + 0] = part[j + 0];
+			(*rom)[dst + 1] = part[j + 1];
 		}
 	}
 
-	m_swpm.set_wave_rom(m_wave.data(), m_wave.size());
-	m_swps.set_wave_rom(m_wave.data(), m_wave.size());
+	set_wave_rom(std::move(rom));
 	return true;
 }
 
@@ -169,11 +195,10 @@ bool mu2000::load_sintab(const std::string &path)
 		m_error = "sin 表を読めない（64KB でないか、見つからない）: " + path;
 		return false;
 	}
-	m_sintab.resize(raw.size() / 2);
-	for (size_t i = 0; i < m_sintab.size(); i++)
-		m_sintab[i] = u16(raw[i * 2] | (raw[i * 2 + 1] << 8));
-	m_swpm.set_sintab(m_sintab.data(), m_sintab.size());
-	m_swps.set_sintab(m_sintab.data(), m_sintab.size());
+	auto rom = std::make_shared<std::vector<u16>>(raw.size() / 2);
+	for (size_t i = 0; i < rom->size(); i++)
+		(*rom)[i] = u16(raw[i * 2] | (raw[i * 2 + 1] << 8));
+	set_sintab_rom(std::move(rom));
 	return true;
 }
 
@@ -183,8 +208,8 @@ void mu2000::build_bus()
 	m_bus = mem_bus();
 
 	// 000000-3fffff: プログラム ROM
-	if (!m_prog.empty())
-		m_bus.add_region(0x000000, 0x3fffff, m_prog.data(), false);
+	if (m_prog && !m_prog->empty())
+		m_bus.add_region(0x000000, 0x3fffff, m_prog->data(), false);
 	// 400000-43ffff: ワーク RAM
 	m_bus.add_region(0x400000, 0x43ffff, m_ram.data(), true);
 	// 1000000-107ffff: DRAM

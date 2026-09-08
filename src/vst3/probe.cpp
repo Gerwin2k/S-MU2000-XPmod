@@ -9,6 +9,7 @@
 // MIDI を受けて音が出るか、標本化周波数の変換が効いているか。
 
 #include "pluginterfaces/base/funknown.h"
+#include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -144,6 +145,239 @@ void write_wav(const std::string &path, const std::vector<int16_t> &pcm, uint32_
 	std::fclose(f);
 }
 
+// ---- ホストがやりそうな乱暴を一通りやってみる。
+// DAW によって呼ぶ順も回数も違うので、落ちないことをここで確かめておく
+
+// getState / setState の受け皿
+class mem_stream : public IBStream
+{
+public:
+	tresult PLUGIN_API queryInterface(const TUID, void **obj) override
+	{ *obj = this; return kResultOk; }
+	uint32 PLUGIN_API addRef() override  { return 1; }
+	uint32 PLUGIN_API release() override { return 1; }
+
+	tresult PLUGIN_API read(void *buf, int32 n, int32 *got) override
+	{
+		const int32 k = std::min<int32>(n, int32(m_buf.size()) - m_pos);
+		if (k > 0) std::memcpy(buf, m_buf.data() + m_pos, size_t(k));
+		m_pos += std::max(k, 0);
+		if (got) *got = std::max(k, 0);
+		return kResultOk;
+	}
+	tresult PLUGIN_API write(void *buf, int32 n, int32 *put) override
+	{
+		const uint8 *p = static_cast<const uint8 *>(buf);
+		m_buf.insert(m_buf.end(), p, p + n);
+		m_pos = int32(m_buf.size());
+		if (put) *put = n;
+		return kResultOk;
+	}
+	tresult PLUGIN_API seek(int64 pos, int32 mode, int64 *result) override
+	{
+		if (mode == kIBSeekSet) m_pos = int32(pos);
+		else if (mode == kIBSeekCur) m_pos += int32(pos);
+		else m_pos = int32(m_buf.size()) + int32(pos);
+		m_pos = std::clamp(m_pos, 0, int32(m_buf.size()));
+		if (result) *result = m_pos;
+		return kResultOk;
+	}
+	tresult PLUGIN_API tell(int64 *pos) override
+	{ if (pos) *pos = m_pos; return kResultOk; }
+
+	void rewind() { m_pos = 0; }
+	size_t size() const { return m_buf.size(); }
+
+private:
+	std::vector<uint8> m_buf;
+	int32 m_pos = 0;
+};
+
+int run_torture(IPluginFactory *fac, const TUID cid)
+{
+	std::printf("\n---- 乱暴に扱ってみる ----\n");
+	int bad = 0;
+
+	// 1. 作って、初期化せずに捨てる
+	for (int i = 0; i < 8; i++) {
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		if (!c) { std::printf("NG: 作れない\n"); return 1; }
+		c->release();
+	}
+	std::printf("OK: 初期化せずに 8 個作って捨てた\n");
+
+	// 2. initialize / terminate を繰り返す
+	{
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		for (int i = 0; i < 3; i++) { c->initialize(nullptr); c->terminate(); }
+		c->release();
+		std::printf("OK: initialize/terminate を 3 往復\n");
+	}
+
+	// 3. 一通りの標本化周波数と大きさで、音を出さずに process を回す
+	{
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		IAudioProcessor *p = nullptr;
+		c->queryInterface(IAudioProcessor::iid, (void **)&p);
+		c->initialize(nullptr);
+
+		const double rates[5] = { 22050, 44100, 48000, 88200, 192000 };
+		for (double r : rates) {
+			ProcessSetup su{};
+			su.processMode = kRealtime;
+			su.symbolicSampleSize = kSample32;
+			su.maxSamplesPerBlock = 2048;
+			su.sampleRate = r;
+			if (p->setupProcessing(su) != kResultOk) { std::printf("NG: %.0f Hz\n", r); bad++; }
+		}
+		std::printf("OK: 22050 から 192000 まで setupProcessing\n");
+
+		c->setActive(true);
+		p->setProcessing(true);
+
+		std::vector<float> l(2048), rr(2048);
+		float *ch[2] = { l.data(), rr.data() };
+		AudioBusBuffers ab{};
+		ab.numChannels = 2; ab.channelBuffers32 = ch;
+		ProcessData pd{};
+		pd.symbolicSampleSize = kSample32;
+		pd.numOutputs = 1; pd.outputs = &ab;
+
+		// 長さ 0、バスなし、音声配列なし、64bit 指定 … どれも落ちてはいけない
+		pd.numSamples = 0;                        p->process(pd);
+		pd.numSamples = 64;  pd.numOutputs = 0;   p->process(pd);
+		pd.numOutputs = 1;   ab.numChannels = 0;  p->process(pd);
+		ab.numChannels = 2;
+		pd.symbolicSampleSize = kSample64;        p->process(pd);
+		pd.symbolicSampleSize = kSample32;
+		std::printf("OK: 長さ 0 / バス無し / 64bit 指定でも落ちない\n");
+
+		// setProcessing と setActive をばたばた切り替える
+		for (int i = 0; i < 20; i++) {
+			p->setProcessing(i & 1);
+			pd.numSamples = 128;
+			p->process(pd);
+			c->setActive(!(i & 1));
+		}
+		std::printf("OK: setActive/setProcessing を 20 往復しながら process\n");
+
+		// getState / setState
+		mem_stream st;
+		if (c->getState(&st) != kResultOk) { std::printf("NG: getState\n"); bad++; }
+		st.rewind();
+		if (c->setState(&st) != kResultOk) { std::printf("NG: setState\n"); bad++; }
+		std::printf("OK: getState %zu バイト -> setState\n", st.size());
+
+		p->setProcessing(false);
+		c->setActive(false);
+		c->terminate();
+		p->release();
+		c->release();
+	}
+
+	// 4. パラメータの問い合わせを全部
+	{
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		IEditController *e = nullptr;
+		IMidiMapping *m = nullptr;
+		c->queryInterface(IEditController::iid, (void **)&e);
+		c->queryInterface(IMidiMapping::iid, (void **)&m);
+		c->initialize(nullptr);
+
+		const int32 n = e->getParameterCount();
+		for (int32 i = 0; i < n; i++) {
+			ParameterInfo pi{};
+			if (e->getParameterInfo(i, pi) != kResultOk) { std::printf("NG: パラメータ %d\n", i); bad++; break; }
+			String128 s{};
+			e->getParamStringByValue(pi.id, 0.5, s);
+			ParamValue v = 0.0;
+			e->getParamValueByString(pi.id, s, v);
+			e->setParamNormalized(pi.id, 0.25);
+			if (e->getParamNormalized(pi.id) != 0.25) { std::printf("NG: 値が残らない %u\n", unsigned(pi.id)); bad++; break; }
+		}
+		std::printf("OK: パラメータ %d 本を全部問い合わせた\n", n);
+
+		// 範囲外
+		ParameterInfo pi{};
+		if (e->getParameterInfo(-1, pi) == kResultOk || e->getParameterInfo(n, pi) == kResultOk) {
+			std::printf("NG: 範囲外のパラメータに答えてしまう\n"); bad++;
+		}
+		int mapped = 0;
+		for (int16 ch = 0; ch < 16; ch++)
+			for (int cc = 0; cc < 132; cc++) {
+				ParamID id = 0;
+				if (m->getMidiControllerAssignment(0, ch, CtrlNumber(cc), id) == kResultTrue)
+					mapped++;
+			}
+		std::printf("OK: MIDI の割り当ては %d 通り（16ch × 131）\n", mapped);
+
+		c->terminate();
+		e->release();
+		m->release();
+		c->release();
+	}
+
+	// 5. 同時に 4 個。DAW で複数トラックに挿した形
+	{
+		IComponent *cs[4] = {};
+		IAudioProcessor *ps[4] = {};
+		for (int i = 0; i < 4; i++) {
+			fac->createInstance(reinterpret_cast<FIDString>(cid),
+			                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&cs[i]);
+			cs[i]->queryInterface(IAudioProcessor::iid, (void **)&ps[i]);
+			cs[i]->initialize(nullptr);
+			ProcessSetup su{};
+			su.processMode = kRealtime; su.symbolicSampleSize = kSample32;
+			su.maxSamplesPerBlock = 512; su.sampleRate = 48000;
+			ps[i]->setupProcessing(su);
+			cs[i]->setActive(true);
+			ps[i]->setProcessing(true);
+		}
+		std::printf("4 個ぶん起動を待つ...");
+		std::fflush(stdout);
+		Sleep(12000);
+
+		std::vector<float> l(512), rr(512);
+		float *ch[2] = { l.data(), rr.data() };
+		AudioBusBuffers ab{}; ab.numChannels = 2; ab.channelBuffers32 = ch;
+		ProcessData pd{};
+		pd.symbolicSampleSize = kSample32; pd.numSamples = 512;
+		pd.numOutputs = 1; pd.outputs = &ab;
+
+		const DWORD t0 = GetTickCount();
+		double peak = 0.0;
+		for (int blk = 0; blk < 200; blk++)
+			for (int i = 0; i < 4; i++) {
+				ps[i]->process(pd);
+				for (float v : l) peak = std::max(peak, std::fabs(double(v)));
+			}
+		const DWORD t1 = GetTickCount();
+		const double audio = 200.0 * 512.0 / 48000.0;
+		std::printf(" 4 個同時に %.2f 秒ぶん作って実時間 %.2f 秒（1 個あたり CPU %.0f%%）\n",
+		            audio, (t1 - t0) / 1000.0, 100.0 * (t1 - t0) / 1000.0 / audio / 4.0);
+
+		for (int i = 0; i < 4; i++) {
+			ps[i]->setProcessing(false);
+			cs[i]->setActive(false);
+			cs[i]->terminate();
+			ps[i]->release();
+			cs[i]->release();
+		}
+		std::printf("OK: 4 個同時に作って捨てた\n");
+	}
+
+	std::printf("---- 悪いところ %d 件 ----\n", bad);
+	return bad ? 1 : 0;
+}
+
 } // namespace
 
 
@@ -160,10 +394,12 @@ int main(int argc, char **argv)
 	double rate = 48000.0;
 	int block = 512;
 	double extra = 3.0;      // 曲の後ろに足す残響ぶん
+	bool torture = false;
 	for (int i = 2; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--rate") && i + 1 < argc) rate = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--block") && i + 1 < argc) block = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--tail") && i + 1 < argc) extra = std::atof(argv[++i]);
+		else if (!std::strcmp(argv[i], "--torture")) torture = true;
 		else if (mid.empty()) mid = argv[i];
 		else if (wav.empty()) wav = argv[i];
 	}
@@ -267,6 +503,17 @@ int main(int argc, char **argv)
 	proc->setProcessing(true);
 	std::printf("遅れ %u サンプル / 残響 %u サンプル\n",
 	            proc->getLatencySamples(), proc->getTailSamples());
+
+	if (torture) {
+		proc->setProcessing(false);
+		comp->setActive(false);
+		comp->terminate();
+		if (proc) proc->release();
+		if (ctrl) ctrl->release();
+		if (map)  map->release();
+		comp->release();
+		return run_torture(fac, cid);
+	}
 
 	if (mid.empty() || wav.empty()) {
 		std::printf("音は出していない（MIDI と出力先を渡すと鳴らす）\n");

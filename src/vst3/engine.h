@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -77,6 +78,8 @@ private:
 	std::atomic<bool>   m_abort{false};
 
 	mu2000     *m_mu = nullptr;
+	// 読み込んだ ROM を掴んでおく。他の枚数ぶんと分け合っている
+	std::shared_ptr<void> m_roms;
 	// boot() が state を立てる前に書き、読むのは state が loading でなくなってから
 	std::string m_message;
 

@@ -9,6 +9,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 #include <windows.h>
 
@@ -164,6 +165,24 @@ std::string find_roms(std::string &tried)
 } // namespace
 
 
+// ---- 読み込んだ ROM の使い回し。
+// 誰も使わなくなったら消えるよう、控えは weak_ptr で持つ
+
+namespace {
+
+struct rom_set {
+	mu2000::u8rom  prog, wave;
+	mu2000::u16rom sintab;
+	std::string    warn;
+};
+
+std::mutex             g_rom_mutex;
+std::string            g_rom_dir;
+std::weak_ptr<rom_set> g_roms;
+
+} // namespace
+
+
 engine::engine()
 {
 	build_table();
@@ -208,18 +227,44 @@ void engine::boot()
 	logf("ROM: %s", dir.c_str());
 
 	mu2000 *mu = new mu2000;
-	if (!mu->load_program(dir + "\\mu2000_flash.bin") ||
-	    !mu->load_wave(dir + "\\dump")) {
-		m_message = mu->error();
-		logf("%s", m_message.c_str());
-		delete mu;
-		m_state.store(status::failed, std::memory_order_release);
-		return;
-	}
 	std::string warn;
-	if (!mu->load_sintab(dir + "\\standin\\sin-table.bin")) {
-		warn = mu->error();
-		logf("警告: %s", warn.c_str());
+	{
+		// ROM は読むだけなので、この DLL の中で 1 組あればいい。
+		// トラックごとに挿されると 36MB × 枚数になってしまう
+		std::lock_guard<std::mutex> lock(g_rom_mutex);
+		std::shared_ptr<rom_set> shared;
+		if (g_rom_dir == dir)
+			shared = g_roms.lock();
+
+		if (shared) {
+			mu->set_program_rom(shared->prog);
+			mu->set_wave_rom(shared->wave);
+			mu->set_sintab_rom(shared->sintab);
+			warn = shared->warn;
+			logf("ROM は読み込み済みのものを借りた");
+		} else {
+			if (!mu->load_program(dir + "\\mu2000_flash.bin") ||
+			    !mu->load_wave(dir + "\\dump")) {
+				m_message = mu->error();
+				logf("%s", m_message.c_str());
+				delete mu;
+				m_state.store(status::failed, std::memory_order_release);
+				return;
+			}
+			if (!mu->load_sintab(dir + "\\standin\\sin-table.bin")) {
+				warn = mu->error();
+				logf("警告: %s", warn.c_str());
+			}
+			shared = std::make_shared<rom_set>();
+			shared->prog   = mu->program_rom();
+			shared->wave   = mu->wave_rom();
+			shared->sintab = mu->sintab_rom();
+			shared->warn   = warn;
+			g_rom_dir = dir;
+			g_roms    = shared;
+		}
+		// 借り手が 1 人でも生きている限り、次の人も借りられる
+		m_roms = shared;
 	}
 
 	mu->set_threaded(true);
