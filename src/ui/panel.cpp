@@ -265,7 +265,7 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	HBRUSH ghost = CreateSolidBrush(LCD_GHOST);
 	HBRUSH lit   = CreateSolidBrush(LCD_DOT);
 
-	auto cell = [&](int row, int col, int px, int py, int step, int size) {
+	auto cell = [&](int row, int col, int px, int py, int step, int size, HBRUSH back) {
 		const u8 *c = s.dots + (row * LCD_COLS + col) * CELL_H;
 		for (int y = 0; y < CELL_H; y++)
 			for (int x = 0; x < CELL_W; x++) {
@@ -274,14 +274,14 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 				r.top    = py + y * step;
 				r.right  = r.left + size;
 				r.bottom = r.top  + size;
-				FillRect(dc, &r, (s.lcd_on && BIT(c[y], 4 - x)) ? lit : ghost);
+				FillRect(dc, &r, (s.lcd_on && BIT(c[y], 4 - x)) ? lit : back);
 			}
 	};
 
 	// 1. 文字
 	for (int row = 0; row < LCD_ROWS; row++)
 		for (int col = 0; col < TEXT_COLS; col++)
-			cell(row, col, x0 + col * (CELL_W + 1) * d, y0 + row * CELL_H * d, d, dot);
+			cell(row, col, x0 + col * (CELL_W + 1) * d, y0 + row * CELL_H * d, d, dot, ghost);
 
 	// 2. 窓に印刷された目盛り。常に見えている
 	const int scale_y = y0 + 16 * d + d / 2;
@@ -324,12 +324,16 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	const int sy = scale_y + int(11 * m_scale);
 	const int seg_h = 16 * sd;
 
-	// 楽器のかたち。firmware が CGRAM に描いた 8 マスが 1 枚の絵になっている
-	const int icon_x = at(330, 0).x;
+	// 楽器のかたち。firmware が CGRAM に描いた 8 マスが 1 枚の絵になっている。
+	// 消えている点は背景とほぼ同じ色で塗る。ここだけ四角く色が変わって
+	// 「箱に入った絵」に見えてしまうため
+	const int icon_x = at(266, 0).x;
+	HBRUSH faint = CreateSolidBrush(RGB(147, 202, 45));
 	for (int row = 0; row < LCD_ROWS; row++)
 		for (int col = TEXT_COLS; col < LCD_COLS; col++)
 			cell(row, col, icon_x + (col - TEXT_COLS) * CELL_W * sd, sy + row * CELL_H * sd,
-			     sd, sd);
+			     sd, sd, faint);
+	DeleteObject(faint);
 
 	// ここから下は、実機では独立したセグメント。こちらの HD44780 には
 	// 流れてこない（MAME もこの区画は持っていない）ので、
@@ -341,8 +345,8 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 		HGDIOBJ op = SelectObject(dc, pen);
 
 		// 7 セグメントの「8」。消えている桁はこう見える
-		auto digit = [&](double lx, int top, int h) {
-			const int x = at(lx, 0).x, w = at(lx + 11, 0).x - x;
+		auto digit = [&](double lx, double lw, int top, int h) {
+			const int x = at(lx, 0).x, w = at(lx + lw, 0).x - x;
 			const int t = std::max(1, int(1.6 * m_scale));
 			const int mid = top + h / 2;
 			RECT r;
@@ -355,9 +359,15 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			r = { x + w - t, mid, x + w, top + h };               FillRect(dc, &r, off);
 		};
 
-		// 部の番号（実機では 01A01 のように出る）
-		for (int i = 0; i < 5; i++)
-			digit(256 + i * 14, sy + seg_h / 5, seg_h * 4 / 5);
+		// 窓の下の札に合わせて桁を並べる。lx は札の中心
+		auto digits = [&](double center, int n, double pitch, double w) {
+			const double left = center - (n * pitch - (pitch - w)) / 2;
+			for (int i = 0; i < n; i++)
+				digit(left + i * pitch, w, sy + seg_h / 5, seg_h * 4 / 5);
+		};
+
+		digits(345, 2, 13, 10);          // PART
+		digits(425, 5, 13, 10);          // BANK / PGM#
 
 		// VOL と EXP の縦棒
 		for (int k = 0; k < 2; k++) {
@@ -372,8 +382,8 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 
 		// パンのつまみ
 		{
-			const int cx = at(538, 0).x, cy = sy + seg_h / 2;
-			const int r = std::min<int>(seg_h / 2, at(548, 0).x - at(538, 0).x);
+			const int cx = at(540, 0).x, cy = sy + seg_h / 2;
+			const int r = std::min<int>(seg_h / 2, at(550, 0).x - at(540, 0).x);
 			Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
 			MoveToEx(dc, cx, cy, nullptr);
 			LineTo(dc, cx, cy - r + 1);
@@ -387,9 +397,7 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 			Arc(dc, cx - r, cy - r, cx + r, cy + r, cx + r, cy, cx - r, cy);
 		}
 
-		// キー（実機では + 0 のように出る）
-		for (int i = 0; i < 3; i++)
-			digit(634 + i * 14, sy + seg_h / 5, seg_h * 4 / 5);
+		digits(645, 3, 13, 10);          // KEY（実機では + 0 のように出る）
 
 		SelectObject(dc, ob);
 		SelectObject(dc, op);
@@ -398,7 +406,7 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	}
 	{
 		// 窓に印刷されている札
-		RECT mic{ x0, sy + seg_h - int(9 * m_scale), x0 + int(26 * m_scale),
+		RECT mic{ x0, sy + seg_h - int(9 * m_scale), x0 + int(20 * m_scale),
 		          sy + seg_h };
 		text_in(dc, mic, "MIC", RGB(70, 92, 30), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
 	}
