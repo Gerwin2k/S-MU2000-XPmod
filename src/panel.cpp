@@ -116,11 +116,13 @@ int main(int argc, char **argv)
 {
 	std::string dir, keys;
 	bool list = false;
+	int turn = 0;
 	double settle = 1.0;
 
 	for (int i = 1; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--keys") && i + 1 < argc) keys = argv[++i];
 		else if (!std::strcmp(argv[i], "--list")) list = true;
+		else if (!std::strcmp(argv[i], "--turn") && i + 1 < argc) turn = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--settle") && i + 1 < argc) settle = std::atof(argv[++i]);
 		else if (dir.empty()) dir = argv[i];
 	}
@@ -196,6 +198,15 @@ int main(int argc, char **argv)
 			if (!found)
 				std::fprintf(stderr, "知らないボタン: %s\n", k.c_str());
 		}
+	}
+
+	if (turn) {
+		std::printf("\n--- ダイヤルを %+d 目盛り ---\n", turn);
+		mu.turn_encoder(turn);
+		// 位相を送り切るまで回す
+		for (int i = 0; i < 400 && mu.encoder_busy(); i++)
+			idle(mu, 0.01);
+		idle(mu, 0.3);
 	}
 
 	std::printf("\n");

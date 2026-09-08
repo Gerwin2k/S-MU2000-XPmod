@@ -96,6 +96,7 @@ struct engine {
 
 		drv.apply_buttons(mu, br);
 		drv.pump_midi(mu, br);
+		drv.pump_wheel(mu, br);
 
 		u8 b;
 		while (midi.pop(b))
@@ -104,8 +105,6 @@ struct engine {
 		const float g = br.gain();
 
 		for (u32 i = 0; i < n; i++) {
-			drv.tick_wheel(mu, br, RATE);
-
 			s32 l = 0, r = 0;
 			mu.run_sample(l, r);
 			l = s32(l * g) * 32768 / mu2000::DAC_FULL_SCALE;

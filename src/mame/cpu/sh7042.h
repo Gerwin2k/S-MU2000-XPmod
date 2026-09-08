@@ -74,6 +74,8 @@ public:
 	u16 do_read_port16(int port) { return m_read_port16[port](); }
 	void do_write_port16(int port, u16 data, u16 ddr) { m_write_port16[port](0, data, ddr); }
 	u32 do_read_port32(int port) { return m_read_port32[port](); }
+	// S-MU2000: ポート A の向きを外から見る（ダイヤルの配線調べ）
+	u32 porta_io() const { return m_porta->io_now(); }
 	void do_write_port32(int port, u32 data, u32 ddr) { m_write_port32[port](0, data, ddr); }
 
 	// S-MU2000: MAME はここで machine().time().as_ticks(clock()) を使っていた。

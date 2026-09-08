@@ -58,6 +58,7 @@ public:
 	}
 
 	u32 dr_r();
+	u32 io_now() const { return m_io; }   // S-MU2000: 入出力の向きを覗く
 	void dr_w(offs_t, u32 data, u32 mem_mask);
 	u32 io_r();
 	void io_w(offs_t, u32 data, u32 mem_mask);

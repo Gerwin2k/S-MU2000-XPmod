@@ -38,27 +38,12 @@ public:
 			mu.midi_in(b);
 	}
 
-	// 1 サンプルごとに。ホイールで回された分を VALUE の叩きに崩す。
-	// 押し 30ms、離し 20ms。実機を指で連打するのと同じ速さ
-	void tick_wheel(mu2000 &mu, bridge &br, u32 rate)
+	// ホイールで回された分をダイヤルへ。実機と同じロータリーエンコーダなので、
+	// 目盛りを渡すだけでよい（位相は音源が自分で進める）
+	void pump_wheel(mu2000 &mu, bridge &br)
 	{
-		if (m_tap_left > 0) {
-			if (--m_tap_left == 0) {
-				mu.set_button(m_tap_button, false);
-				m_gap_left = int(0.020 * rate);
-			}
-			return;
-		}
-		if (m_gap_left > 0) {
-			--m_gap_left;
-			return;
-		}
-		const int step = br.take_turn();
-		if (!step)
-			return;
-		m_tap_button = (step > 0) ? mu2000::button::value_plus : mu2000::button::value_minus;
-		mu.set_button(m_tap_button, true);
-		m_tap_left = int(0.030 * rate);
+		for (int step = br.take_turn(); step; step = br.take_turn())
+			mu.turn_encoder(step);
 	}
 
 	// ブロックの終わりで。25ms ごとに LCD と LED を画面へ渡す
@@ -102,8 +87,6 @@ public:
 private:
 	u64 m_applied = 0;
 	u64 m_since = 0;
-	int m_tap_left = 0, m_gap_left = 0;
-	mu2000::button m_tap_button = mu2000::button::count;
 };
 
 } // namespace ui

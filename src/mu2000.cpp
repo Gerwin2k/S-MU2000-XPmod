@@ -451,8 +451,45 @@ void mu2000::start_devices()
 
 void mu2000::reset()
 {
-	// ポートの既定値。MAME の mu500_state::pa_r は 0xffff を返していた
-	m_cpu->read_porta().set([]() { return u32(0xffff); });
+	// ポート A。MAME の mu500_state::pa_r は 0xffff を返すだけだったが、
+	// そこに付いていた覚え書きに配線が書いてある。
+	//   21 出力（前面と背面の MIDI A を切り替える）
+	//   20 smvprt / 19 smvins / 18 smbusy（スマートカード）
+	//   17 rea / 16 reb        ← **前面の大きなダイヤル**
+	//
+	// firmware は 2.5ms ごと（400Hz）にここを読む。読んだときに
+	// bit17 が立っていれば 1 目盛りぶん動いたとみなし、bit16 で向きを決める。
+	// 位相を細かく作るのではなく、走査 1 回につき 1 目盛りを渡せばよい。
+	// **0xffff には bit16/17 が入っていない**（MAME が返していた値は
+	// 「ダイヤルが止まっている」に当たる）ので、立てる側で書く。
+	//
+	// この決まりは実測で出した。bit17 を上げっぱなしにすると音色番号が
+	// 最後（128 Gunshot）まで走り、bit16 も一緒に上げると逆に動く
+	m_cpu->read_porta().set([this]() {
+		u32 v = 0xffff;
+		if (m_enc_pending) {
+			if (m_enc_pending < 0) v |= 1u << 16;   // B 相は向きのあいだ立てておく
+			if (m_enc_high) {
+				v |= 1u << 17;                      // A 相の立ち上がりで 1 目盛り
+				m_enc_high = false;
+			} else {
+				m_enc_high = true;
+				m_enc_pending += (m_enc_pending > 0) ? -1 : 1;
+			}
+		}
+		return v;
+	});
+
+	// A/D 変換。MAME の配線と同じ。
+	// **電池の残量を返さないと起動画面が「Battery Low!」のままになる**
+	m_cpu->read_adc<0>().set_constant(0);        // アナログ入力 右
+	m_cpu->read_adc<1>().set_constant(0);
+	m_cpu->read_adc<2>().set_constant(0);        // アナログ入力 左
+	m_cpu->read_adc<3>().set_constant(0);
+	m_cpu->read_adc<4>().set_constant(0);        // ホストスイッチ = MIDI
+	m_cpu->read_adc<5>().set_constant(0);
+	m_cpu->read_adc<6>().set_constant(0x3ff);    // 電池は満タン
+	m_cpu->read_adc<7>().set_constant(0);
 	m_cpu->read_porte().set([this]() { return lcd_port_r(); });
 	m_cpu->write_porte().set([this](u16 v) { lcd_port_w(v); });
 
@@ -548,6 +585,10 @@ void mu2000::run_cycles(u64 n)
 	}
 }
 
+// ダイヤルを 1 位相ぶん進める。
+//
+// 実機のエンコーダは A 相と B 相が 1/4 周期ずれて開閉する。firmware は
+// その順番で向きを読むので、位相をまとめて飛ばしてはいけない。
 void mu2000::midi_step(u64 now)
 {
 	if (m_midi_bit < 0) {

@@ -101,6 +101,14 @@ public:
 	void set_button(button b, bool pressed);
 	bool button_pressed(button b) const;
 
+	// 前面の大きなダイヤル（ロータリーエンコーダ）。正が右回り。
+	// 線はポート A の bit17（A 相）と bit16（B 相）。
+	// firmware は 2.5ms ごとにここを読み、**A が立っていれば 1 目盛り**、
+	// 向きは B（0 で増、1 で減）で決める。実測でそう決まっている。
+	// 走査 1 回につき 1 目盛りなので、最大 400 目盛り/秒
+	void turn_encoder(int detents) { m_enc_pending += detents; }
+	bool encoder_busy() const { return m_enc_pending != 0; }
+
 	// パネルの LED 10 個。MAME の mulcd_device::set_leds と同じ並び
 	u16 leds() const;
 
@@ -145,6 +153,10 @@ private:
 	// 押されているボタン。行 6 × 桁 8。押すと 0 になる
 	u8  m_sws[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	u8   ledsw_r() const;
+
+	// あと何目盛りぶん送るか。符号が向き。読まれるたびに 1 ずつ減る
+	int m_enc_pending = 0;
+	bool m_enc_high = true;
 	u16 m_pe = 0;
 	u8rom m_lcd_font;             // HD44780 の CGROM 4KB
 

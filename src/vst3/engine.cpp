@@ -359,7 +359,6 @@ void engine::flush_resampler()
 
 void engine::one_sample(float &l, float &r)
 {
-	m_drv.tick_wheel(*m_mu, m_bridge, u32(NATIVE_RATE));
 	s32 li = 0, ri = 0;
 	m_mu->run_sample(li, ri);
 	const float k = 1.0f / float(mu2000::DAC_FULL_SCALE);
@@ -405,6 +404,7 @@ void engine::fill(float *left, float *right, int n)
 	}
 	m_drv.apply_buttons(*m_mu, m_bridge);
 	m_drv.pump_midi(*m_mu, m_bridge);
+	m_drv.pump_wheel(*m_mu, m_bridge);
 
 	if (!m_pending.empty()) {
 		for (uint8_t b : m_pending)
