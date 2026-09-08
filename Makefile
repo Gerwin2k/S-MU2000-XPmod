@@ -71,6 +71,51 @@ $(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/live.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32
 
+# ---- VST3 プラグイン
+#
+# Steinberg の SDK は使わず、インターフェース定義（MIT）だけを取り込んである。
+# third_party/vst3/README.md を見よ。
+#
+#   make vst3      build/S-MU2000.vst3/ にバンドルを作る
+#   make install-vst3   それを VST3 の置き場へ複製する
+
+VST3_DIR  := $(BUILD)/S-MU2000.vst3
+VST3_BIN  := $(VST3_DIR)/Contents/x86_64-win/S-MU2000.vst3
+VST3_INC  := -I third_party/vst3
+
+VST3_SDK_SRCS := 	third_party/vst3/pluginterfaces/base/funknown.cpp 	third_party/vst3/pluginterfaces/base/coreiids.cpp 	third_party/vst3/pluginterfaces/base/conststringtable.cpp 	third_party/vst3/pluginterfaces/base/ustring.cpp
+
+VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp $(VST3_SDK_SRCS)
+VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
+
+$(BUILD)/vst3obj/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VST3_INC) -c -o $@ $<
+
+vst3: $(VST3_BIN)
+
+$(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32
+	@mkdir -p $(VST3_DIR)/Contents/Resources
+	@cp -f doc/vst3-readme.txt $(VST3_DIR)/Contents/Resources/README.txt 2>/dev/null || true
+
+# 既定の置き場へ入れる。管理者権限が要ることがある
+VST3_INSTALL ?= $(PROGRAMFILES)/Common Files/VST3
+
+install-vst3: $(VST3_BIN)
+	rm -rf "$(VST3_INSTALL)/S-MU2000.vst3"
+	cp -r $(VST3_DIR) "$(VST3_INSTALL)/"
+	@echo "入れた: $(VST3_INSTALL)/S-MU2000.vst3"
+
+# 工場が名乗るかどうかだけを確かめる小さな道具
+$(BUILD)/vst3probe.exe: $(BUILD)/vst3obj/src/vst3/probe.o $(BUILD)/vst3obj/src/vst3/iids.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/funknown.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/coreiids.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/conststringtable.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/ustring.o                         $(BUILD)/src/smf.o $(BUILD)/src/compat/compat.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lole32
+
+probe: $(BUILD)/vst3probe.exe $(VST3_BIN)
+	$(BUILD)/vst3probe.exe $(VST3_BIN)
+
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -85,6 +130,6 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
+-include $(VST3_OBJS:.o=.d) $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
 
-.PHONY: all clean regen
+.PHONY: all clean regen vst3 install-vst3 probe

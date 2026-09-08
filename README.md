@@ -2,12 +2,12 @@
 
 Yamaha MU2000 のソフトウェア音源。DAW に挿して使えることを目指す。
 
-**現在の状態: MIDI 入力を受けてその場で鳴る。DAW への組み込み（VST3）はこれから。**
+**現在の状態: VST3 として DAW に挿して鳴る。**
 
 実機の firmware をそのまま走らせ、MIDI を受けて発音する。2 分半の実曲を
 MAME の録音と突き合わせて、発音指示 2851 件すべてが一致、振幅も 88.7% の
-区間で 10% 以内に収まっている。書き出しは実時間の 1.5 倍速。
-まだ exe 一枚で、リアルタイム入力と VST3 はこれから。
+区間で 10% 以内に収まっている。実時間再生の CPU 使用率はおよそ 38%。
+画面はまだ無い。
 
 ## これは何か
 
@@ -45,6 +45,14 @@ build/midisend.exe <MIDI ファイル> [--port 番号]      MIDI 出力へ実時
 build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確認
 ```
 
+DAW に挿すなら VST3。作り方と ROM の置き場は [doc/vst3.md](doc/vst3.md)。
+
+```
+make vst3           build/S-MU2000.vst3/ にバンドルができる
+make install-vst3   VST3 の置き場へ複製する
+make probe          DAW 無しで読み込みと発音を確かめる
+```
+
 `live` は音声デバイスが要求した分だけ音源を進める。自分で時計を持たないので、
 外部と同期させてもずれない（MAME が破綻したのはここ）。WASAPI の共有モードを
 使い、待ち時間は既定で 30ms（`--latency` で調整）。CPU 使用率はおよそ 38%。
@@ -77,6 +85,11 @@ MSYS2 / MinGW-w64 の g++ を想定している。C++20 が要る。
 
 取り込み元は MAME 0.289 相当（master 2026-09-06、コミット `1fb001f9`）。
 MAME 本体はリンクしない（GPL のため）。
+
+VST3 のインターフェース定義（`third_party/vst3/pluginterfaces`）は Steinberg の
+ものだが **MIT** で配られている。GPLv3 の `public.sdk` は使っていないので、
+プラグインの土台は全部このリポジトリの中にある。
+くわしくは [third_party/vst3/README.md](third_party/vst3/README.md)。
 
 このリポジトリ独自のコードは BSD-3-Clause とする。
 
