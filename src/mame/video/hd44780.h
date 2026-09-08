@@ -43,6 +43,8 @@ public:
 
 	// 表示内容。生の DDRAM
 	const u8 *ddram() const { return m_ddram; }
+	// 利用者が作った字（0x00-0x07）の絵。1 文字 8 バイト
+	const u8 *cgram() const { return m_cgram; }
 
 	// 文字の絵。HD44780U B04 の CGROM 4KB（1 文字 16 バイト、下位 5bit が絵）
 	void set_cgrom(const u8 *rom, size_t size)

@@ -120,6 +120,19 @@ void show_lcd(mu2000 &mu)
 		std::printf("\n");
 	}
 
+	// firmware が作った字 8 個。セグメント部の絵はこれで描かれている
+	std::printf("\nCGRAM の 8 文字\n");
+	const u8 *cg = lcd.cgram();
+	for (int y = 0; y < 8; y++) {
+		std::printf("   ");
+		for (int ch = 0; ch < 8; ch++) {
+			for (int x = 4; x >= 0; x--)
+				std::printf("%s", BIT(cg[ch * 8 + y], x) ? "#" : ".");
+			std::printf(" ");
+		}
+		std::printf("\n");
+	}
+
 	const u16 led = mu.leds();
 	std::printf("LED:");
 	for (int i = 0; i < 10; i++)
