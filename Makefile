@@ -48,7 +48,8 @@ OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
 # vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
 all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
-     $(BUILD)/live.exe $(BUILD)/midisend.exe vst3 $(BUILD)/vst3probe.exe
+     $(BUILD)/live.exe $(BUILD)/midisend.exe $(BUILD)/panel.exe \
+     vst3 $(BUILD)/vst3probe.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
 	@mkdir -p $(dir $@)
@@ -59,6 +60,11 @@ $(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+# panel はフロントパネル（LCD とボタン）を文字だけで動かす
+$(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/panel.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -131,6 +137,6 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(VST3_OBJS:.o=.d) $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
+-include $(VST3_OBJS:.o=.d) $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/panel.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
 
 .PHONY: all clean regen vst3 install-vst3 probe

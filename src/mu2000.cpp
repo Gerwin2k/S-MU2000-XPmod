@@ -203,6 +203,100 @@ bool mu2000::load_sintab(const std::string &path)
 }
 
 
+// ---- フロントパネル
+//
+// firmware は c80000 に「行」を書いてから同じ番地を読む。押されている桁が 0。
+// 並びは MAME の mu500 の入力ポート（SWS0-SWS5）と同じ。
+
+namespace {
+
+struct button_slot { u8 row, bit; const char *name; };
+
+// mu2000::button の並びと 1 対 1
+const button_slot BUTTONS[] = {
+	{ 0, 2, "Strings" },      { 0, 3, "Bass" },        { 0, 4, "Guitar" },
+	{ 0, 5, "Organ" },        { 0, 6, "Chrom. Perc." }, { 0, 7, "Piano" },
+	{ 1, 2, "Synth pad" },    { 1, 3, "Synth lead" },  { 1, 4, "Pipe" },
+	{ 1, 5, "Reed" },         { 1, 6, "Brass" },       { 1, 7, "Ensemble" },
+	{ 2, 2, "Drum" },         { 2, 3, "Model excl." }, { 2, 4, "SFX" },
+	{ 2, 5, "Percussive" },   { 2, 6, "Ethnic" },      { 2, 7, "Synth effects" },
+	{ 3, 1, "Part +" },       { 3, 2, "Part -" },      { 3, 3, "Mute/Solo" },
+	{ 3, 4, "Effect" },       { 3, 5, "Util" },        { 3, 6, "Edit" },
+	{ 3, 7, "Play" },
+	{ 4, 1, "Value +" },      { 4, 2, "Value -" },     { 4, 3, "Exit" },
+	{ 4, 4, "Select >" },     { 4, 5, "Select <" },    { 4, 6, "Enter" },
+	{ 4, 7, "Seq" },
+	{ 5, 5, "Audition" },     { 5, 6, "Select" },      { 5, 7, "Sampling/Mode" },
+};
+
+static_assert(sizeof(BUTTONS) / sizeof(BUTTONS[0]) == size_t(mu2000::button::count),
+              "ボタンの表と enum がずれている");
+
+} // namespace
+
+const char *mu2000::button_name(button b)
+{
+	const int i = int(b);
+	return (i >= 0 && i < int(button::count)) ? BUTTONS[i].name : "";
+}
+
+void mu2000::set_button(button b, bool pressed)
+{
+	const int i = int(b);
+	if (i < 0 || i >= int(button::count))
+		return;
+	const button_slot &s = BUTTONS[i];
+	if (pressed)
+		m_sws[s.row] &= u8(~(1 << s.bit));
+	else
+		m_sws[s.row] |= u8(1 << s.bit);
+}
+
+bool mu2000::button_pressed(button b) const
+{
+	const int i = int(b);
+	if (i < 0 || i >= int(button::count))
+		return false;
+	const button_slot &s = BUTTONS[i];
+	return !BIT(m_sws[s.row], s.bit);
+}
+
+// 選ばれている行の押し具合を重ねて返す（MAME の mu500_state::ledsw_r と同じ）
+u8 mu2000::ledsw_r() const
+{
+	u8 res = 0xff;
+	for (u32 i = 0; i != 6; i++)
+		if (BIT(m_ledsw1, i))
+			res &= m_sws[i];
+	return res;
+}
+
+// MAME の mulcd_device::set_leds に渡していた並びに直す
+u16 mu2000::leds() const
+{
+	const u16 v = u16((u16(m_ledsw2) << 8) | m_ledsw1);
+	// bitswap(v, 9,8,7,6,10,11,12,13,14,15) — 先頭が出来上がりの bit9
+	static const int from[10] = { 9, 8, 7, 6, 10, 11, 12, 13, 14, 15 };
+	u16 out = 0;
+	for (int i = 0; i < 10; i++)
+		out |= u16(BIT(v, from[i])) << (9 - i);
+	return out;
+}
+
+
+bool mu2000::load_lcd_font(const std::string &path)
+{
+	std::vector<u8> rom;
+	if (!read_file(path, rom, 0x1000)) {
+		m_error = "LCD の字を読めない（4KB でないか、見つからない）: " + path;
+		return false;
+	}
+	m_lcd_font = std::move(rom);
+	m_lcd.set_cgrom(m_lcd_font.data(), m_lcd_font.size());
+	return true;
+}
+
+
 void mu2000::build_bus()
 {
 	m_bus = mem_bus();
@@ -271,7 +365,7 @@ void mu2000::build_bus()
 	{
 		mem_bus::device d;
 		d.start = 0xc80000; d.end = 0xc80000;
-		d.r8 = [this](offs_t) { return u8(0xff); };   // スイッチは全部離した状態
+		d.r8 = [this](offs_t) { return ledsw_r(); };
 		d.w8 = [this](offs_t, u8 v) { m_ledsw1 = v; };
 		m_bus.add_device(d);
 	}

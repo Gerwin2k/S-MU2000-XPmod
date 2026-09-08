@@ -50,6 +50,8 @@ public:
 	bool load_wave(const std::string &dir);
 	// MEG が使う sin 表。まだ実機から取れていないので代用品でもよい
 	bool load_sintab(const std::string &path);
+	// LCD の文字の絵（HD44780U B04 の CGROM 4KB）。無くても音は出る
+	bool load_lcd_font(const std::string &path);
 
 	void reset();
 
@@ -79,6 +81,26 @@ public:
 	swp30_device   &swpm() { return m_swpm; }
 	swp30_device   &swps() { return m_swps; }
 	hd44780_device &lcd()  { return m_lcd; }
+
+	// ---- フロントパネル
+
+	// パネルのボタン。MAME の mu500 の入力ポートと同じ並び。
+	// firmware は m_ledsw1 で行を選び、押されている桁を 0 で読む
+	enum class button {
+		strings, bass, guitar, organ, chrom_perc, piano,
+		synth_pad, synth_lead, pipe, reed, brass, ensemble,
+		drum, model_excl, sfx, percussive, ethnic, synth_effects,
+		part_plus, part_minus, mute_solo, effect, util, edit, play,
+		value_plus, value_minus, exit, select_right, select_left, enter, seq,
+		audition, select, sampling_mode,
+		count
+	};
+	static const char *button_name(button b);
+	void set_button(button b, bool pressed);
+	bool button_pressed(button b) const;
+
+	// パネルの LED 10 個。MAME の mulcd_device::set_leds と同じ並び
+	u16 leds() const;
 
 	const std::string &error() const { return m_error; }
 
@@ -118,7 +140,11 @@ private:
 	// ビジーフラグが立つのを確かめており、常に空いていると先へ進まない
 	hd44780_device m_lcd;
 	u8  m_ledsw1 = 0, m_ledsw2 = 0;
+	// 押されているボタン。行 6 × 桁 8。押すと 0 になる
+	u8  m_sws[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	u8   ledsw_r() const;
 	u16 m_pe = 0;
+	std::vector<u8> m_lcd_font;   // HD44780 の CGROM 4KB
 
 	u16  lcd_port_r();
 	void lcd_port_w(u16 data);

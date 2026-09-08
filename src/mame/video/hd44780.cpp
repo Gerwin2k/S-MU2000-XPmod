@@ -2,7 +2,7 @@
 // copyright-holders:Sandro Ronco
 //
 // MAME の hd44780.cpp から、レジスタとアドレスカウンタの扱いをそのまま取った。
-// 画面生成は入れていない（hd44780.h の説明を参照）。
+// 表示の組み立ても MAME と同じ形にしてある（hd44780.h の説明を参照）。
 
 #include "hd44780.h"
 
@@ -165,4 +165,39 @@ u8 hd44780_device::data_r()
 	set_busy(10);
 	update_ac(m_direction);
 	return data;
+}
+
+
+// MAME の hd44780_base_device::render() と同じ。カーソルの点滅は追っていない
+// （音には関わらず、こちらは時計を持たないため）
+const u8 *hd44780_device::render()
+{
+	std::memset(m_render_buf, 0, sizeof(m_render_buf));
+	if (!m_display_on || !m_cgrom)
+		return m_render_buf;
+
+	const int line_size = 80 / m_num_line;
+	for (int line = 0; line < m_num_line; line++) {
+		for (int pos = 0; pos < line_size; pos++) {
+			const u16 char_pos = u16(line * 0x40 + ((pos + m_disp_shift) % line_size));
+
+			const u8 *src;
+			if (m_ddram[char_pos] < 0x10) {
+				// 0x00-0x0f は利用者が作った字。CGRAM から引く
+				if (m_char_size == 8)
+					src = m_cgram + (m_ddram[char_pos] & 0x07) * 8;
+				else
+					src = m_cgram + ((m_ddram[char_pos] >> 1) & 0x03) * 16;
+			} else {
+				src = m_cgrom + m_ddram[char_pos] * 0x10;
+			}
+
+			u8 *dest = m_render_buf + 16 * (line * line_size + pos);
+			std::memcpy(dest, src, size_t(m_char_size));
+
+			if (char_pos == m_ac && m_cursor_on)
+				dest[m_char_size - 1] = 0x1f;
+		}
+	}
+	return m_render_buf;
 }

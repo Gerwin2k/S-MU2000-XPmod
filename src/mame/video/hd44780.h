@@ -4,10 +4,12 @@
 // Hitachi HD44780 LCD コントローラ。
 // MAME の src/devices/video/hd44780.* から、firmware が触る部分だけを取った。
 //
-// 画面を出す部分（CGROM のフォント、ピクセル生成、SVG のレイアウト）は入れて
-// いない。音を出すのに要らないため。ただし**ビジーフラグは要る**。
-// MU2000 の firmware は LCD にコマンドを送るたびにビジーが立つのを見ており、
-// 常に「空いている」と返すと初期化の途中で先へ進まなくなる。
+// **ビジーフラグは音を出すのにも要る**。MU2000 の firmware は LCD にコマンドを
+// 送るたびにビジーが立つのを見ており、常に「空いている」と返すと初期化の途中で
+// 先へ進まなくなる。
+//
+// 表示の組み立て（render）は MAME と同じ形にしてある。文字の絵は CGROM から
+// 引き、0x00-0x0f だけは CGRAM から引く。SVG のレイアウトは持たない。
 //
 // MAME はビジーの計測に emu_timer を使っていたが、こちらは CPU のサイクル数で
 // 数える。LCD の発振は 270kHz、命令は 10 サイクル（37us）、クリアと
@@ -39,8 +41,23 @@ public:
 
 	bool busy() const { return m_now < m_busy_until; }
 
-	// 表示内容。4 行 20 桁ぶんを取り出す（UI を作るときに使う）
+	// 表示内容。生の DDRAM
 	const u8 *ddram() const { return m_ddram; }
+
+	// 文字の絵。HD44780U B04 の CGROM 4KB（1 文字 16 バイト、下位 5bit が絵）
+	void set_cgrom(const u8 *rom, size_t size)
+	{ m_cgrom = (rom && size >= 0x1000) ? rom : nullptr; }
+
+	// 画面を組み立てる。MAME と同じ並びで、80 マス × 16 バイトを返す。
+	// マス (行, 桁) は render()[16 * (行 * 桁数 + 桁)]、各バイトの下位 5bit が
+	// 1 行ぶんの点。左端が bit4
+	static constexpr int RENDER_SIZE = 80 * 16;
+	const u8 *render();
+
+	int  lines() const     { return m_num_line; }
+	int  line_size() const { return 80 / m_num_line; }
+	int  char_size() const { return m_char_size; }
+	bool display_on() const { return m_display_on; }
 
 private:
 	void set_busy(u16 lcd_cycles)
@@ -56,6 +73,8 @@ private:
 	u32 m_cpu_hz, m_lcd_hz;
 	u64 m_now = 0, m_busy_until = 0;
 
+	const u8 *m_cgrom = nullptr;
+	u8  m_render_buf[RENDER_SIZE] = {};
 	u8  m_ddram[0x80] = {};
 	u8  m_cgram[0x40] = {};
 	int m_ac = 0;
