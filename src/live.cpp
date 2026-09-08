@@ -14,6 +14,7 @@
 //                              供給が追いつかず細切れになる（合計 70ms 必要）
 
 #include "mu2000.h"
+#include "ui/midi_in.h"
 
 #include <atomic>
 #include <cstdio>
@@ -31,67 +32,10 @@ namespace {
 
 constexpr u32 RATE = 44100;
 
-// ---- MIDI 入力から音声スレッドへバイトを渡す輪。
-// 書くのは MIDI のコールバック、読むのは音声スレッドの一本ずつなので、
-// 添字を atomic にしておけば錠は要らない。音声スレッドで錠を待つのは禁物。
-class byte_ring
-{
-public:
-	void push(u8 v)
-	{
-		const size_t w = m_write.load(std::memory_order_relaxed);
-		const size_t next = (w + 1) & MASK;
-		if (next == m_read.load(std::memory_order_acquire))
-			return;                       // 溢れ。実機の受信バッファ溢れと同じ
-		m_buf[w] = v;
-		m_write.store(next, std::memory_order_release);
-	}
+// ---- MIDI 入力。輪っかも SysEx の受け皿も ui::midi_in が持っている
+// （gui.exe と同じもの。**SysEx の入れ物を Windows へ渡す**のもそちら）
 
-	bool pop(u8 &v)
-	{
-		const size_t r = m_read.load(std::memory_order_relaxed);
-		if (r == m_write.load(std::memory_order_acquire))
-			return false;
-		v = m_buf[r];
-		m_read.store((r + 1) & MASK, std::memory_order_release);
-		return true;
-	}
-
-private:
-	static constexpr size_t SIZE = 4096, MASK = SIZE - 1;
-	u8 m_buf[SIZE] = {};
-	std::atomic<size_t> m_read{0}, m_write{0};
-};
-
-byte_ring g_midi;
-std::atomic<u64> g_midi_bytes{0};
-
-void CALLBACK midi_cb(HMIDIIN, UINT msg, DWORD_PTR, DWORD_PTR p1, DWORD_PTR)
-{
-	if (msg == MIM_DATA) {
-		const u8 status = u8(p1);
-		if (status < 0x80)
-			return;
-		// 長さは種別で決まる。プログラムチェンジとチャンネルプレッシャだけ 1 バイト
-		int n = 3;
-		const u8 kind = status & 0xf0;
-		if (kind == 0xc0 || kind == 0xd0) n = 2;
-		if (status >= 0xf8) n = 1;                       // リアルタイム
-		else if (status == 0xf1 || status == 0xf3) n = 2;
-		else if (status == 0xf2) n = 3;
-		else if (status >= 0xf4 && status < 0xf8) n = 1;
-
-		g_midi.push(status);
-		if (n > 1) g_midi.push(u8(p1 >> 8));
-		if (n > 2) g_midi.push(u8(p1 >> 16));
-		g_midi_bytes += n;
-	} else if (msg == MIM_LONGDATA) {
-		MIDIHDR *h = reinterpret_cast<MIDIHDR *>(p1);
-		for (DWORD i = 0; i < h->dwBytesRecorded; i++)
-			g_midi.push(u8(h->lpData[i]));
-		g_midi_bytes += h->dwBytesRecorded;
-	}
-}
+ui::midi_in g_midi;
 
 void list_midi_inputs()
 {
@@ -163,7 +107,7 @@ struct generator {
 		const double audio = double(produced) / RATE;
 		const double busy  = double(busy_ticks) / freq.QuadPart;
 		std::printf("  %.0f 秒経過  MIDI %llu バイト  CPU 使用率 %.1f%%\n",
-		            audio, (unsigned long long)g_midi_bytes.load(), 100.0 * busy / audio);
+		            audio, (unsigned long long)g_midi.bytes(), 100.0 * busy / audio);
 		std::printf("     枯渇 %llu 回（残量ゼロ）、生成の最悪 %.1f ms（溜めは %.1f ms ぶん）\n",
 		            (unsigned long long)starved, 1000.0 * worst_ticks / freq.QuadPart,
 		            1000.0 * cushion_frames / RATE);
@@ -455,20 +399,16 @@ int main(int argc, char **argv)
 	}
 
 	// ---- MIDI 入力
-	HMIDIIN hmi = nullptr;
 	if (nomidi) midi_dev = -1;
 	else if (midi_dev < 0 && midiInGetNumDevs() > 0)
 		midi_dev = 0;
 	if (midi_dev >= 0) {
-		if (midiInOpen(&hmi, UINT(midi_dev), DWORD_PTR(midi_cb), 0,
-		               CALLBACK_FUNCTION) != MMSYSERR_NOERROR) {
-			std::fprintf(stderr, "MIDI 入力 %d を開けない\n", midi_dev);
+		std::string merr;
+		if (!g_midi.open(midi_dev, merr)) {
+			std::fprintf(stderr, "MIDI 入力 %d: %s\n", midi_dev, merr.c_str());
 			return 1;
 		}
-		MIDIINCAPSA caps{};
-		midiInGetDevCapsA(UINT(midi_dev), &caps, sizeof(caps));
-		std::printf("MIDI 入力: %d: %s\n", midi_dev, caps.szPname);
-		midiInStart(hmi);
+		std::printf("MIDI 入力: %d: %s\n", midi_dev, g_midi.device_name().c_str());
 	} else
 		std::printf("MIDI 入力なし（音は出るが何も鳴らない）\n");
 
@@ -480,12 +420,12 @@ int main(int argc, char **argv)
 
 	if (wav && !rec.empty())
 		write_wav(wav, rec);
-	if (hmi) { midiInStop(hmi); midiInClose(hmi); }
+	g_midi.close();
 
 	const double audio = double(gen.produced) / RATE;
 	const double busy  = double(gen.busy_ticks) / gen.freq.QuadPart;
 	std::printf("終了。%.1f 秒ぶんを %.2f 秒で生成（CPU 使用率 %.1f%%）  MIDI %llu バイト\n",
 	            audio, busy, audio > 0 ? 100.0 * busy / audio : 0.0,
-	            (unsigned long long)g_midi_bytes.load());
+	            (unsigned long long)g_midi.bytes());
 	return rc;
 }

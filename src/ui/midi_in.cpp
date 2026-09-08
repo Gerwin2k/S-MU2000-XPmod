@@ -35,6 +35,10 @@ void CALLBACK cb(HMIDIIN, UINT msg, DWORD_PTR user, DWORD_PTR p1, DWORD_PTR)
 		MIDIHDR *h = reinterpret_cast<MIDIHDR *>(p1);
 		for (DWORD i = 0; i < h->dwBytesRecorded; i++)
 			self->push(u8(h->lpData[i]));
+		// 使い終わった入れ物をすぐ返す。返さないと次の SysEx が受けられない。
+		// 閉じている最中は返さない（midiInReset が全部戻してくるので、
+		// そこで返すと終わらなくなる）
+		self->requeue(h);
 	}
 }
 
@@ -75,8 +79,36 @@ bool midi_in::open(int device, std::string &err)
 	midiInGetDevCapsA(UINT(device), &caps, sizeof(caps));
 	m_name = caps.szPname;
 	m_handle = h;
+	m_closing.store(false, std::memory_order_release);
+
+	// SysEx の入れ物を Windows へ渡す。**これをやらないと SysEx は来ない**。
+	// 1 枚に収まらない長いものは何枚かに分かれて、順に届く
+	for (int i = 0; i < SYSEX_BUFFERS; i++) {
+		m_sysex[i] = new u8[SYSEX_SIZE];
+		MIDIHDR *hdr = new MIDIHDR{};
+		hdr->lpData = reinterpret_cast<LPSTR>(m_sysex[i]);
+		hdr->dwBufferLength = DWORD(SYSEX_SIZE);
+		if (midiInPrepareHeader(h, hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR ||
+		    midiInAddBuffer(h, hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR) {
+			delete hdr;
+			delete[] m_sysex[i];
+			m_sysex[i] = nullptr;
+			continue;                 // 音符は受けられるので、これだけで諦めはしない
+		}
+		m_hdr[i] = hdr;
+	}
+
 	midiInStart(h);
 	return true;
+}
+
+// コールバックから。使い終わった入れ物を返して、次の SysEx を待たせる
+void midi_in::requeue(void *hdr)
+{
+	if (!m_handle || closing())
+		return;
+	midiInAddBuffer(reinterpret_cast<HMIDIIN>(m_handle),
+	                reinterpret_cast<MIDIHDR *>(hdr), sizeof(MIDIHDR));
 }
 
 void midi_in::close()
@@ -84,8 +116,21 @@ void midi_in::close()
 	if (!m_handle)
 		return;
 	HMIDIIN h = reinterpret_cast<HMIDIIN>(m_handle);
+	// 先に印を立てる。midiInReset は入れ物を全部コールバックへ戻すので、
+	// そこで返し直すと閉じられなくなる
+	m_closing.store(true, std::memory_order_release);
 	midiInStop(h);
 	midiInReset(h);
+	for (int i = 0; i < SYSEX_BUFFERS; i++) {
+		if (m_hdr[i]) {
+			MIDIHDR *hdr = reinterpret_cast<MIDIHDR *>(m_hdr[i]);
+			midiInUnprepareHeader(h, hdr, sizeof(MIDIHDR));
+			delete hdr;
+			m_hdr[i] = nullptr;
+		}
+		delete[] m_sysex[i];
+		m_sysex[i] = nullptr;
+	}
 	midiInClose(h);
 	m_handle = nullptr;
 	m_name.clear();
