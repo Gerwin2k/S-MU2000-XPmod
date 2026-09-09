@@ -33,8 +33,9 @@ public:
 	bool ok() const { return !m_shapes.empty(); }
 	void clear() { m_shapes.clear(); }
 
-	// viewBox を dst に当てはめて描く。縦横比は保ったまま真ん中に置く
-	void draw(HDC dc, const RECT &dst) const;
+	// viewBox を dst に当てはめて描く。縦横比は保ったまま真ん中に置く。
+	// deg を渡すと、dst の真ん中を軸にその角度だけ回す（つまみ用）
+	void draw(HDC dc, const RECT &dst, double deg = 0.0) const;
 
 private:
 	struct pt { double x, y; };

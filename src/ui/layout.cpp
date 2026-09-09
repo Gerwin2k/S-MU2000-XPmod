@@ -224,6 +224,21 @@ layout::layout()
 	add_text(896, 28, 104, 12, 0, "center", "ink", "...... ALL ......");
 }
 
+namespace {
+
+// panel.txt からの相対で絵を探す
+std::string beside(const std::string &panel_txt, const std::string &name)
+{
+	if (name.find(':') != std::string::npos || name[0] == '/' || name[0] == '\\')
+		return name;
+	const size_t slash = panel_txt.find_last_of("/\\\\");
+	if (slash == std::string::npos)
+		return name;
+	return panel_txt.substr(0, slash + 1) + name;
+}
+
+} // namespace
+
 bool layout::load(const std::string &path, std::string &err)
 {
 	FILE *f = std::fopen(path.c_str(), "rb");
@@ -275,12 +290,7 @@ bool layout::load(const std::string &path, std::string &err)
 			d.k = deco::art;
 			d.x = num(t[1]); d.y = num(t[2]); d.w = num(t[3]); d.h = num(t[4]);
 			d.str = t[5];
-			// 道は panel.txt からの相対で探す
-			std::string full = d.str;
-			const size_t slash = path.find_last_of("/\\\\");
-			if (slash != std::string::npos && d.str.find(':') == std::string::npos &&
-			    d.str[0] != '/' && d.str[0] != '\\')
-				full = path.substr(0, slash + 1) + d.str;
+			const std::string full = beside(path, d.str);
 			d.pic = std::make_shared<svg_art>();
 			if (!d.pic->load_file(full))
 				bad("絵を開けない（または読めない形）");
@@ -340,8 +350,22 @@ bool layout::load(const std::string &path, std::string &err)
 		else if (key == "cat.x")  { if (need(7)) for (int i = 0; i < 6; i++) cat_x[i] = num(t[1 + i]); }
 		else if (key == "cat.y")  { if (need(4)) for (int i = 0; i < 3; i++) cat_y[i] = num(t[1 + i]); }
 		else if (key == "cat.size") { if (need(3)) { cat_w = num(t[1]); cat_h = num(t[2]); } }
-		else if (key == "dial")   { if (need(4)) for (int i = 0; i < 3; i++) dial[i] = num(t[1 + i]); }
-		else if (key == "volume") { if (need(4)) for (int i = 0; i < 3; i++) volume[i] = num(t[1 + i]); }
+		else if (key == "dial" || key == "volume") {
+			double *v = (key == "dial") ? dial : volume;
+			if (!need(4)) continue;
+			for (int i = 0; i < 3; i++) v[i] = num(t[1 + i]);
+			// 4 つ目に SVG を書くと、組み込みの絵の代わりに回して描く
+			std::string &pth = (key == "dial") ? dial_art_path : volume_art_path;
+			std::shared_ptr<svg_art> &pic = (key == "dial") ? dial_art : volume_art;
+			pth.clear();
+			pic.reset();
+			if (t.size() >= 5 && !t[4].empty()) {
+				auto a = std::make_shared<svg_art>();
+				if (!a->load_file(beside(path, t[4])))
+					bad("つまみの絵を開けない（または読めない形）");
+				else { pic = a; pth = t[4]; }
+			}
+		}
 		else if (key == "mode.r") { if (need(3)) { mode_r = num(t[1]); mode_led_r = num(t[2]); } }
 		else if (key == "columns.y") { if (need(2)) columns_y = num(t[1]); }
 		else if (key == "plg")    { if (need(4)) for (int i = 0; i < 3; i++) plg[i] = num(t[1 + i]); }
@@ -426,10 +450,16 @@ bool layout::save(const std::string &path) const
 		std::fprintf(f, "round.%-8s %g %g %g %g\n", ROUND_NAMES[i],
 		             round_[i][0], round_[i][1], round_[i][2], round_[i][3]);
 
-	std::fprintf(f, "\ndial %g %g %g        # 大きなダイヤル  中心 x y と半径\n",
-	             dial[0], dial[1], dial[2]);
-	std::fprintf(f, "volume %g %g %g      # 音量つまみ  中心 x y と半径\n",
-	             volume[0], volume[1], volume[2]);
+	std::fprintf(f, "\ndial %g %g %g%s%s%s        # 大きなダイヤル  中心 x y と半径\n",
+	             dial[0], dial[1], dial[2],
+	             dial_art_path.empty() ? "" : " \"",
+	             dial_art_path.c_str(),
+	             dial_art_path.empty() ? "" : "\"");
+	std::fprintf(f, "volume %g %g %g%s%s%s      # 音量つまみ  中心 x y と半径\n",
+	             volume[0], volume[1], volume[2],
+	             volume_art_path.empty() ? "" : " \"",
+	             volume_art_path.c_str(),
+	             volume_art_path.empty() ? "" : "\"");
 	std::fprintf(f, "plg  %g %g %g      # MU / PLG-1..3 の表示灯  左端 間隔 y\n",
 	             plg[0], plg[1], plg[2]);
 	std::fprintf(f, "columns.y %g        # 窓の下の札（PART VOL EXP …）の高さ\n\n",

@@ -148,7 +148,7 @@ private:
 
 	// 掴んでいるもの
 	const spot *m_held = nullptr;
-	int  m_drag_y = 0, m_drag_from = 0;
+	int  m_drag_x = 0, m_drag_y = 0, m_drag_from = 0;
 	int  m_wheel_angle = 0;
 	double m_volume_now = 1.0;
 

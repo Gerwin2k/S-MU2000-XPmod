@@ -315,7 +315,7 @@ bool svg_art::load_text(const std::string &s)
 	return ok();
 }
 
-void svg_art::draw(HDC dc, const RECT &dst) const
+void svg_art::draw(HDC dc, const RECT &dst, double deg) const
 {
 	if (m_shapes.empty())
 		return;
@@ -328,6 +328,13 @@ void svg_art::draw(HDC dc, const RECT &dst) const
 	const double ox = dst.left + (dw - m_vb[2] * k) / 2 - m_vb[0] * k;
 	const double oy = dst.top  + (dh - m_vb[3] * k) / 2 - m_vb[1] * k;
 
+	// 回すときの軸は、当てはめた四角の真ん中
+	const double cx = (dst.left + dst.right) / 2.0;
+	const double cy = (dst.top + dst.bottom) / 2.0;
+	const double rad = deg * 3.14159265358979 / 180.0;
+	const double cs = std::cos(rad), sn = std::sin(rad);
+	const bool turn = (deg != 0.0);
+
 	std::vector<POINT> pts;
 	std::vector<INT>   counts;
 
@@ -336,9 +343,15 @@ void svg_art::draw(HDC dc, const RECT &dst) const
 		counts.clear();
 		for (const auto &sub : sh.subs) {
 			counts.push_back(INT(sub.size()));
-			for (const pt &q : sub)
-				pts.push_back({ int(std::lround(ox + q.x * k)),
-				                int(std::lround(oy + q.y * k)) });
+			for (const pt &q : sub) {
+				double px = ox + q.x * k, py = oy + q.y * k;
+				if (turn) {
+					const double dx = px - cx, dy = py - cy;
+					px = cx + dx * cs - dy * sn;
+					py = cy + dx * sn + dy * cs;
+				}
+				pts.push_back({ int(std::lround(px)), int(std::lround(py)) });
+			}
 		}
 		if (pts.empty())
 			continue;

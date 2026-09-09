@@ -232,9 +232,9 @@ bool panel::press(int x, int y, bridge &br)
 
 	case spot_kind::volume:
 		m_held = sp;
-		m_volume_now = std::clamp(double(x - sp->r.left) /
-		                          std::max(1L, sp->r.right - sp->r.left), 0.0, 1.0);
-		br.set_gain(float(m_volume_now));
+		m_drag_x = x;
+		m_drag_y = y;
+		m_drag_from = int(m_volume_now * 127);   // 掴んだところからの相対で動かす
 		return true;
 
 	case spot_kind::part:
@@ -291,8 +291,12 @@ bool panel::drag(int x, int y, bridge &br)
 		return false;
 
 	if (m_held->kind == spot_kind::volume) {
-		m_volume_now = std::clamp(double(x - m_held->r.left) /
-		                          std::max(1L, m_held->r.right - m_held->r.left), 0.0, 1.0);
+		// 横でも縦でも動かせるように、動いた量の大きいほうを取る。
+		// 丸いつまみは縦で動かしたくなるので
+		const int dx = x - m_drag_x, dy = m_drag_y - y;
+		const int span = std::max(1L, m_held->r.right - m_held->r.left);
+		const int move = (std::abs(dy) > std::abs(dx)) ? dy : dx;
+		m_volume_now = std::clamp(m_drag_from / 127.0 + double(move) / span, 0.0, 1.0);
 		br.set_gain(float(m_volume_now));
 		return true;
 	}
@@ -320,6 +324,12 @@ bool panel::release(bridge &br)
 bool panel::wheel_at(int x, int y, int delta, bridge &br)
 {
 	const spot *sp = hit(x, y);
+	// 音量つまみの上ではホイールで音量。1 目盛りで 2%
+	if (sp && sp->kind == spot_kind::volume) {
+		m_volume_now = std::clamp(m_volume_now + delta * 0.02, 0.0, 1.0);
+		br.set_gain(float(m_volume_now));
+		return true;
+	}
 	if (sp && sp->kind == spot_kind::knob) {
 		set_value(sp->ctl, value_of(sp->ctl) + delta, br);
 		return true;

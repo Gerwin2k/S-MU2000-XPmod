@@ -58,6 +58,12 @@ struct layout
 	double dial[3];                        // 大きなダイヤル x y 半径
 	double volume[3];                      // 音量つまみ x y 半径（中心）
 
+	// つまみの絵。SVG を渡すと、組み込みの絵の代わりに**回して**描く。
+	//   dial   893 268 58 "dial.svg"
+	//   volume 141 154 30 "knob.svg"
+	std::string dial_art_path, volume_art_path;
+	std::shared_ptr<svg_art> dial_art, volume_art;
+
 	int    low_x[11], low_w[11];           // LCD 下段の並び（点の単位）
 	double columns_y;                      // 窓の下の札の高さ
 	double plg[3];                         // MU / PLG-1..3 の表示灯 左端 間隔 y

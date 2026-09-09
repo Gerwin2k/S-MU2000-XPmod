@@ -665,6 +665,13 @@ void panel::draw_wheel(HDC dc, int angle) const
 	const POINT c = at(m_lay.dial[0], m_lay.dial[1]);
 	const int r = int(m_lay.dial[2] * m_scale);
 
+	// panel.txt で絵を渡されていれば、それを回して描く
+	if (m_lay.dial_art) {
+		m_lay.dial_art->draw(dc, RECT{ c.x - r, c.y - r, c.x + r, c.y + r },
+		                     double(angle));
+		return;
+	}
+
 	disc(dc, c.x, c.y, r, KEY_FACE, KEY_EDGE, std::max(1, int(2 * m_scale)));
 	const double a = angle * PI / 180.0;
 	const int ox = c.x + int(std::sin(a) * r * 0.36);
@@ -676,12 +683,19 @@ void panel::draw_wheel(HDC dc, int angle) const
 // 音量つまみ
 void panel::draw_volume(HDC dc, double v) const
 {
-	const POINT c = at(141, 154);
-	const int r = int(30 * m_scale);
-	disc(dc, c.x, c.y, r, KEY_FACE, KEY_EDGE, std::max(1, int(m_scale)));
-	const double a = (-135.0 + 270.0 * v) * PI / 180.0;
-	line(dc, c.x, c.y, c.x + int(std::sin(a) * r * 0.8), c.y - int(std::cos(a) * r * 0.8),
-	     RGB(70, 64, 48), std::max(2, int(2 * m_scale)));
+	const POINT c = at(m_lay.volume[0], m_lay.volume[1]);
+	const int r = int(m_lay.volume[2] * m_scale);
+	const double deg = -135.0 + 270.0 * v;       // 左いっぱいから右いっぱいまで
+
+	if (m_lay.volume_art) {
+		m_lay.volume_art->draw(dc, RECT{ c.x - r, c.y - r, c.x + r, c.y + r }, deg);
+	} else {
+		disc(dc, c.x, c.y, r, KEY_FACE, KEY_EDGE, std::max(1, int(m_scale)));
+		const double a = deg * PI / 180.0;
+		line(dc, c.x, c.y, c.x + int(std::sin(a) * r * 0.8),
+		     c.y - int(std::cos(a) * r * 0.8), RGB(70, 64, 48),
+		     std::max(2, int(2 * m_scale)));
+	}
 	text_in(dc, scale(m_lay.volume[0] - 36, m_lay.volume[1] + m_lay.volume[2] + 4,
 	                  72, 12), "VOLUME", PANEL_INK, m_font_small,
 	        DT_CENTER | DT_TOP | DT_SINGLELINE);
