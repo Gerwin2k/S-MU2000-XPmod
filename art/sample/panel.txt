@@ -1,4 +1,6 @@
-# S-MU2000 パネルの配置（絵の見本）
+# S-MU2000 パネルの配置（こちらの採寸 ＋ SVG のボタン）
+#
+# MAME の絵を使うほうは art/mame/panel.txt
 #
 # ボタン・LED・つまみを SVG にしたもの。使うには
 #   build/gui.exe <rom> --layout art/sample/panel.txt
@@ -41,15 +43,15 @@ nav.value+     952 134 48 34
 round.select   694 262 22 22
 round.audition 764 260 22 22
 
-dial 893 268 58 "dial.svg"        # 大きなダイヤル  中心 x y と半径
-volume 141 154 30 "knob.svg"      # 音量つまみ  中心 x y と半径
+dial 893 268 58 "../parts/dial.svg"        # 大きなダイヤル  中心 x y と半径
+volume 141 154 30 "../parts/knob.svg"      # 音量つまみ  中心 x y と半径
 
 # ボタンと表示灯の絵。ようすごとに 1 枚ずつ
-mode.art  "btn.svg" "btn-on.svg" "btn-down.svg"
-nav.art   "key.svg" "key-down.svg"
-cat.art   "cat.svg" "cat-down.svg"
-round.art "rnd.svg" "rnd-down.svg"
-plg.art   "plg.svg" "plg-on.svg"
+mode.art  "../parts/btn.svg" "../parts/btn-on.svg" "../parts/btn-down.svg"
+nav.art   "../parts/key.svg" "../parts/key-down.svg"
+cat.art   "../parts/cat.svg" "../parts/cat-down.svg"
+round.art "../parts/rnd.svg" "../parts/rnd-down.svg"
+plg.art   "../parts/plg.svg" "../parts/plg-on.svg"
 plg  524 37 341      # MU / PLG-1..3 の表示灯  左端 間隔 y
 columns.y 186        # 窓の下の札（PART VOL EXP …）の高さ
 

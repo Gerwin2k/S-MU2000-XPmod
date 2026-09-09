@@ -155,7 +155,18 @@ def main():
     # 音量つまみ。MAME の .lay には無く絵の中なので、VOLUME の札から起こす
     vol = next(it for it in items if it["ref"] == "volume_text")
     vb = vol["b"]
-    w("volume %g %g %g\n" % (x(vb["x"] + vb["width"] / 2), y(vb["y"] - 34), s(31)))
+    w('volume %g %g %g "../parts/knob.svg"\n'
+      % (x(vb["x"] + vb["width"] / 2), y(vb["y"] - 34), s(31)))
+
+    # 大きなダイヤルも .lay には無く絵の中。実測で合わせた位置を使う
+    w('dial 893 268 60 "../parts/dial.svg"\n')
+
+    # ボタンと表示灯の絵。art/parts/ の見本を指す
+    w('mode.art  "../parts/btn.svg" "../parts/btn-on.svg" "../parts/btn-down.svg"\n')
+    w('nav.art   "../parts/key.svg" "../parts/key-down.svg"\n')
+    w('cat.art   "../parts/cat.svg" "../parts/cat-down.svg"\n')
+    w('round.art "../parts/rnd.svg" "../parts/rnd-down.svg"\n')
+    w('plg.art   "../parts/plg.svg" "../parts/plg-on.svg"\n')
 
     # 窓の下の札の高さは PART の字から
     part = next(it for it in items if it["ref"] == "part_text")

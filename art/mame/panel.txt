@@ -1,0 +1,69 @@
+# MAME の mu2000.lay から起こしたパネルの配置
+#
+# もとは MAME の src/mame/layout/mu2000.lay。license:CC0-1.0、
+# 作った人は hap と Felipe Sanches。CC0 なので好きに使ってよい。
+#
+# tools/lay2panel.py が起こした。手で直してもよい。
+# 直したら gui.exe の窓で F5 を押すと読み直す。
+
+body_h 385
+lcd    276.4 58.3 362.4 109.3
+
+cat.x  321.7 376 430.4 484.7 538.7 592.9
+cat.y  208.9 250.2 291
+cat.size 47.6 16.4
+
+mode.play      716.8 73.6
+mode.edit      755.3 73.6
+mode.util      716.8 114.4
+mode.effect    755.3 114.4
+mode.sampling  716.8 155.7
+mode.seq       755.3 155.7
+mode.r 10.2 9.6
+
+nav.mute_solo  792.7 58.3 39.6 30.6
+nav.part-      847.1 58.3 39.6 30.6
+nav.part+      889 58.3 39.6 30.6
+nav.enter      792.7 99.1 39.6 30.6
+nav.select-    847.1 99.1 39.6 30.6
+nav.select+    889 99.1 39.6 30.6
+nav.exit       792.7 140.4 39.6 30.6
+nav.value-     847.1 140.4 39.6 30.6
+nav.value+     889 140.4 39.6 30.6
+
+round.select   674.4 258.7 24.9 24.9
+round.audition 735.5 258.7 24.9 24.9
+
+plg 497.5 36.2 336.9
+volume 193.4 172.1 17.6 "../parts/knob.svg"
+dial 893 268 60 "../parts/dial.svg"
+mode.art  "../parts/btn.svg" "../parts/btn-on.svg" "../parts/btn-down.svg"
+nav.art   "../parts/key.svg" "../parts/key-down.svg"
+cat.art   "../parts/cat.svg" "../parts/cat-down.svg"
+round.art "../parts/rnd.svg" "../parts/rnd-down.svg"
+plg.art   "../parts/plg.svg" "../parts/plg-on.svg"
+columns.y 184.6
+
+# LCD 下段の並びはこちらの実測のまま（doc/lcd-segments.md）
+low.x 0 12 30 48 55 61 70 78 86 93 0
+low.w 10 15 15 2 2 8 7 7 7 8 3
+
+# ---- 飾り。まず MAME の絵、そのうえに字を置く
+art 0 0 1000 385 "mu2000-mame.svg"
+
+text 120.7 27.7 97.7 27.2 label left ink "YAMAHA"
+text 244.7 28.3 147.5 25.5 label left ink "MU2000"
+text 345.4 36.2 117 14.2 small left ink "TONE GENERATOR"
+text 108.2 117.2 11.1 12.5 small left ink "1"
+text 107.6 191.4 11.1 12.5 small left ink "2"
+text 162.6 117.2 68.8 12.5 small left ink "A/D INPUT"
+text 66.3 279.7 58.1 12.5 small left ink "STANDBY"
+text 74.2 291 21.9 12.5 small left ink "ON"
+text 152.9 291 60.9 12.5 small left ink "MIDI IN A"
+text 228.8 291 51.9 12.5 small left ink "PHONES"
+text 653.4 135.3 17.9 12.5 small left ink "XG"
+text 653.4 144.4 17.9 12.5 small left ink "GS"
+text 650.6 154 47.9 12.5 small left ink "PERFORM"
+text 879.3 43 26.4 12.5 small left ink "ALL"
+text 162.6 312 20.7 10.8 small left ink "3.3V"
+text 174.4 312 38.3 12.5 small left ink "CARD"

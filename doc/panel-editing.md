@@ -207,6 +207,21 @@ build/gui.exe --shot p.png --size 1400x560 --layout mypanel/panel.txt
 座標（1640 × 680）をこちらの論理座標へ移してあるので、**絵とボタンの
 位置がぴたりと合う**。あとは普通の `panel.txt` なので手で直せる。
 
+**起こしたものは `art/mame/` に入れてある**ので、そのまま使える。
+
+```bash
+build/gui.exe <rom ディレクトリ> --layout art/mame/panel.txt
+```
+
+見本は 2 つある。
+
+| | 中身 |
+|---|---|
+| `art/sample/panel.txt` | こちらの採寸 ＋ SVG のボタン・LED・つまみ |
+| `art/mame/panel.txt` | **MAME の絵**（DIN コネクタ、ジャック、通気口ほか）＋ 同じボタン |
+
+ボタン・LED・つまみの絵は両方とも `art/parts/` を指している。
+
 ## 変なことを書いたら
 
 その行だけ飛ばして、`何行目: 理由` と教えてくれる。読めた行は反映される
