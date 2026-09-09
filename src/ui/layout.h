@@ -90,6 +90,11 @@ struct layout
 	double columns_y;                      // 窓の下の札の高さ
 	double plg[3];                         // MU / PLG-1..3 の表示灯 左端 間隔 y
 
+	// 押すと品書きが出るところ。絵を描き替えたときに合わせられるよう、
+	// 当たりの四角だけ持っている
+	double card[4];                        // カードの差し込み口。MIDI ファイル再生
+	double adin[4];                        // A/D INPUT のジャック
+
 	std::vector<deco> decos;
 
 	// panel.txt を読む。無ければ false（既定値のまま）。

@@ -95,6 +95,9 @@ public:
 	// 入出力の口を選ぶ品書きを出す
 	RECT midi_jack() const;
 	bool on_midi_jack(int x, int y) const;
+	// カードの差し込み口と A/D INPUT のジャック。押すと品書きが出る
+	bool on_card_slot(int x, int y) const;
+	bool on_ad_input(int x, int y) const;
 
 	// ---- 入力。窓からそのまま渡す。戻り値は「描き直しが要るか」
 

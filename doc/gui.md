@@ -12,10 +12,29 @@ build/gui.exe <rom> --boot --shot 絵.png   窓を出さずに絵だけ書き出
 build/gui.exe --shot 絵.png --grid        ROM 無しで絵だけ。方眼を重ねる
 build/gui.exe --dump-layout panel.txt    いまの配置を書き出す
 build/gui.exe <rom> --layout panel.txt   その配置で動かす（F5 で読み直し）
+build/gui.exe <rom> --play 曲.mid         MIDI ファイルを流しながら動かす
 ```
 
 **パネルの絵は作り直さずに直せる**。位置も色も `panel.txt` という文字
 ファイルに追い出してある。手順は [doc/panel-editing.md](panel-editing.md)。
+
+## MIDI ファイルを流す
+
+**カードの差し込み口**（左下）を左クリックか右クリックすると品書きが出る。
+
+* `MIDI ファイルを再生...` … ファイルを選んで流す
+* `止める` … 止めて、鳴りっぱなしを消す（オールノートオフとダンパ解除）
+
+最初から流したいときは
+
+```bash
+build/gui.exe <rom ディレクトリ> --play 曲.mid
+```
+
+送り先はエディタのつまみと同じ道（`ui::bridge` の輪）なので、パネルを
+触っても混ざらない。**ここだけは時計を持つ**が、譜面を送る側が時計を
+持つのは当たり前で、実機に MIDI ケーブルで繋いだ外の並べ機と同じ立場。
+音源のほうは今までどおり、音声デバイスに頼まれた分だけ進む。
 
 ## MIDI の口を選ぶ
 

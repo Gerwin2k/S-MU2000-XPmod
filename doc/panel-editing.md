@@ -80,6 +80,8 @@ round.select   694 262 22 22  # 小さい丸ボタン。select と audition
 dial 893 268 58           # 大きなダイヤル  中心 x y と半径
 volume 141 154 30         # 音量つまみ  中心 x y と半径
 plg  524 37 341           # MU / PLG-1..3 の表示灯  左端 間隔 y
+card 57 336 201 21        # カードの差し込み口。押すと MIDI ファイルの品書き
+adin 8 44 60 130          # A/D INPUT のジャック
 columns.y 186             # 窓の下の札（PART VOL EXP …）の高さ
 
 low.x 0 12 30 48 55 61 70 78 86 93 0    # LCD 下段の並び

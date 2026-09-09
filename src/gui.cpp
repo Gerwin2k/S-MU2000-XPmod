@@ -25,6 +25,7 @@
 #include "ui/midi_out.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
+#include "ui/player.h"
 #include "ui/text.h"
 #include "ui/png.h"
 
@@ -139,6 +140,7 @@ struct window_state {
 	ui::audio_out *out = nullptr;
 
 	std::string layout_path;           // 読んでいる panel.txt。F5 で読み直す
+	ui::player    play_file;
 	ui::midi_in  *midi = nullptr;
 	ui::midi_out *mout = nullptr;
 	int  in_dev  = -1;                 // いま開いている番号。-1 は使っていない
@@ -239,6 +241,7 @@ int find_device(const std::vector<std::string> &names, const std::string &want)
 enum : UINT {
 	ID_IN_NONE = 900, ID_IN_BASE = 901,
 	ID_OUT_NONE = 1900, ID_OUT_BASE = 1901,
+	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
 };
 
 // 品書きは **W 版**で作る。ソースは UTF-8 なので、A 版に渡すと
@@ -279,6 +282,47 @@ void show_port_menu(HWND hwnd, POINT screen)
 	TrackPopupMenu(top, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
 	               screen.x, screen.y, 0, hwnd, nullptr);
 	DestroyMenu(top);
+}
+
+// ---- カードの差し込み口。MIDI ファイルを流す
+
+void show_card_menu(HWND hwnd, POINT screen)
+{
+	HMENU m = CreatePopupMenu();
+	const bool on = g_win.play_file.playing();
+	add_item(m, MF_STRING, ID_PLAY_FILE, "MIDI ファイルを再生...");
+	std::string stop = "止める";
+	if (on)
+		stop += "（" + g_win.play_file.name() + "）";
+	add_item(m, MF_STRING | (on ? 0 : MF_GRAYED), ID_STOP_FILE, stop.c_str());
+	TrackPopupMenu(m, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
+	               screen.x, screen.y, 0, hwnd, nullptr);
+	DestroyMenu(m);
+}
+
+void choose_midi_file(HWND hwnd)
+{
+	wchar_t file[MAX_PATH] = {};
+	OPENFILENAMEW o{};
+	o.lStructSize = sizeof(o);
+	o.hwndOwner = hwnd;
+	o.lpstrFilter = L"MIDI ファイル (*.mid;*.midi)\0*.mid;*.midi\0すべて (*.*)\0*.*\0";
+	o.lpstrFile = file;
+	o.nMaxFile = MAX_PATH;
+	o.lpstrTitle = L"流す MIDI ファイル";
+	o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+	if (!GetOpenFileNameW(&o))
+		return;
+
+	std::string path = ui::to_utf8(file);
+	std::string err;
+	if (!g_win.play_file.start(path, *g_win.br, err)) {
+		const std::wstring w = ui::to_wide("開けない: " + err);
+		MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+		return;
+	}
+	std::printf("再生: %s（%.1f 秒)\n", path.c_str(), g_win.play_file.length());
+	std::fflush(stdout);
 }
 
 // 品書きで選ばれたものを開く。開けなかったら「使わない」に戻す
@@ -411,6 +455,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			show_port_menu(hwnd, pt);
 			return 0;
 		}
+		// カードの差し込み口は MIDI ファイル
+		if (g_win.panel.on_card_slot(mx, my)) {
+			POINT pt{ mx, my };
+			ClientToScreen(hwnd, &pt);
+			show_card_menu(hwnd, pt);
+			return 0;
+		}
 		SetCapture(hwnd);
 		if (g_win.panel.press(mx, my, *g_win.br))
 			InvalidateRect(hwnd, nullptr, FALSE);
@@ -418,9 +469,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 	}
 
 	case WM_RBUTTONUP: {
-		POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+		const int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
+		POINT pt{ mx, my };
 		ClientToScreen(hwnd, &pt);
-		show_port_menu(hwnd, pt);
+		if (g_win.panel.on_card_slot(mx, my))
+			show_card_menu(hwnd, pt);
+		else
+			show_port_menu(hwnd, pt);
 		return 0;
 	}
 
@@ -430,6 +485,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id >= ID_IN_BASE  && id < ID_IN_BASE + 256)  choose_in(int(id - ID_IN_BASE));
 		else if (id == ID_OUT_NONE)      choose_out(-1);
 		else if (id >= ID_OUT_BASE && id < ID_OUT_BASE + 256) choose_out(int(id - ID_OUT_BASE));
+		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
+		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		InvalidateRect(hwnd, nullptr, FALSE);
 		return 0;
 	}
@@ -439,7 +496,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		POINT pt;
 		GetCursorPos(&pt);
 		ScreenToClient(hwnd, &pt);
-		if (LOWORD(lp) == HTCLIENT && g_win.panel.on_midi_jack(pt.x, pt.y)) {
+		if (LOWORD(lp) == HTCLIENT &&
+		    (g_win.panel.on_midi_jack(pt.x, pt.y) ||
+		     g_win.panel.on_card_slot(pt.x, pt.y))) {
 			SetCursor(LoadCursor(nullptr, IDC_HAND));
 			return TRUE;
 		}
@@ -556,7 +615,7 @@ int main(int argc, char **argv)
 	int latency = 30;
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
-	std::string layout_path, dump_layout;
+	std::string layout_path, dump_layout, play_path;
 	bool boot_for_shot = false;
 	std::string shot_mid;
 	double shot_secs = 0.0;
@@ -585,6 +644,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
 		else if (!std::strcmp(argv[i], "--layout") && i + 1 < argc) layout_path = argv[++i];
+		else if (!std::strcmp(argv[i], "--play") && i + 1 < argc) play_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--dump-layout") && i + 1 < argc) dump_layout = argv[++i];
 		else if (!std::strcmp(argv[i], "--mid") && i + 2 < argc) {
 			shot_mid = argv[++i];
@@ -630,7 +690,7 @@ int main(int argc, char **argv)
 	if (dir.empty()) {
 		std::fprintf(stderr,
 			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midiout 番号]"
-			" [--latency ミリ秒] [--layout panel.txt]\n"
+			" [--latency ミリ秒] [--layout panel.txt] [--play 曲.mid]\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
@@ -752,8 +812,19 @@ int main(int argc, char **argv)
 			eng.publish();
 			return;
 		}
-		std::printf("鳴らしている（待ち時間 %.1f ms）\n",
-		            1000.0 * out.buffer_frames() / RATE);
+		// --play が付いていれば、鳴り始めたところで流し出す
+		if (!play_path.empty()) {
+			std::string perr;
+			if (!g_win.play_file.start(play_path, br, perr))
+				std::fprintf(stderr, "MIDI ファイル: %s\n", perr.c_str());
+			else
+				std::printf("再生: %s（%.1f 秒）\n", play_path.c_str(),
+				            g_win.play_file.length());
+		}
+		std::printf("鳴らしている（待ち時間 %.1f ms、MMCSS %s）\n",
+		            1000.0 * out.buffer_frames() / RATE,
+		            out.mmcss() ? "登録できた" : "登録できない（途切れやすい）");
+		std::fflush(stdout);
 	});
 
 	MSG msg;
@@ -765,6 +836,7 @@ int main(int argc, char **argv)
 	out.stop();
 	if (boot_thread.joinable())
 		boot_thread.join();
+	g_win.play_file.stop();
 	midi.close();
 	mout.close();
 

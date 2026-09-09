@@ -170,6 +170,10 @@ layout::layout()
 	columns_y = 186;
 	plg[0] = 524; plg[1] = 37; plg[2] = 341;
 
+	const double cd[4] = { 57, 336, 201, 21 };
+	const double ad[4] = { 8, 44, 60, 130 };
+	for (int i = 0; i < 4; i++) { card[i] = cd[i]; adin[i] = ad[i]; }
+
 	// ---- 飾り。実機の写真から採寸した
 	bool ok = false;
 	auto C = [&](const char *n) { return color_of(n, ok); };
@@ -388,6 +392,8 @@ bool layout::load(const std::string &path, std::string &err)
 		else if (key == "mode.r") { if (need(3)) { mode_r = num(t[1]); mode_led_r = num(t[2]); } }
 		else if (key == "columns.y") { if (need(2)) columns_y = num(t[1]); }
 		else if (key == "plg")    { if (need(4)) for (int i = 0; i < 3; i++) plg[i] = num(t[1 + i]); }
+		else if (key == "card")   { if (need(5)) for (int i = 0; i < 4; i++) card[i] = num(t[1 + i]); }
+		else if (key == "adin")   { if (need(5)) for (int i = 0; i < 4; i++) adin[i] = num(t[1 + i]); }
 		else if (key == "low.x")  { if (need(12)) for (int i = 0; i < 11; i++) low_x[i] = int(num(t[1 + i])); }
 		else if (key == "low.w")  { if (need(12)) for (int i = 0; i < 11; i++) low_w[i] = int(num(t[1 + i])); }
 		else if (key.rfind("mode.", 0) == 0) {
@@ -498,6 +504,10 @@ bool layout::save(const std::string &path) const
 	}
 	std::fprintf(f, "plg  %g %g %g      # MU / PLG-1..3 の表示灯  左端 間隔 y\n",
 	             plg[0], plg[1], plg[2]);
+	std::fprintf(f, "card %g %g %g %g   # カードの差し込み口。右クリックで MIDI ファイル\n",
+	             card[0], card[1], card[2], card[3]);
+	std::fprintf(f, "adin %g %g %g %g     # A/D INPUT のジャック\n",
+	             adin[0], adin[1], adin[2], adin[3]);
 	std::fprintf(f, "columns.y %g        # 窓の下の札（PART VOL EXP …）の高さ\n\n",
 	             columns_y);
 

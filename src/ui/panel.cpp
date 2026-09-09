@@ -152,6 +152,22 @@ bool panel::on_midi_jack(int x, int y) const
 	return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 }
 
+bool panel::on_card_slot(int x, int y) const
+{
+	if (m_page != page::front)
+		return false;
+	const RECT r = scale(m_lay.card[0], m_lay.card[1], m_lay.card[2], m_lay.card[3]);
+	return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+}
+
+bool panel::on_ad_input(int x, int y) const
+{
+	if (m_page != page::front)
+		return false;
+	const RECT r = scale(m_lay.adin[0], m_lay.adin[1], m_lay.adin[2], m_lay.adin[3]);
+	return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+}
+
 // 論理座標の点を実座標へ
 POINT panel::at(double x, double y) const
 {
