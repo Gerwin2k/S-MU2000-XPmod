@@ -71,7 +71,7 @@ $(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/sr
 # gui は実機のフロントパネル風の画面を出す
 UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp \
            src/ui/audio_out.cpp src/ui/midi_in.cpp src/ui/midi_out.cpp \
-           src/ui/layout.cpp
+           src/ui/layout.cpp src/ui/svg.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 
 $(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(BUILD)/src/gui.o
@@ -103,7 +103,7 @@ VST3_INC  := -I third_party/vst3
 VST3_SDK_SRCS := 	third_party/vst3/pluginterfaces/base/funknown.cpp 	third_party/vst3/pluginterfaces/base/coreiids.cpp 	third_party/vst3/pluginterfaces/base/conststringtable.cpp 	third_party/vst3/pluginterfaces/base/ustring.cpp
 
 VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp \
-             src/vst3/view.cpp src/ui/panel.cpp src/ui/layout.cpp src/ui/editor.cpp \
+             src/vst3/view.cpp src/ui/panel.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/editor.cpp \
              src/ui/effects.cpp $(VST3_SDK_SRCS)
 VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
 

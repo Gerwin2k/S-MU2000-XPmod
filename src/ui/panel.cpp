@@ -171,7 +171,8 @@ void panel::resize(int w, int h)
 	m_oy = int((m_h - LOGICAL_H * m_scale) / 2);
 
 	m_lcd    = scale(m_lay.lcd[0], m_lay.lcd[1], m_lay.lcd[2], m_lay.lcd[3]);
-	m_volume = scale(111, 124, 60, 60);       // 丸いつまみ。当たりは丸で見る
+	m_volume = scale(m_lay.volume[0] - m_lay.volume[2], m_lay.volume[1] - m_lay.volume[2],
+	                 m_lay.volume[2] * 2, m_lay.volume[2] * 2);   // 当たりは丸で見る
 	m_status = scale(20, 372, 700, 13);
 	m_hint   = scale(20, 386, 700, 13);
 	m_wheel  = scale(m_lay.dial[0] - m_lay.dial[2], m_lay.dial[1] - m_lay.dial[2],
@@ -681,7 +682,8 @@ void panel::draw_volume(HDC dc, double v) const
 	const double a = (-135.0 + 270.0 * v) * PI / 180.0;
 	line(dc, c.x, c.y, c.x + int(std::sin(a) * r * 0.8), c.y - int(std::cos(a) * r * 0.8),
 	     RGB(70, 64, 48), std::max(2, int(2 * m_scale)));
-	text_in(dc, scale(105, 188, 72, 12), "VOLUME", PANEL_INK, m_font_small,
+	text_in(dc, scale(m_lay.volume[0] - 36, m_lay.volume[1] + m_lay.volume[2] + 4,
+	                  72, 12), "VOLUME", PANEL_INK, m_font_small,
 	        DT_CENTER | DT_TOP | DT_SINGLELINE);
 }
 
@@ -702,6 +704,9 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 			const POINT c = at(g.x, g.y);
 			disc(dc, c.x, c.y, int(g.w * m_scale), g.a, g.b,
 			     std::max(1, int(g.h * m_scale)));
+		} else if (g.k == deco::art) {
+			if (g.pic)
+				g.pic->draw(dc, scale(g.x, g.y, g.w, g.h));
 		} else
 			round_box(dc, scale(g.x, g.y, g.w, g.h), g.a, g.b,
 			          std::max(1, int(g.radius * m_scale)));

@@ -78,6 +78,7 @@ nav.mute_solo 840 44 48 34    # 右端の四角いボタン。x y 幅 高さ
 round.select   694 262 22 22  # 小さい丸ボタン。select と audition
 
 dial 893 268 58           # 大きなダイヤル  中心 x y と半径
+volume 141 154 30         # 音量つまみ  中心 x y と半径
 plg  524 37 341           # MU / PLG-1..3 の表示灯  左端 間隔 y
 columns.y 186             # 窓の下の札（PART VOL EXP …）の高さ
 
@@ -98,6 +99,7 @@ low.w 10 15 15 2 2 8 7 7 7 8 3          # 単位は上段の点 1 つぶん
 text x y 幅 高さ 書体 揃え 色 "文字"
 disc 中心x 中心y 半径 面の色 ふちの色 線の太さ
 box  x y 幅 高さ 角の丸み 面の色 ふちの色
+art  x y 幅 高さ "絵.svg"
 ```
 
 * 書体 … `small` `label`
@@ -112,7 +114,41 @@ box  x y 幅 高さ 角の丸み 面の色 ふちの色
 text 10 6 170 26 label leftmid ink "YAMAHA"
 disc 32 74 19 jack jackedge 2
 box 57 336 201 21 2 slot slotedge
+art 0 0 1000 385 "mu2000-mame.svg"
 ```
+
+### SVG を貼る
+
+`art` は **SVG をそのまま嵌める**。Inkscape で描いて書き出したものが
+そのまま使えるので、数字を並べるより楽に凝ったものが作れる。
+
+道は `panel.txt` からの相対で探す。縦横比は保ったまま、指定した四角の
+真ん中に収める。
+
+読めるのは要るぶんだけ。
+
+* `<path d="…">` の `M L H V C Z`（大文字小文字とも）
+* `transform` の `translate(…)` と `matrix(…)`
+* `style` の `fill` `stroke` `stroke-width`
+
+弧（`A`）、二次ベジエ（`Q S T`）、勾配、文字、`<image>` は読まない。
+**曲線は読み込むときに折れ線にする**ので、窓を大きくしても粗くならない。
+点線（`stroke-dasharray`）は実線になる。
+
+### MAME の絵を借りる
+
+MAME の `mu2000.lay` には、DIN コネクタ・ジャック・つまみ・カードの
+差し込み口・下の通気口まで描いた SVG が埋まっている。**license:CC0-1.0**
+（hap、Felipe Sanches）なので、そのまま使ってよい。
+
+```bash
+python tools/lay2panel.py <mame>/src/mame/layout/mu2000.lay mypanel
+build/gui.exe --shot p.png --size 1400x560 --layout mypanel/panel.txt
+```
+
+`mypanel/panel.txt` と `mypanel/mu2000-mame.svg` が出てくる。MAME の
+座標（1640 × 680）をこちらの論理座標へ移してあるので、**絵とボタンの
+位置がぴたりと合う**。あとは普通の `panel.txt` なので手で直せる。
 
 ## 変なことを書いたら
 

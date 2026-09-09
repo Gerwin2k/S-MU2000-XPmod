@@ -14,6 +14,9 @@
 
 #pragma once
 
+#include "svg.h"
+
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,7 +26,7 @@ namespace ui {
 
 // 飾り。ボタンでも LCD でもない、ただ描くだけのもの
 struct deco {
-	enum kind { text, disc, box };
+	enum kind { text, disc, box, art };
 
 	int      k = text;
 	double   x = 0, y = 0, w = 0, h = 0;   // disc は x,y が中心、w が半径、h が線の太さ
@@ -32,7 +35,10 @@ struct deco {
 	COLORREF b = RGB(0, 0, 0);             // disc と box のふちの色
 	int      font = 0;                     // 0 小さい / 1 大きい
 	UINT     align = 0;                    // DT_ の組み合わせ
-	std::string str;
+	std::string str;                       // art は SVG の道
+
+	// art のときだけ。読んだ絵。deco を写すと共有される
+	std::shared_ptr<svg_art> pic;
 };
 
 struct layout
@@ -50,6 +56,7 @@ struct layout
 	double nav[9][4];                      // 四角いボタン 9 個
 	double round_[2][4];                   // SELECT と AUDITION
 	double dial[3];                        // 大きなダイヤル x y 半径
+	double volume[3];                      // 音量つまみ x y 半径（中心）
 
 	int    low_x[11], low_w[11];           // LCD 下段の並び（点の単位）
 	double columns_y;                      // 窓の下の札の高さ
