@@ -1,0 +1,72 @@
+// license:BSD-3-Clause
+//
+// パネルの絵の配置。**作り直さずに文字ファイルで直せる**ようにしてある。
+//
+// 何も無ければ、ここに書いてある既定値がそのまま使われる（実機の写真から
+// 採寸したもの）。panel.txt があればその値で上書きする。
+// 書き方は doc/panel-editing.md。
+//
+// 座標はぜんぶ論理座標（1000 × 400）。窓の大きさに合わせて一律に伸び縮み
+// するので、窓の大きさは気にしなくてよい。
+
+#ifndef S_MU2000_UI_LAYOUT_H
+#define S_MU2000_UI_LAYOUT_H
+
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include <windows.h>
+
+namespace ui {
+
+// 飾り。ボタンでも LCD でもない、ただ描くだけのもの
+struct deco {
+	enum kind { text, disc, box };
+
+	int      k = text;
+	double   x = 0, y = 0, w = 0, h = 0;   // disc は x,y が中心、w が半径、h が線の太さ
+	double   radius = 0;                   // box の角の丸み
+	COLORREF a = RGB(0, 0, 0);             // text は字の色、disc と box は面の色
+	COLORREF b = RGB(0, 0, 0);             // disc と box のふちの色
+	int      font = 0;                     // 0 小さい / 1 大きい
+	UINT     align = 0;                    // DT_ の組み合わせ
+	std::string str;
+};
+
+struct layout
+{
+	layout();                              // 既定値を入れる
+
+	double body_h;                         // 本体の高さ。下は面を切り替える帯
+	double lcd[4];                         // LCD の窓 x y 幅 高さ
+
+	double cat_x[6], cat_y[3];             // 音色カテゴリ 18 個。6 列 3 行
+	double cat_w, cat_h;
+
+	double mode[6][2];                     // 丸ボタン 6 個の中心
+	double mode_r, mode_led_r;
+	double nav[9][4];                      // 四角いボタン 9 個
+	double round_[2][4];                   // SELECT と AUDITION
+	double dial[3];                        // 大きなダイヤル x y 半径
+
+	int    low_x[11], low_w[11];           // LCD 下段の並び（点の単位）
+	double columns_y;                      // 窓の下の札の高さ
+	double plg[3];                         // MU / PLG-1..3 の表示灯 左端 間隔 y
+
+	std::vector<deco> decos;
+
+	// panel.txt を読む。無ければ false（既定値のまま）。
+	// 中身が変でも、読めた行だけ反映して err に理由を積む
+	bool load(const std::string &path, std::string &err);
+	// いまの値をそのまま書き出す。編集の出発点に使う
+	bool save(const std::string &path) const;
+
+	// 探す順に見て、最初に見つかったものを読む。読んだ道を返す
+	static std::string find_default();
+};
+
+} // namespace ui
+
+#endif // S_MU2000_UI_LAYOUT_H

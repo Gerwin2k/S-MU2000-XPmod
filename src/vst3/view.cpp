@@ -3,6 +3,7 @@
 #include "view.h"
 
 #include "ui/bridge.h"
+#include "ui/layout.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -77,6 +78,13 @@ mu2000::button key_to_button(WPARAM vk, bool &ok)
 plug_view::plug_view(engine &eng)
 	: m_engine(eng)
 {
+	// パネルの配置。%LOCALAPPDATA%\S-MU2000\panel.txt があれば読む
+	// （doc/panel-editing.md）。無ければ組み込みの配置のまま
+	const std::string lay = ui::layout::find_default();
+	if (!lay.empty()) {
+		std::string err;
+		m_panel.lay().load(lay, err);
+	}
 	m_panel.resize(m_w, m_h);
 }
 

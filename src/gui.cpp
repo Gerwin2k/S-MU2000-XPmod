@@ -23,6 +23,7 @@
 #include "ui/driver.h"
 #include "ui/midi_in.h"
 #include "ui/midi_out.h"
+#include "ui/layout.h"
 #include "ui/panel.h"
 #include "ui/text.h"
 #include "ui/png.h"
@@ -137,6 +138,7 @@ struct window_state {
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
 
+	std::string layout_path;           // 読んでいる panel.txt。F5 で読み直す
 	ui::midi_in  *midi = nullptr;
 	ui::midi_out *mout = nullptr;
 	int  in_dev  = -1;                 // いま開いている番号。-1 は使っていない
@@ -151,6 +153,24 @@ struct window_state {
 };
 
 window_state g_win;
+
+// ---- パネルの配置。作り直さずに文字ファイルで直せる（doc/panel-editing.md）
+
+void apply_layout(const std::string &path, bool quiet)
+{
+	g_win.panel.lay() = ui::layout();          // まず既定値に戻す
+	std::string err;
+	if (!path.empty() && g_win.panel.lay().load(path, err)) {
+		if (!quiet)
+			std::printf("配置: %s\n", path.c_str());
+	} else if (!path.empty() && !quiet) {
+		std::printf("配置: %s を開けない。組み込みの配置を使う\n", path.c_str());
+	}
+	if (!err.empty())
+		std::fprintf(stderr, "%s", err.c_str());
+	std::fflush(stdout);
+	g_win.panel.resize(g_win.panel.width(), g_win.panel.height());
+}
 
 // ---- 選んだ口を覚えておく
 //
@@ -449,6 +469,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 	case WM_KEYDOWN: {
 		if (lp & (1 << 30))                     // 押しっぱなしの繰り返しは無視
 			return 0;
+		if (wp == VK_F5) {                      // 配置を読み直す
+			apply_layout(g_win.layout_path, false);
+			InvalidateRect(hwnd, nullptr, FALSE);
+			return 0;
+		}
 		bool ok = false;
 		const mu2000::button b = key_to_button(wp, ok);
 		if (ok) g_win.br->press(b, true);
@@ -476,9 +501,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 // ---- 窓を出さずに絵だけ書き出す。見た目を直すときに使う
 
-int shot(const std::string &path, int w, int h, ui::bridge &br, bool grid)
+int shot(const std::string &path, int w, int h, ui::bridge &br, bool grid,
+         const std::string &layout_path)
 {
 	ui::panel p;
+	std::string lerr;
+	if (!layout_path.empty() && !p.lay().load(layout_path, lerr))
+		std::fprintf(stderr, "配置: %s を開けない\n", layout_path.c_str());
+	if (!lerr.empty())
+		std::fprintf(stderr, "%s", lerr.c_str());
 	p.resize(w, h);
 	p.set_grid(grid);
 
@@ -525,6 +556,7 @@ int main(int argc, char **argv)
 	int latency = 30;
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
+	std::string layout_path, dump_layout;
 	bool boot_for_shot = false;
 	std::string shot_mid;
 	double shot_secs = 0.0;
@@ -552,6 +584,8 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
+		else if (!std::strcmp(argv[i], "--layout") && i + 1 < argc) layout_path = argv[++i];
+		else if (!std::strcmp(argv[i], "--dump-layout") && i + 1 < argc) dump_layout = argv[++i];
 		else if (!std::strcmp(argv[i], "--mid") && i + 2 < argc) {
 			shot_mid = argv[++i];
 			shot_secs = std::atof(argv[++i]);
@@ -563,6 +597,24 @@ int main(int argc, char **argv)
 		else if (dir.empty()) dir = argv[i];
 	}
 
+	// --layout が無ければ、決まった場所を順に探す
+	if (layout_path.empty())
+		layout_path = ui::layout::find_default();
+
+	if (!dump_layout.empty()) {
+		ui::layout l;
+		std::string lerr;
+		if (!layout_path.empty())
+			l.load(layout_path, lerr);
+		if (!l.save(dump_layout)) {
+			std::fprintf(stderr, "%s に書けない\n", dump_layout.c_str());
+			return 1;
+		}
+		std::printf("いまの配置を書き出した: %s\n", dump_layout.c_str());
+		std::printf("直したら --layout で渡すか、窓で F5 を押す\n");
+		return 0;
+	}
+
 	static ui::bridge br;
 	static ui::midi_in  midi;
 	static ui::midi_out mout;
@@ -572,13 +624,14 @@ int main(int argc, char **argv)
 		ui::snapshot s;
 		std::snprintf(s.message, sizeof(s.message), "S-MU2000");
 		br.publish(s);
-		return shot(shot_path, win_w, win_h, br, grid);
+		return shot(shot_path, win_w, win_h, br, grid, layout_path);
 	}
 
 	if (dir.empty()) {
 		std::fprintf(stderr,
 			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midiout 番号]"
-			" [--latency ミリ秒]\n"
+			" [--latency ミリ秒] [--layout panel.txt]\n"
+			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
 		return 1;
@@ -626,7 +679,7 @@ int main(int argc, char **argv)
 		}
 
 		eng.publish();
-		return shot(shot_path, win_w, win_h, br, grid);
+		return shot(shot_path, win_w, win_h, br, grid, layout_path);
 	}
 
 	// ---- 窓を出す
@@ -653,8 +706,11 @@ int main(int argc, char **argv)
 
 	g_win.br   = &br;
 	g_win.eng  = &eng;
+	g_win.layout_path = layout_path;
 	g_win.midi = &midi;
 	g_win.mout = &mout;
+	g_win.panel.resize(win_w, win_h);
+	apply_layout(layout_path, false);
 	g_win.panel.resize(win_w, win_h);
 	br.set_gain(1.0f);
 

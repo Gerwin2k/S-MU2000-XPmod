@@ -25,14 +25,12 @@ namespace ui {
 namespace {
 
 constexpr double PI = 3.14159265358979;
-constexpr double BODY_H = 385;      // 本体の高さ。下の 15 は帯
 
-struct place { mu2000::button b; double x, y, w, h; const char *label; const char *sub; };
+// **位置と大きさは ui::layout（src/ui/layout.*）が持っている**。
+// panel.txt があればそちらで上書きされる。ここに残してあるのは
+// 「どのボタンか」「札に何と書くか」だけ
 
-// 音色カテゴリ 18 個。6 列 × 3 行。実機は札が上、押すところが下
-const double CAT_X[6] = { 288, 354, 419, 482, 545, 607 };
-const double CAT_Y[3] = { 219, 266, 310 };
-const double CAT_W = 52, CAT_H = 20;
+struct place { mu2000::button b; const char *label; const char *sub; };
 
 const mu2000::button CAT_B[18] = {
 	mu2000::button::piano,      mu2000::button::chrom_perc, mu2000::button::organ,
@@ -66,20 +64,6 @@ const char *CAT_LABEL[18] = {
 constexpr int bar_x(int i) { return (i / 2) * (CELL_W + 1) + ((i & 1) ? 3 : 0); }
 constexpr int part_x(int n) { return bar_x(n + 1); }
 
-const int LOW_X[LOW_COUNT] = {
-	0,                       // 「01」
-	12,                      // 「A01」
-	30,                      // 楽器のかたち
-	part_x(15),              // VOL   15 番と左揃え
-	part_x(18) + 2 - 2,      // EXP   18 番と右揃え（バーは 2 点幅）
-	61,                      // PAN
-	part_x(24) + 2 - 7,      // REV   24 番と右揃え
-	part_x(25),              // CHO   25 番と左揃え
-	(part_x(28) + part_x(29) + 2) / 2 - 3,   // VAR  28-29 番の中央
-	93,                      // ノートシフト
-	0,                       // モードの ▶（窓の右端に置くので使わない）
-};
-const int LOW_W[LOW_COUNT] = { 10, 15, 15, 2, 2, 8, 7, 7, 7, 8, 3 };
 
 // 窓の下に印刷されている札。どの並びの真ん中に置くか
 struct column { int at; const char *label; };
@@ -91,36 +75,34 @@ const column COLUMNS[] = {
 
 // 右上の 6 個。丸い押しボタンで、中に LED が入っている。
 // LED の番号は MAME の mulcd.lay の並び（左列 0,2,4 / 右列 1,3,5）
-struct mode_button { mu2000::button b; int led; double x, y; const char *label; };
-const mode_button MODES[] = {
-	{ mu2000::button::play,          0, 752,  66, "PLAY"     },
-	{ mu2000::button::edit,          1, 806,  66, "EDIT"     },
-	{ mu2000::button::util,          2, 752, 114, "UTIL"     },
-	{ mu2000::button::effect,        3, 806, 114, "EFFECT"   },
-	{ mu2000::button::sampling_mode, 4, 752, 162, "SAMPLING" },
-	{ mu2000::button::seq,           5, 806, 162, "SEQ"      },
+struct mode_button { mu2000::button b; int led; const char *label; };
+const mode_button MODES[6] = {
+	{ mu2000::button::play,          0, "PLAY"     },
+	{ mu2000::button::edit,          1, "EDIT"     },
+	{ mu2000::button::util,          2, "UTIL"     },
+	{ mu2000::button::effect,        3, "EFFECT"   },
+	{ mu2000::button::sampling_mode, 4, "SAMPLING" },
+	{ mu2000::button::seq,           5, "SEQ"      },
 };
 
 // 右端の 9 個
-const place NAV[] = {
-	{ mu2000::button::mute_solo,    840,  44, 48, 34, "MUTE",   "SOLO" },
-	{ mu2000::button::part_minus,   896,  44, 48, 34, "PART",   "-" },
-	{ mu2000::button::part_plus,    952,  44, 48, 34, "PART",   "+" },
-	{ mu2000::button::enter,        840,  90, 48, 32, "ENTER",  "" },
-	{ mu2000::button::select_left,  896,  90, 48, 32, "SELECT", "-" },
-	{ mu2000::button::select_right, 952,  90, 48, 32, "SELECT", "+" },
-	{ mu2000::button::exit,         840, 134, 48, 34, "EXIT",   "" },
-	{ mu2000::button::value_minus,  896, 134, 48, 34, "VALUE",  "-" },
-	{ mu2000::button::value_plus,   952, 134, 48, 34, "VALUE",  "+" },
+const place NAV[9] = {
+	{ mu2000::button::mute_solo,    "MUTE",   "SOLO" },
+	{ mu2000::button::part_minus,   "PART",   "-" },
+	{ mu2000::button::part_plus,    "PART",   "+" },
+	{ mu2000::button::enter,        "ENTER",  "" },
+	{ mu2000::button::select_left,  "SELECT", "-" },
+	{ mu2000::button::select_right, "SELECT", "+" },
+	{ mu2000::button::exit,         "EXIT",   "" },
+	{ mu2000::button::value_minus,  "VALUE",  "-" },
+	{ mu2000::button::value_plus,   "VALUE",  "+" },
 };
 
 // 音色カテゴリの右にある小さな丸ボタン 2 つ
-const place ROUND[] = {
-	{ mu2000::button::select,   694, 262, 22, 22, "SELECT",   "" },
-	{ mu2000::button::audition, 764, 260, 22, 22, "AUDITION", "" },
+const place ROUND[2] = {
+	{ mu2000::button::select,   "SELECT",   "" },
+	{ mu2000::button::audition, "AUDITION", "" },
 };
-
-const double DIAL_X = 893, DIAL_Y = 268, DIAL_R = 58;
 
 // 実機の色
 const COLORREF PANEL_FACE = RGB(196, 189, 170);
@@ -188,13 +170,15 @@ void panel::resize(int w, int h)
 	m_ox = int((m_w - LOGICAL_W * m_scale) / 2);
 	m_oy = int((m_h - LOGICAL_H * m_scale) / 2);
 
-	m_lcd    = scale(240, 42, 439, 135);
+	m_lcd    = scale(m_lay.lcd[0], m_lay.lcd[1], m_lay.lcd[2], m_lay.lcd[3]);
 	m_volume = scale(111, 124, 60, 60);       // 丸いつまみ。当たりは丸で見る
 	m_status = scale(20, 372, 700, 13);
 	m_hint   = scale(20, 386, 700, 13);
-	m_wheel  = scale(DIAL_X - DIAL_R, DIAL_Y - DIAL_R, DIAL_R * 2, DIAL_R * 2);
+	m_wheel  = scale(m_lay.dial[0] - m_lay.dial[2], m_lay.dial[1] - m_lay.dial[2],
+	                 m_lay.dial[2] * 2, m_lay.dial[2] * 2);
 	for (int i = 0; i < 6; i++)
-		m_leds[i] = scale(MODES[i].x - 11, MODES[i].y - 11, 22, 22);
+		m_leds[i] = scale(m_lay.mode[i][0] - m_lay.mode_r, m_lay.mode[i][1] - m_lay.mode_r,
+		                  m_lay.mode_r * 2, m_lay.mode_r * 2);
 
 	if (m_font_label) DeleteObject(m_font_label);
 	if (m_font_small) DeleteObject(m_font_small);
@@ -232,17 +216,26 @@ void panel::build_spots()
 
 	for (int i = 0; i < 18; i++)
 		m_spots.push_back({ spot_kind::button, CAT_B[i], CTL_NONE,
-		                    scale(CAT_X[i % 6] - CAT_W / 2, CAT_Y[i / 6], CAT_W, CAT_H),
+		                    scale(m_lay.cat_x[i % 6] - m_lay.cat_w / 2, m_lay.cat_y[i / 6],
+		                          m_lay.cat_w, m_lay.cat_h),
 		                    CAT_LABEL[i], "" });
-	for (const mode_button &m : MODES)
-		m_spots.push_back({ spot_kind::button, m.b, CTL_NONE,
-		                    scale(m.x - 11, m.y - 11, 22, 22), m.label, "" });
-	for (const place &p : NAV)
-		m_spots.push_back({ spot_kind::button, p.b, CTL_NONE,
-		                    scale(p.x, p.y, p.w, p.h), p.label, p.sub });
-	for (const place &p : ROUND)
-		m_spots.push_back({ spot_kind::button, p.b, CTL_NONE,
-		                    scale(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h), p.label, p.sub });
+	for (int i = 0; i < 6; i++)
+		m_spots.push_back({ spot_kind::button, MODES[i].b, CTL_NONE,
+		                    scale(m_lay.mode[i][0] - m_lay.mode_r,
+		                          m_lay.mode[i][1] - m_lay.mode_r,
+		                          m_lay.mode_r * 2, m_lay.mode_r * 2),
+		                    MODES[i].label, "" });
+	for (int i = 0; i < 9; i++)
+		m_spots.push_back({ spot_kind::button, NAV[i].b, CTL_NONE,
+		                    scale(m_lay.nav[i][0], m_lay.nav[i][1],
+		                          m_lay.nav[i][2], m_lay.nav[i][3]),
+		                    NAV[i].label, NAV[i].sub });
+	for (int i = 0; i < 2; i++)
+		m_spots.push_back({ spot_kind::button, ROUND[i].b, CTL_NONE,
+		                    scale(m_lay.round_[i][0] - m_lay.round_[i][2] / 2,
+		                          m_lay.round_[i][1] - m_lay.round_[i][3] / 2,
+		                          m_lay.round_[i][2], m_lay.round_[i][3]),
+		                    ROUND[i].label, ROUND[i].sub });
 
 	m_spots.push_back({ spot_kind::wheel,  mu2000::button::count, CTL_NONE, m_wheel, "", "" });
 	m_spots.push_back({ spot_kind::volume, mu2000::button::count, CTL_NONE, m_volume,
@@ -413,8 +406,8 @@ void panel::draw_lcd(HDC dc, const snapshot &s) const
 	// ---- 下の面
 	const int sy = scale_y + scale_h;
 	const int seg_h = 8 * d;                       // 文字 1 行ぶんの高さ
-	auto lx = [&](int which) { return x0 + LOW_X[which] * d; };
-	auto lw = [&](int which) { return LOW_W[which] * d; };
+	auto lx = [&](int which) { return x0 + m_lay.low_x[which] * d; };
+	auto lw = [&](int which) { return m_lay.low_w[which] * d; };
 
 	// 部の番号「01」と「A01」。塊の中の桁は**詰めて**並べる
 	for (int i = 0; i < 2; i++)
@@ -668,8 +661,8 @@ void panel::draw_button(HDC dc, const spot &sp, bool down) const
 // 大きなダイヤル。回した角度で窪みが回る
 void panel::draw_wheel(HDC dc, int angle) const
 {
-	const POINT c = at(DIAL_X, DIAL_Y);
-	const int r = int(DIAL_R * m_scale);
+	const POINT c = at(m_lay.dial[0], m_lay.dial[1]);
+	const int r = int(m_lay.dial[2] * m_scale);
 
 	disc(dc, c.x, c.y, r, KEY_FACE, KEY_EDGE, std::max(1, int(2 * m_scale)));
 	const double a = angle * PI / 180.0;
@@ -698,63 +691,25 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 {
 	RECT all{ 0, 0, m_w, m_h };
 	fill(dc, all, RGB(24, 26, 30));
-	fill(dc, scale(0, 0, LOGICAL_W, BODY_H), PANEL_FACE);
+	fill(dc, scale(0, 0, LOGICAL_W, m_lay.body_h), PANEL_FACE);
 
-	// ---- 左
-
-	text_in(dc, scale(10, 6, 170, 26), "YAMAHA", PANEL_INK, m_font_label,
-	        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-	text_in(dc, scale(227, 6, 320, 26), "MU2000    TONE GENERATOR", PANEL_INK,
-	        m_font_label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-	text_in(dc, scale(744, 8, 60, 20), "USB", PANEL_INK, m_font_small,
-	        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-	for (int i = 0; i < 2; i++) {
-		const POINT c = at(32, 74.0 + i * 75);
-		disc(dc, c.x, c.y, int(19 * m_scale), RGB(52, 48, 42), RGB(120, 114, 100),
-		     std::max(1, int(2 * m_scale)));
+	// ---- 飾り。位置も色も panel.txt から来る（doc/panel-editing.md）
+	for (const deco &g : m_lay.decos) {
+		if (g.k == deco::text)
+			text_in(dc, scale(g.x, g.y, g.w, g.h), g.str.c_str(), g.a,
+			        g.font ? m_font_label : m_font_small, g.align);
+		else if (g.k == deco::disc) {
+			const POINT c = at(g.x, g.y);
+			disc(dc, c.x, c.y, int(g.w * m_scale), g.a, g.b,
+			     std::max(1, int(g.h * m_scale)));
+		} else
+			round_box(dc, scale(g.x, g.y, g.w, g.h), g.a, g.b,
+			          std::max(1, int(g.radius * m_scale)));
 	}
-	text_in(dc, scale(56, 106, 130, 14), "1 ....  A/D INPUT", PANEL_INK, m_font_small,
-	        DT_LEFT | DT_TOP | DT_SINGLELINE);
-	text_in(dc, scale(56, 182, 130, 14), "2 ....", PANEL_INK, m_font_small,
-	        DT_LEFT | DT_TOP | DT_SINGLELINE);
-
-	// A/D INPUT のつまみ。音は通していないので飾り
-	{
-		const POINT c = at(141, 78);
-		disc(dc, c.x, c.y, int(30 * m_scale), KEY_FACE, KEY_EDGE, std::max(1, int(m_scale)));
-	}
-
-	round_box(dc, scale(8, 248, 68, 36), KEY_FACE, KEY_EDGE, int(3 * m_scale));
-	text_in(dc, scale(4, 288, 96, 24), "STANDBY / ON", PANEL_INK, m_font_small,
-	        DT_LEFT | DT_TOP | DT_WORDBREAK);
-	{
-		const POINT c = at(130, 266);
-		disc(dc, c.x, c.y, int(34 * m_scale), RGB(60, 56, 50), RGB(120, 114, 100),
-		     std::max(1, int(2 * m_scale)));
-	}
-	text_in(dc, scale(96, 304, 90, 14), "MIDI IN A", PANEL_INK, m_font_small,
-	        DT_CENTER | DT_TOP | DT_SINGLELINE);
-	{
-		const POINT c = at(228, 269);
-		disc(dc, c.x, c.y, int(14 * m_scale), RGB(52, 48, 42), RGB(120, 114, 100),
-		     std::max(1, int(m_scale)));
-	}
-	text_in(dc, scale(198, 304, 60, 14), "PHONES", PANEL_INK, m_font_small,
-	        DT_CENTER | DT_TOP | DT_SINGLELINE);
-	round_box(dc, scale(57, 336, 201, 21), RGB(120, 116, 104), RGB(90, 86, 76),
-	          int(2 * m_scale));
-	text_in(dc, scale(63, 338, 130, 17), "3.3V CARD", RGB(232, 228, 218), m_font_small,
-	        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
 	// ---- 中
 
 	draw_lcd(dc, s);
-
-	text_in(dc, scale(686, 44, 46, 84), "GM2\nXG\nPLG", PANEL_INK, m_font_small,
-	        DT_CENTER | DT_TOP | DT_WORDBREAK);
-	text_in(dc, scale(686, 132, 50, 48), "XG\nTG300B\nPERFORM", PANEL_INK,
-	        m_font_small, DT_LEFT | DT_TOP | DT_WORDBREAK);
 
 	// 窓の下の札は、下段の並びと同じ割合で置く。窓の中身とずれないように
 	{
@@ -763,9 +718,9 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 		const int aw = m_lcd.right - m_lcd.left;
 		const int d = std::max<int>(1, (aw - pad * 2) / top_dots);
 		const int inner_x = m_lcd.left + std::max(pad, (aw - top_dots * d) / 2);
-		const int y = at(0, 186).y, h = int(12 * m_scale), w = int(64 * m_scale);
+		const int y = at(0, m_lay.columns_y).y, h = int(12 * m_scale), w = int(64 * m_scale);
 		for (const column &c : COLUMNS) {
-			const int cx = inner_x + (LOW_X[c.at] + LOW_W[c.at] / 2) * d;
+			const int cx = inner_x + (m_lay.low_x[c.at] + m_lay.low_w[c.at] / 2) * d;
 			RECT r{ cx - w / 2, y, cx + w / 2, y + h };
 			text_in(dc, r, c.label, PANEL_INK, m_font_small,
 			        DT_CENTER | DT_TOP | DT_SINGLELINE);
@@ -773,63 +728,69 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	}
 
 	for (int i = 0; i < 18; i++)
-		text_in(dc, scale(CAT_X[i % 6] - 34, CAT_Y[i / 6] - 14, 68, 14), CAT_LABEL[i],
-		        PANEL_INK, m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
+		text_in(dc, scale(m_lay.cat_x[i % 6] - 34, m_lay.cat_y[i / 6] - 14, 68, 14),
+		        CAT_LABEL[i], PANEL_INK, m_font_small,
+		        DT_CENTER | DT_TOP | DT_SINGLELINE);
 
 	// MU / PLG-1..3 の表示灯。LED は 6 番から
 	{
 		const char *plg[4] = { "MU", "PLG-1", "PLG-2", "PLG-3" };
 		for (int i = 0; i < 4; i++) {
-			const POINT c = at(524.0 + i * 37, 341);
+			const double px = m_lay.plg[0] + i * m_lay.plg[1];
+			const POINT c = at(px, m_lay.plg[2]);
 			disc(dc, c.x, c.y, int(5 * m_scale),
 			     BIT(s.leds, 6 + i) ? LED_ON : RGB(64, 62, 52), RGB(110, 106, 92), 1);
-			text_in(dc, scale(502.0 + i * 37, 348, 44, 12), plg[i], PANEL_INK,
+			text_in(dc, scale(px - 22, m_lay.plg[2] + 7, 44, 12), plg[i], PANEL_INK,
 			        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 		}
 	}
 
 	// ---- 右
 
-	for (size_t i = 0; i < sizeof(MODES) / sizeof(MODES[0]); i++) {
+	for (int i = 0; i < 6; i++) {
 		const mode_button &m = MODES[i];
-		text_in(dc, scale(m.x - 34, m.y - 30, 68, 14), m.label, PANEL_INK,
+		const double mx = m_lay.mode[i][0], my = m_lay.mode[i][1];
+		text_in(dc, scale(mx - 34, my - m_lay.mode_r - 19, 68, 14), m.label, PANEL_INK,
 		        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
-		const POINT c = at(m.x, m.y);
+		const POINT c = at(mx, my);
 		const bool down = ((pressed >> int(m.b)) & 1) != 0;
-		disc(dc, c.x, c.y, int(11 * m_scale), down ? KEY_DOWN : RGB(198, 188, 152),
-		     KEY_EDGE, std::max(1, int(m_scale)));
-		disc(dc, c.x, c.y, int(5 * m_scale),
+		disc(dc, c.x, c.y, int(m_lay.mode_r * m_scale),
+		     down ? KEY_DOWN : RGB(198, 188, 152), KEY_EDGE, std::max(1, int(m_scale)));
+		disc(dc, c.x, c.y, int(m_lay.mode_led_r * m_scale),
 		     BIT(s.leds, m.led) ? LED_ON : RGB(74, 72, 60), RGB(110, 106, 92), 1);
 	}
 
-	text_in(dc, scale(896, 28, 104, 12), "······ ALL ······", PANEL_INK,
-	        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
-
 	// 四角いボタン。名札は上に重ねる
-	for (const place &p : NAV) {
+	for (int i = 0; i < 9; i++) {
+		const place &p = NAV[i];
+		const double px = m_lay.nav[i][0], py = m_lay.nav[i][1];
+		const double pw = m_lay.nav[i][2], ph = m_lay.nav[i][3];
 		const spot *sp = nullptr;
 		for (const spot &q : m_spots)
 			if (q.kind == spot_kind::button && q.button == p.b) { sp = &q; break; }
 		if (!sp)
 			continue;
 		draw_button(dc, *sp, ((pressed >> int(p.b)) & 1) != 0);
-		text_in(dc, scale(p.x, p.y + 4, p.w, 12), p.label, RGB(58, 53, 38),
+		text_in(dc, scale(px, py + 4, pw, 12), p.label, RGB(58, 53, 38),
 		        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 		if (p.sub[0])
-			text_in(dc, scale(p.x, p.y + p.h - 14, p.w, 12), p.sub, RGB(58, 53, 38),
+			text_in(dc, scale(px, py + ph - 14, pw, 12), p.sub, RGB(58, 53, 38),
 			        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 	}
 	for (int i = 0; i < 18; i++) {
-		RECT r = scale(CAT_X[i % 6] - CAT_W / 2, CAT_Y[i / 6], CAT_W, CAT_H);
+		RECT r = scale(m_lay.cat_x[i % 6] - m_lay.cat_w / 2, m_lay.cat_y[i / 6],
+		               m_lay.cat_w, m_lay.cat_h);
 		round_box(dc, r, ((pressed >> int(CAT_B[i])) & 1) ? KEY_DOWN : KEY_FACE,
 		          KEY_EDGE, int(3 * m_scale));
 	}
-	for (const place &p : ROUND) {
-		const POINT c = at(p.x, p.y);
-		disc(dc, c.x, c.y, int(p.w / 2 * m_scale),
+	for (int i = 0; i < 2; i++) {
+		const place &p = ROUND[i];
+		const double px = m_lay.round_[i][0], py = m_lay.round_[i][1];
+		const POINT c = at(px, py);
+		disc(dc, c.x, c.y, int(m_lay.round_[i][2] / 2 * m_scale),
 		     ((pressed >> int(p.b)) & 1) ? KEY_DOWN : KEY_FACE, KEY_EDGE,
 		     std::max(1, int(m_scale)));
-		text_in(dc, scale(p.x - 40, p.y - 26, 80, 12), p.label, PANEL_INK,
+		text_in(dc, scale(px - 40, py - 26, 80, 12), p.label, PANEL_INK,
 		        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 	}
 

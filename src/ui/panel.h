@@ -18,6 +18,7 @@
 #pragma once
 
 #include "bridge.h"
+#include "layout.h"
 #include "snapshot.h"
 
 #include <string>
@@ -81,6 +82,11 @@ public:
 
 	// 論理座標の方眼を重ねる。絵の位置を直すときの物差し（doc/panel-editing.md）
 	void set_grid(bool on) { m_grid = on; }
+
+	// 配置。**作り直さずに文字ファイルで直せる**（doc/panel-editing.md）。
+	// 読み直したら resize() をやり直すこと
+	layout       &lay()       { return m_lay; }
+	const layout &lay() const { return m_lay; }
 
 	// 実際の窓の座標から、触れる場所を探す
 	const spot *hit(int x, int y) const;
@@ -159,7 +165,8 @@ private:
 	HFONT m_font_label = nullptr, m_font_small = nullptr;
 	// 目盛りの番号用。バー 1 本ぶんの幅に 2 桁を収める
 	HFONT m_font_tiny  = nullptr;
-	bool  m_grid = false;
+	bool   m_grid = false;
+	layout m_lay;
 };
 
 } // namespace ui

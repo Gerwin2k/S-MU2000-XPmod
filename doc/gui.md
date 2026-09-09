@@ -10,10 +10,12 @@ build/gui.exe <rom ディレクトリ> [--midi 番号] [--midiout 番号]
 build/gui.exe --list                      MIDI の入口と出口の一覧
 build/gui.exe <rom> --boot --shot 絵.png   窓を出さずに絵だけ書き出す
 build/gui.exe --shot 絵.png --grid        ROM 無しで絵だけ。方眼を重ねる
+build/gui.exe --dump-layout panel.txt    いまの配置を書き出す
+build/gui.exe <rom> --layout panel.txt   その配置で動かす（F5 で読み直し）
 ```
 
-パネルの絵を自分で直すなら [doc/panel-editing.md](panel-editing.md)。
-位置はぜんぶ `src/ui/panel.cpp` の先頭の表にある。
+**パネルの絵は作り直さずに直せる**。位置も色も `panel.txt` という文字
+ファイルに追い出してある。手順は [doc/panel-editing.md](panel-editing.md)。
 
 ## MIDI の口を選ぶ
 
