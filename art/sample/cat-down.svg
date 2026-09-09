@@ -1,0 +1,5 @@
+<svg width="100" height="40" viewBox="0 0 100 40">
+  <path style="fill:#9a8b52;stroke:#5e5430;stroke-width:3"
+        d="M 8,4 L 92,4 C 96,4 98,6 98,10 L 98,32 C 98,36 96,38 92,38
+           L 8,38 C 4,38 2,36 2,32 L 2,10 C 2,6 4,4 8,4 Z" />
+</svg>

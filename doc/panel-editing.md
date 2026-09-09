@@ -165,6 +165,31 @@ volume 141 154 30 "knob.svg"
 </svg>
 ```
 
+### ボタンと表示灯を SVG にする
+
+ようす（消えている／点いている／押している）ごとに 1 枚ずつ渡す。
+
+```
+mode.art  "btn.svg" "btn-on.svg" "btn-down.svg"   # 右上の丸ボタン（LED 入り）
+nav.art   "key.svg" "key-down.svg"                # 右端の四角いボタン
+cat.art   "cat.svg" "cat-down.svg"                # 音色カテゴリ
+round.art "rnd.svg" "rnd-down.svg"                # SELECT と AUDITION
+plg.art   "plg.svg" "plg-on.svg"                  # MU / PLG-1..3 の表示灯
+```
+
+* 1 枚目 … ふつう（消えている）
+* 2 枚目 … 点いている／押している
+* 3 枚目 … 押している（省くと 2 枚目で代える）
+
+絵は部品の四角にそのまま当てはまる。**LED とボタンは 1 枚に描いてよい**
+（実機も兼用なので、そのほうが描きやすい）。
+
+`art/sample/` に見本が入っている。
+
+```bash
+build/gui.exe <rom ディレクトリ> --layout art/sample/panel.txt
+```
+
 ### MAME の絵を借りる
 
 MAME の `mu2000.lay` には、DIN コネクタ・ジャック・つまみ・カードの

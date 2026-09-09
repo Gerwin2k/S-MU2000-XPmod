@@ -350,6 +350,25 @@ bool layout::load(const std::string &path, std::string &err)
 		else if (key == "cat.x")  { if (need(7)) for (int i = 0; i < 6; i++) cat_x[i] = num(t[1 + i]); }
 		else if (key == "cat.y")  { if (need(4)) for (int i = 0; i < 3; i++) cat_y[i] = num(t[1 + i]); }
 		else if (key == "cat.size") { if (need(3)) { cat_w = num(t[1]); cat_h = num(t[2]); } }
+		else if (key == "mode.art" || key == "nav.art" || key == "cat.art" ||
+		         key == "round.art" || key == "plg.art") {
+			art_set *a = (key == "mode.art")  ? &mode_art :
+			             (key == "nav.art")   ? &nav_art :
+			             (key == "cat.art")   ? &cat_art :
+			             (key == "round.art") ? &round_art : &plg_art;
+			*a = art_set();
+			for (size_t i = 1; i < t.size() && i <= 3; i++) {
+				if (t[i].empty())
+					continue;
+				auto pic = std::make_shared<svg_art>();
+				if (!pic->load_file(beside(path, t[i])))
+					bad("ボタンの絵を開けない（または読めない形）");
+				else {
+					a->pic[i - 1] = pic;
+					a->path[i - 1] = t[i];
+				}
+			}
+		}
 		else if (key == "dial" || key == "volume") {
 			double *v = (key == "dial") ? dial : volume;
 			if (!need(4)) continue;
@@ -460,6 +479,23 @@ bool layout::save(const std::string &path) const
 	             volume_art_path.empty() ? "" : " \"",
 	             volume_art_path.c_str(),
 	             volume_art_path.empty() ? "" : "\"");
+	{
+		// ボタンと表示灯の絵。渡されていれば書き出す
+		const struct { const char *key; const art_set *a; } sets[] = {
+			{ "mode.art",  &mode_art },  { "nav.art",   &nav_art },
+			{ "cat.art",   &cat_art },   { "round.art", &round_art },
+			{ "plg.art",   &plg_art },
+		};
+		for (const auto &e : sets) {
+			if (!e.a->any())
+				continue;
+			std::fprintf(f, "%s", e.key);
+			for (int i = 0; i < 3; i++)
+				if (!e.a->path[i].empty())
+					std::fprintf(f, " \"%s\"", e.a->path[i].c_str());
+			std::fprintf(f, "\n");
+		}
+	}
 	std::fprintf(f, "plg  %g %g %g      # MU / PLG-1..3 の表示灯  左端 間隔 y\n",
 	             plg[0], plg[1], plg[2]);
 	std::fprintf(f, "columns.y %g        # 窓の下の札（PART VOL EXP …）の高さ\n\n",

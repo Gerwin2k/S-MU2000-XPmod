@@ -757,8 +757,13 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 		for (int i = 0; i < 4; i++) {
 			const double px = m_lay.plg[0] + i * m_lay.plg[1];
 			const POINT c = at(px, m_lay.plg[2]);
-			disc(dc, c.x, c.y, int(5 * m_scale),
-			     BIT(s.leds, 6 + i) ? LED_ON : RGB(64, 62, 52), RGB(110, 106, 92), 1);
+			const bool on = BIT(s.leds, 6 + i) != 0;
+			if (const svg_art *pic = m_lay.plg_art.pick(on, false)) {
+				const int r = int(6 * m_scale);
+				pic->draw(dc, RECT{ c.x - r, c.y - r, c.x + r, c.y + r });
+			} else
+				disc(dc, c.x, c.y, int(5 * m_scale),
+				     on ? LED_ON : RGB(64, 62, 52), RGB(110, 106, 92), 1);
 			text_in(dc, scale(px - 22, m_lay.plg[2] + 7, 44, 12), plg[i], PANEL_INK,
 			        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 		}
@@ -773,10 +778,17 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 		        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 		const POINT c = at(mx, my);
 		const bool down = ((pressed >> int(m.b)) & 1) != 0;
-		disc(dc, c.x, c.y, int(m_lay.mode_r * m_scale),
-		     down ? KEY_DOWN : RGB(198, 188, 152), KEY_EDGE, std::max(1, int(m_scale)));
-		disc(dc, c.x, c.y, int(m_lay.mode_led_r * m_scale),
-		     BIT(s.leds, m.led) ? LED_ON : RGB(74, 72, 60), RGB(110, 106, 92), 1);
+		const bool on = BIT(s.leds, m.led) != 0;
+		// panel.txt で絵を渡されていれば、ようすに合う 1 枚を貼る
+		if (const svg_art *pic = m_lay.mode_art.pick(on, down)) {
+			const int r = int(m_lay.mode_r * m_scale);
+			pic->draw(dc, RECT{ c.x - r, c.y - r, c.x + r, c.y + r });
+		} else {
+			disc(dc, c.x, c.y, int(m_lay.mode_r * m_scale),
+			     down ? KEY_DOWN : RGB(198, 188, 152), KEY_EDGE, std::max(1, int(m_scale)));
+			disc(dc, c.x, c.y, int(m_lay.mode_led_r * m_scale),
+			     on ? LED_ON : RGB(74, 72, 60), RGB(110, 106, 92), 1);
+		}
 	}
 
 	// 四角いボタン。名札は上に重ねる
@@ -789,7 +801,11 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 			if (q.kind == spot_kind::button && q.button == p.b) { sp = &q; break; }
 		if (!sp)
 			continue;
-		draw_button(dc, *sp, ((pressed >> int(p.b)) & 1) != 0);
+		const bool down = ((pressed >> int(p.b)) & 1) != 0;
+		if (const svg_art *pic = m_lay.nav_art.pick(down, down))
+			pic->draw(dc, sp->r);
+		else
+			draw_button(dc, *sp, down);
 		text_in(dc, scale(px, py + 4, pw, 12), p.label, RGB(58, 53, 38),
 		        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 		if (p.sub[0])
@@ -799,16 +815,23 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	for (int i = 0; i < 18; i++) {
 		RECT r = scale(m_lay.cat_x[i % 6] - m_lay.cat_w / 2, m_lay.cat_y[i / 6],
 		               m_lay.cat_w, m_lay.cat_h);
-		round_box(dc, r, ((pressed >> int(CAT_B[i])) & 1) ? KEY_DOWN : KEY_FACE,
-		          KEY_EDGE, int(3 * m_scale));
+		const bool down = ((pressed >> int(CAT_B[i])) & 1) != 0;
+		if (const svg_art *pic = m_lay.cat_art.pick(down, down))
+			pic->draw(dc, r);
+		else
+			round_box(dc, r, down ? KEY_DOWN : KEY_FACE, KEY_EDGE, int(3 * m_scale));
 	}
 	for (int i = 0; i < 2; i++) {
 		const place &p = ROUND[i];
 		const double px = m_lay.round_[i][0], py = m_lay.round_[i][1];
 		const POINT c = at(px, py);
-		disc(dc, c.x, c.y, int(m_lay.round_[i][2] / 2 * m_scale),
-		     ((pressed >> int(p.b)) & 1) ? KEY_DOWN : KEY_FACE, KEY_EDGE,
-		     std::max(1, int(m_scale)));
+		const bool down = ((pressed >> int(p.b)) & 1) != 0;
+		const int rr = int(m_lay.round_[i][2] / 2 * m_scale);
+		if (const svg_art *pic = m_lay.round_art.pick(down, down))
+			pic->draw(dc, RECT{ c.x - rr, c.y - rr, c.x + rr, c.y + rr });
+		else
+			disc(dc, c.x, c.y, rr, down ? KEY_DOWN : KEY_FACE, KEY_EDGE,
+			     std::max(1, int(m_scale)));
 		text_in(dc, scale(px - 40, py - 26, 80, 12), p.label, PANEL_INK,
 		        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 	}

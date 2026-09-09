@@ -1,0 +1,10 @@
+<svg width="100" height="100" viewBox="0 0 100 100">
+  <path style="fill:#c8bfa0;stroke:#6e6650;stroke-width:2"
+        d="M 50,4 C 75.4,4 96,24.6 96,50 C 96,75.4 75.4,96 50,96
+           C 24.6,96 4,75.4 4,50 C 4,24.6 24.6,4 50,4 Z" />
+  <path style="fill:#8a8068;stroke:none"
+        d="M 50,14 C 55,14 59,18 59,23 C 59,28 55,32 50,32
+           C 45,32 41,28 41,23 C 41,18 45,14 50,14 Z" />
+  <path style="fill:none;stroke:#5a5240;stroke-width:3"
+        d="M 50,50 L 50,10" />
+</svg>

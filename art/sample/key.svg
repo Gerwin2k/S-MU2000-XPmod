@@ -1,0 +1,8 @@
+<!-- 右端の四角いボタン -->
+<svg width="100" height="60" viewBox="0 0 100 60">
+  <path style="fill:#dcd2ab;stroke:#7e7660;stroke-width:3"
+        d="M 9,2 L 91,2 C 95,2 98,5 98,9 L 98,51 C 98,55 95,58 91,58
+           L 9,58 C 5,58 2,55 2,51 L 2,9 C 2,5 5,2 9,2 Z" />
+  <path style="fill:#f2ead0;stroke:none"
+        d="M 10,6 L 90,6 C 92,6 93,7 93,9 L 93,20 L 7,20 L 7,9 C 7,7 8,6 10,6 Z" />
+</svg>

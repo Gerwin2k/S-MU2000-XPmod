@@ -64,6 +64,28 @@ struct layout
 	std::string dial_art_path, volume_art_path;
 	std::shared_ptr<svg_art> dial_art, volume_art;
 
+	// ボタンと表示灯の絵。**ようす（消えている／点いている／押している）
+	// ごとに 1 枚**渡す。押しているぶんを省くと、点いているぶんで代える
+	//   mode.art  "btn.svg" "btn-on.svg" "btn-down.svg"
+	//   nav.art   "key.svg" "key-down.svg"
+	//   cat.art   "cat.svg" "cat-down.svg"
+	//   round.art "rnd.svg" "rnd-down.svg"
+	//   plg.art   "plg.svg" "plg-on.svg"
+	struct art_set {
+		std::string path[3];
+		std::shared_ptr<svg_art> pic[3];
+		bool any() const { return pic[0] || pic[1] || pic[2]; }
+		// on は点いている／押している、down は押している
+		const svg_art *pick(bool on, bool down) const
+		{
+			if (down && pic[2]) return pic[2].get();
+			if (down && !pic[2] && pic[1]) return pic[1].get();
+			if (on && pic[1]) return pic[1].get();
+			return pic[0].get();
+		}
+	};
+	art_set mode_art, nav_art, cat_art, round_art, plg_art;
+
 	int    low_x[11], low_w[11];           // LCD 下段の並び（点の単位）
 	double columns_y;                      // 窓の下の札の高さ
 	double plg[3];                         // MU / PLG-1..3 の表示灯 左端 間隔 y

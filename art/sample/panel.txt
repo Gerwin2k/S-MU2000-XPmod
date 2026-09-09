@@ -1,0 +1,93 @@
+# S-MU2000 パネルの配置（絵の見本）
+#
+# ボタン・LED・つまみを SVG にしたもの。使うには
+#   build/gui.exe <rom> --layout art/sample/panel.txt
+#
+# 座標はぜんぶ論理座標（1000 x 400）。窓の大きさに合わせて一律に
+# 伸び縮みするので、窓の大きさは気にしなくてよい。
+# # から行末は覚え書き。書き方は doc/panel-editing.md。
+#
+# 直したら gui.exe の窓で F5 を押すと読み直す。
+
+body_h 385          # 本体の高さ。この下は面を切り替える帯
+lcd    240 42 439 135   # LCD の窓  x y 幅 高さ
+
+# 音色カテゴリ 18 個。6 列 3 行なので列と行だけ
+cat.x  288 354 419 482 545 607 
+cat.y  219 266 310 
+cat.size 52 20    # 押すところの幅と高さ
+
+# 右上の丸ボタン 6 個。中心の座標
+mode.play      752 66
+mode.edit      806 66
+mode.util      752 114
+mode.effect    806 114
+mode.sampling  752 162
+mode.seq       806 162
+mode.r 11 5       # ボタンの半径と、中の LED の半径
+
+# 右端の四角いボタン 9 個。x y 幅 高さ
+nav.mute_solo  840 44 48 34
+nav.part-      896 44 48 34
+nav.part+      952 44 48 34
+nav.enter      840 90 48 32
+nav.select-    896 90 48 32
+nav.select+    952 90 48 32
+nav.exit       840 134 48 34
+nav.value-     896 134 48 34
+nav.value+     952 134 48 34
+
+# 小さい丸ボタン 2 個
+round.select   694 262 22 22
+round.audition 764 260 22 22
+
+dial 893 268 58 "dial.svg"        # 大きなダイヤル  中心 x y と半径
+volume 141 154 30 "knob.svg"      # 音量つまみ  中心 x y と半径
+
+# ボタンと表示灯の絵。ようすごとに 1 枚ずつ
+mode.art  "btn.svg" "btn-on.svg" "btn-down.svg"
+nav.art   "key.svg" "key-down.svg"
+cat.art   "cat.svg" "cat-down.svg"
+round.art "rnd.svg" "rnd-down.svg"
+plg.art   "plg.svg" "plg-on.svg"
+plg  524 37 341      # MU / PLG-1..3 の表示灯  左端 間隔 y
+columns.y 186        # 窓の下の札（PART VOL EXP …）の高さ
+
+# LCD 下段の並び。単位は上段の点 1 つぶん（doc/lcd-segments.md）。
+# 並びは 01 / A01 / 楽器 / VOL / EXP / PAN / REV / CHO / VAR / KEY / モード
+low.x 0 12 30 48 55 61 70 78 86 93 0 
+low.w 10 15 15 2 2 8 7 7 7 8 3 
+
+# ---- 飾り。ボタンでも LCD でもない、ただ描くだけのもの。
+# 1 つでも書くと、ここに書いたものだけになる。上から順に描く。
+#
+#   text x y 幅 高さ 書体 揃え 色 "文字"
+#     書体 small label
+#     揃え left center right leftmid centermid leftwrap centerwrap
+#   disc 中心x 中心y 半径 面の色 ふちの色 線の太さ
+#   box  x y 幅 高さ 角の丸み 面の色 ふちの色
+#   art  x y 幅 高さ "絵.svg"   SVG をそこに嵌める
+#
+# 色は ink face key keyedge keydown jack jackedge socket slot
+# slotedge slotink black white か、#rrggbb で直に。
+# 文字の中の \n で改行（揃えを leftwrap か centerwrap に）。
+
+text 10 6 170 26 label leftmid ink "YAMAHA"
+text 227 6 320 26 label leftmid ink "MU2000    TONE GENERATOR"
+text 744 8 60 20 small leftmid ink "USB"
+disc 32 74 19 jack jackedge 2
+disc 32 149 19 jack jackedge 2
+text 56 106 130 14 small left ink "1 ....  A/D INPUT"
+text 56 182 130 14 small left ink "2 ...."
+disc 141 78 30 key keyedge 1
+box 8 248 68 36 3 key keyedge
+text 4 288 96 24 small leftwrap ink "STANDBY / ON"
+disc 130 266 34 socket jackedge 2
+text 96 304 90 14 small center ink "MIDI IN A"
+disc 228 269 14 jack jackedge 1
+text 198 304 60 14 small center ink "PHONES"
+box 57 336 201 21 2 slot slotedge
+text 63 338 130 17 small leftmid slotink "3.3V CARD"
+text 686 44 46 84 small centerwrap ink "GM2\nXG\nPLG"
+text 686 132 50 48 small leftwrap ink "XG\nTG300B\nPERFORM"
+text 896 28 104 12 small center ink "...... ALL ......"
