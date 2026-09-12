@@ -51,7 +51,7 @@ public:
 	// device は名前の一部（空なら Windows の既定）。**既定は勝手に変わる**ので、
 	// 聞いている口が決まっているなら指定したほうがよい
 	bool start(int latency_ms, fill_fn fill, std::string &err, bool exclusive = false,
-	           const std::string &device = std::string());
+	           const std::string &device = std::string(), bool raw = false);
 
 	// 実際に開いた口の名前
 	std::string device_name() const { return m_dev_name; }
@@ -77,6 +77,8 @@ public:
 	u32 device_channels() const { return m_dev_channels.load(); }
 	bool converting() const     { return m_converting.load(); }
 	bool exclusive() const      { return m_exclusive.load(); }
+	// エンジンの信号処理を飛ばせたか（共有モードのみ）
+	bool raw() const            { return m_raw.load(); }
 	double period_ms() const    { return m_period_ms.load(); }
 	double buffer_ms() const;
 
@@ -133,6 +135,8 @@ private:
 	std::atomic<u64>  m_inflight_sum{0}, m_inflight_n{0}, m_inflight_worst{0};
 	std::string       m_cap_path;
 	std::string       m_dev_name, m_want_dev;
+	bool              m_want_raw = false;
+	std::atomic<bool> m_raw{false};
 	s64 m_qpc_freq = 1;
 };
 

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 namespace ui {
@@ -121,8 +122,9 @@ std::vector<std::string> audio_out::list()
 
 
 bool audio_out::start(int latency_ms, fill_fn fill, std::string &err, bool exclusive,
-                      const std::string &device)
+                      const std::string &device, bool raw)
 {
+	m_want_raw = raw;
 	if (m_thread.joinable())
 		return true;
 
@@ -235,6 +237,8 @@ std::string audio_out::format_line() const
 	              : (m_dev_float.load() ? "float" : "16bit"),
 	              m_period_ms.load(),
 	              m_converting.load() ? "自前 sinc" : "無し（44100 のまま）");
+	if (m_raw.load())
+		std::strncat(buf, " / RAW", sizeof(buf) - std::strlen(buf) - 1);
 	return buf;
 }
 
@@ -278,7 +282,7 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 	bool dev_float = false, exclusive = false, autoconv = false;
 	devfmt fmt = devfmt::f32;
 	u32  dev_ch = 2, dev_rate = AUDIO_RATE;
-	UINT32 target = 0;
+	UINT32 target = 0, period_frames = 0;
 	const UINT32 CHUNK = 480;
 
 	auto fail = [this](const char *what, HRESULT hr) {
@@ -410,6 +414,21 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 
 		// ---- 共有モード
 		if (!exclusive) {
+			// RAW を頼む。エンジンの信号処理（APO）を飛ばす分だけ短くなる
+			// ことがある。断られても構わない
+			if (m_want_raw) {
+				IAudioClient2 *a2 = nullptr;
+				if (SUCCEEDED(client->QueryInterface(__uuidof(IAudioClient2),
+				                                     (void **)&a2))) {
+					AudioClientProperties props{};
+					props.cbSize    = sizeof(props);
+					props.bIsOffload = FALSE;
+					props.eCategory = AudioCategory_Media;
+					props.Options   = AUDCLNT_STREAMOPTIONS_RAW;
+					m_raw.store(SUCCEEDED(a2->SetClientProperties(&props)));
+					a2->Release();
+				}
+			}
 			WAVEFORMATEX fallback{};
 			const bool usable = is_float(mix) || is_pcm16(mix);
 			if (!usable) {
@@ -440,7 +459,19 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 			hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags,
 			                        REFERENCE_TIME(buf_ms * 10000.0), 0, use, nullptr);
 			if (FAILED(hr)) { fail("音声の開始準備", hr); goto done; }
-			target = UINT32(want_ms * dev_rate / 1000.0);
+
+			// **目標は周期の倍数にする。** エンジンは周期ごとにまとめて
+			// 読んでいくので、半端な目標にすると書ける回と書けない回が
+			// 交互に来て溜めが振動する（15ms で平均 23 / 最悪 46ms になった）
+			{
+				const double per_ms = def_period / 10000.0;
+				const u32 per_frames = u32(per_ms * dev_rate / 1000.0 + 0.5);
+				u32 n = u32(want_ms / per_ms + 0.5);
+				if (n < 1)
+					n = 1;
+				target = per_frames * n;
+				period_frames = per_frames;
+			}
 		}
 
 		m_exclusive.store(exclusive);
@@ -634,7 +665,11 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 			// （表と裏で 表裏の二枚 なので、裏を鳴らしている間に書く）
 			// 走り出しの数回は数えない（まだ溜まっていないのは当たり前）
 			if (m_produced.load() > u64(buf_frames) * 2) {
-				const u64 slack = exclusive ? buf_frames : padding;
+				// 締め切りまでの余裕。共有モードのエンジンは周期ごとに
+				// 読むので、**残量に周期 1 つを足したもの**が本当の締め切り。
+				// 独り占めは表裏の二枚なので器ひとつぶん
+				const u64 slack = exclusive ? buf_frames
+				                            : (u64(padding) + period_frames);
 				if (slack < m_slack_min.load())
 					m_slack_min.store(slack);
 				if (double(took) / double(m_qpc_freq) > double(slack) / double(dev_rate))

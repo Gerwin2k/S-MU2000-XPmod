@@ -141,14 +141,14 @@ struct generator {
 // 片方にしか入らないのは困るので、こちらもそちらを使う。
 
 int run_wasapi(generator &gen, double seconds, int latency_ms, bool exclusive,
-               const char *dump_dev, const char *audio_dev)
+               const char *dump_dev, const char *audio_dev, bool raw)
 {
 	ui::audio_out out;
 	std::string err;
 	if (dump_dev)
 		out.set_capture(dump_dev);
 	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err, exclusive,
-	               audio_dev ? audio_dev : "")) {
+	               audio_dev ? audio_dev : "", raw)) {
 		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
 	}
@@ -297,6 +297,7 @@ int main(int argc, char **argv)
 	bool exclusive = false;
 	const char *dump_dev = nullptr;   // デバイスへ渡したものをそのまま書き出す
 	const char *audio_dev = nullptr;  // 音声の出口の名前（一部でよい）
+	bool raw = false;                 // エンジンの信号処理を飛ばす
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
 	bool nomidi = false, use_waveout = false, single = false;
 	const char *wav = nullptr;
@@ -319,6 +320,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--dump-dev") && i + 1 < argc) dump_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
+		else if (!std::strcmp(argv[i], "--raw")) raw = true;
 		else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) wav = argv[++i];
 		else if (!std::strcmp(argv[i], "--waveout")) use_waveout = true;
@@ -385,7 +387,7 @@ int main(int argc, char **argv)
 
 	const int rc = use_waveout ? run_waveout(gen, seconds, frames, buffers)
 	                           : run_wasapi(gen, seconds, latency_ms, exclusive, dump_dev,
-	                                        audio_dev);
+	                                        audio_dev, raw);
 
 	if (wav && !rec.empty())
 		write_wav(wav, rec);
