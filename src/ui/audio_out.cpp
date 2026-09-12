@@ -224,11 +224,13 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 
 		// ---- 独り占めモード。Windows の混ぜ合わせを通さないので一番短い
 		if (want_exclusive) {
-			// 44100 がそのまま通れば変換も要らなくなる。上から順に試す
+			// **デバイスが言っている周波数を先に試す。** そこがデバイスの
+			// 時計なので、違う周波数を通すと（受け付けられても）速さが
+			// 合わずに音が崩れる。形式は共有モードで実績のある float を先に。
+			// 44100 がそのまま通れば変換が要らなくなるので、最後に試す
 			const struct { u32 rate; bool flt; int bits; } cands[] = {
-				{ AUDIO_RATE, false, 16 }, { AUDIO_RATE, true, 32 },
-				{ AUDIO_RATE, false, 32 },
-				{ mix->nSamplesPerSec, false, 16 }, { mix->nSamplesPerSec, true, 32 },
+				{ mix->nSamplesPerSec, true, 32 }, { mix->nSamplesPerSec, false, 16 },
+				{ AUDIO_RATE, true, 32 },          { AUDIO_RATE, false, 16 },
 			};
 			for (const auto &c : cands) {
 				WAVEFORMATEXTENSIBLE want = make_format(c.rate, c.flt, c.bits);
@@ -412,8 +414,11 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 				break;
 			}
 
+			// **独り占めでは padding を見ない。** 器は表裏の二枚で回っていて、
+			// 合図が来たら裏を**まるごと**書くのが作法。書き残すと、そこに
+			// 前の音が残って周期ごとに鳴る（切り刻まれたような音になる）
 			UINT32 padding = 0;
-			if (FAILED(client->GetCurrentPadding(&padding)))
+			if (!exclusive && FAILED(client->GetCurrentPadding(&padding)))
 				break;
 
 			// 起きたときに溜まっていた量。これが待ち時間の本体
@@ -422,12 +427,11 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 			if (padding > m_queue_worst.load())
 				m_queue_worst.store(padding);
 
-			UINT32 want = buf_frames - padding;
-			// 溜めは目標まで。満杯にすると、その分そのまま待ち時間になる
+			UINT32 want = buf_frames;
 			if (!exclusive) {
-				want = padding >= target ? 0 : std::min(want, target - padding);
-				if (!want)
-					continue;
+				// 溜めは目標まで。満杯にすると、その分そのまま待ち時間になる
+				want = padding >= target ? 0 : std::min(buf_frames - padding,
+				                                        target - padding);
 			}
 			if (!want)
 				continue;
