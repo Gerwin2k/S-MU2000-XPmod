@@ -34,6 +34,7 @@ int main(int argc, char **argv)
 	if (!mu.load_wave(dir + "/dump")) { std::fprintf(stderr, "%s\n", mu.error().c_str()); return 1; }
 	mu.load_sintab(dir + "/standin/sin-table.bin");
 	mu.set_threaded(true);
+	mu.set_profile(true);
 	mu.reset();
 
 	// 起動を待つ（ここは測らない）
@@ -82,5 +83,15 @@ int main(int argc, char **argv)
 	std::printf("  実時間に対する余裕: 平均 %.0f%%  最悪 %.0f%%\n",
 	            100.0 * (sum / ms.size()) / span, 100.0 * ms.back() / span);
 	std::printf("  ブロックの長さを超えた回数: %d / %zu\n", over, ms.size());
+	if (mu.m_t_n) {
+		const double all = double(mu.m_t_cpu + mu.m_t_swpm);
+		std::printf("  内訳: CPU %.1f%%  SWP30（マスタ、スレーブは別糸で並走）%.1f%%\n",
+		            100.0 * mu.m_t_cpu / all, 100.0 * mu.m_t_swpm / all);
+		std::printf("        1 サンプルあたり CPU %.0f ns / SWP30 %.0f ns"
+		            "（実行ループ %.1f 周）\n",
+		            1e9 * mu.m_t_cpu / f.QuadPart / mu.m_t_n,
+		            1e9 * mu.m_t_swpm / f.QuadPart / mu.m_t_n,
+		            double(mu.m_loops) / mu.m_t_n);
+	}
 	return 0;
 }

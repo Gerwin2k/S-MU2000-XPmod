@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include <immintrin.h>
+#include <windows.h>
 
 
 namespace {
@@ -688,7 +689,17 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	const u64 cycles = m_cycle_debt / 44100;
 	m_cycle_debt -= cycles * 44100;
 
+	// 内訳を測る（set_profile(true) のときだけ）
+	LARGE_INTEGER pt0, pt1, pt2;
+	if (m_profile)
+		QueryPerformanceCounter(&pt0);
+
 	run_cycles(cycles);
+
+	if (m_profile) {
+		QueryPerformanceCounter(&pt1);
+		m_t_cpu += u64(pt1.QuadPart - pt0.QuadPart);
+	}
 
 	// マスタとスレーブを 1 サンプルずつ進める。
 	// 別スレッドが空いていればスレーブをそちらに投げ、同時に走らせる
@@ -705,6 +716,12 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	} else {
 		m_swpm.run_sample(lm, rm);
 		m_swps.run_sample(ls, rs);
+	}
+
+	if (m_profile) {
+		QueryPerformanceCounter(&pt2);
+		m_t_swpm += u64(pt2.QuadPart - pt1.QuadPart);
+		m_t_n++;
 	}
 
 	// 2 個の SWP30 は MELO/MELI のシリアルで相互に結ばれている。

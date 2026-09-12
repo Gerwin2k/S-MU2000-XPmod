@@ -206,6 +206,7 @@ private:
 	u64 m_cycle_debt = 0;
 	// 命令の途中で止まれず走りすぎた分。次の呼び出しから引く
 	u64 m_overrun = 0;
+	bool m_profile = false;
 
 	// スレーブ用のスレッド。合図は atomic の回し合いで、錠は使わない。
 	// 44100 回/秒の受け渡しなので、待つのは眠らずに回して待つ
@@ -218,8 +219,11 @@ private:
 public:
 	// 速さの手掛かり。1 サンプルあたり実行ループを何周したか
 	u64 m_loops = 0, m_timer_fires = 0, m_event_fires = 0;
-	// 区間ごとの所要時間（QueryPerformanceCounter の刻み）
-	u64 m_t_cpu = 0, m_t_swpm = 0, m_t_swps = 0;
+	// 区間ごとの所要時間（QueryPerformanceCounter の刻み）。
+	// **set_profile(true) のときだけ測る**（1 サンプルにつき 3 回読むので、
+	// 常に測ると 0.3% ほど食う）
+	u64 m_t_cpu = 0, m_t_swpm = 0, m_t_swps = 0, m_t_n = 0;
+	void set_profile(bool on) { m_profile = on; }
 private:
 
 	// MIDI IN A / B。バイトを 31250bps の直列に崩して RX 線に流す。
