@@ -62,6 +62,7 @@ build/gui.exe    <rom ディレクトリ> [--midi 番号]      実機パネル�
 build/gui.exe    --list                              MIDI の入口と出口の一覧
 build/rec.exe    --list                              音声入力の一覧
 build/rec.exe    <番号> <wav> <秒> [--send <番号> <MIDI>]  実機の音を録る
+build/blocktime.exe <rom> <MIDI> <フレーム数> [秒]  1 ブロックの所要時間を測る
 ```
 
 **Domino など外のシーケンサから鳴らす手順は

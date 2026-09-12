@@ -51,7 +51,7 @@ OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 # vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
 all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
      $(BUILD)/live.exe $(BUILD)/midisend.exe $(BUILD)/panel.exe $(BUILD)/gui.exe \
-     $(BUILD)/statetest.exe $(BUILD)/rec.exe \
+     $(BUILD)/statetest.exe $(BUILD)/rec.exe $(BUILD)/blocktime.exe \
      vst3 $(BUILD)/vst3probe.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
@@ -59,6 +59,12 @@ $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+# 1 ブロックを作るのに何 ms かかるかを測る。音声デバイスは使わない。
+# 待ち時間の下限はこの最悪値で決まる（doc/todo.md 2 番）
+$(BUILD)/blocktime.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/blocktime.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
