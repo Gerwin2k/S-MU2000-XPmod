@@ -62,6 +62,15 @@ int main(int argc, char **argv)
 			mu_dac_from = u32(std::strtoul(argv[++i], nullptr, 0));
 			mu_dac_count = u32(std::strtoul(argv[++i], nullptr, 0));
 		}
+		else if (!std::strcmp(argv[i], "--dump-meg") && i + 1 < argc)
+			meg_path = argv[++i];
+		else if (!std::strcmp(argv[i], "--trace-meg") && i + 5 < argc) {
+			meg_trace    = argv[++i];
+			meg_tr_from  = u32(std::strtoul(argv[++i], nullptr, 0));
+			meg_tr_count = u32(std::strtoul(argv[++i], nullptr, 0));
+			meg_tr_pc0   = u32(std::strtoul(argv[++i], nullptr, 0));
+			meg_tr_pc1   = u32(std::strtoul(argv[++i], nullptr, 0));
+		}
 		else if (!std::strcmp(argv[i], "--single"))
 			single = true;
 		else if (!std::strcmp(argv[i], "-v"))
@@ -94,6 +103,16 @@ int main(int argc, char **argv)
 		mu.swpm().m_dbg_dac = std::fopen(mu_dac_path, "w");
 		mu.swpm().m_dbg_dac_from = mu_dac_from;
 		mu.swpm().m_dbg_dac_count = mu_dac_count;
+		if (const char *c = std::getenv("SWP30_CHAN"))
+			mu.swpm().m_dbg_chan = int(std::strtol(c, nullptr, 0));
+	}
+
+	if (meg_trace) {
+		mu.swpm().m_dbg_meg = std::fopen(meg_trace, "w");
+		mu.swpm().m_dbg_meg_from = meg_tr_from;
+		mu.swpm().m_dbg_meg_count = meg_tr_count;
+		mu.swpm().m_dbg_meg_pc0 = u16(meg_tr_pc0);
+		mu.swpm().m_dbg_meg_pc1 = u16(meg_tr_pc1);
 	}
 
 	mu.set_threaded(!single);
@@ -152,6 +171,13 @@ int main(int argc, char **argv)
 
 	if (tf)
 		std::fclose(tf);
+
+	// MEG の中身。最後の姿（＝最後に設定したエフェクト）を書き出す
+	if (meg_path) {
+		mu.swpm().dump_meg((std::string(meg_path) + ".m").c_str());
+		mu.swps().dump_meg((std::string(meg_path) + ".s").c_str());
+		std::printf("MEG を書き出した: %s.m / %s.s\n", meg_path, meg_path);
+	}
 
 	if (smu2000::g_verbose)
 		std::printf("最大値  AWM2=%d  MEG=%d  DAC=%d\n",

@@ -49,6 +49,7 @@ OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 # vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
 all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
      $(BUILD)/live.exe $(BUILD)/midisend.exe $(BUILD)/panel.exe $(BUILD)/gui.exe \
+     $(BUILD)/statetest.exe $(BUILD)/rec.exe \
      vst3 $(BUILD)/vst3probe.exe
 
 $(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
@@ -87,6 +88,12 @@ $(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(
 $(BUILD)/midisend.exe: $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lavrt
+
+# rec は音声入力を WAV に録る。実機の音（S/PDIF 入力）と突き合わせるため。
+# 録りながら MIDI を実機へ流せるので、同じ譜面の実機とこちらを 1 回で並べられる
+$(BUILD)/rec.exe: $(BUILD)/src/smf.o $(BUILD)/src/rec.o $(BUILD)/src/compat/compat.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -luuid
 
 # live は Windows の MIDI 入力と音声出力を使う
 $(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/live.o

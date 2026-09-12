@@ -36,6 +36,10 @@ public:
 
 	void reset();
 
+	// S-MU2000: MEG の中身（プログラム・定数・番地表・LFO）を書き出す。
+	// 出た文字は tools/meg_dis.py が読んで人の読める形にする
+	void dump_meg(const char *path);
+
 	// S-MU2000: swp30 が乱数を使うのは 2 か所だけ
 	// （LFO のランダム波形と MEG のノイズ）。
 	//
@@ -78,8 +82,14 @@ public:
 	u64 m_dbg_len[0x40] = {};
 	std::vector<std::pair<u64,u64>> m_dbg_notes;   // (積算, 長さ)
 
+	// MEG を 1 命令ずつ追う。pc の範囲とサンプルの範囲を絞って出す
+	std::FILE *m_dbg_meg = nullptr;
+	u32 m_dbg_meg_from = 0, m_dbg_meg_count = 0;
+	u16 m_dbg_meg_pc0 = 0, m_dbg_meg_pc1 = 0x180;
+
 	// MEG の入口・出口の書き出し（移植の突き合わせ用）
 	std::FILE *m_dbg_dac = nullptr;
+	int m_dbg_chan = -1;              // --dump-dac のとき、この声の中身も出す
 	u32 m_dbg_dac_from = 0, m_dbg_dac_count = 0;
 	s32 m_dbg_megin_max = 0, m_dbg_melo_max = 0;
 

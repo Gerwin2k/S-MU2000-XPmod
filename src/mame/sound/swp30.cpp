@@ -1696,9 +1696,29 @@ void swp30_device::awm2_step(std::array<s32, 0x40> &samples_per_chan)
 		if(trigger_release)
 			m_envelope[chan].trigger_release();
 
+		// S-MU2000: 1 声の中身を追う（--dump-dac のとき、決めた声だけ）
 		s32 sample2 = m_filter[chan].step(sample1);
 		s32 sample3 = m_iir1[chan].step(sample2);
 		s32 sample4 = volume_apply(m_envelope[chan].step(m_meg->m_sample_counter) + lfo.get_amplitude(), sample3);
+
+		if(m_dbg_dac && chan == m_dbg_chan &&
+		   m_meg->m_sample_counter >= m_dbg_dac_from &&
+		   m_meg->m_sample_counter < m_dbg_dac_from + m_dbg_dac_count) {
+			const auto &st = m_streaming[chan];
+			const auto &fl = m_filter[chan];
+			fprintf(m_dbg_dac,
+			        "vox %u pos=%d wave=%d filt=%d iir=%d out=%d"
+			        " f1a=%04x l1=%04x f2a=%04x l2=%04x fb=%04x"
+			        " h=%d b=%d l=%d"
+			        " iirA=%d,%d,%d iirB=%d,%d,%d hx=%d,%d hy=%d,%d\n",
+			        m_meg->m_sample_counter, st.m_pos, sample1, sample2, sample3, sample4,
+			        fl.m_filter_1_a, fl.m_level_1, fl.m_filter_2_a, fl.m_level_2, fl.m_filter_b,
+			        fl.m_filter_1_h, fl.m_filter_1_b, fl.m_filter_1_l,
+			        m_iir1[chan].m_a[0][0], m_iir1[chan].m_a[0][1], m_iir1[chan].m_b[0],
+			        m_iir1[chan].m_a[1][0], m_iir1[chan].m_a[1][1], m_iir1[chan].m_b[1],
+			        m_iir1[chan].m_hx[0], m_iir1[chan].m_hx[1],
+			        m_iir1[chan].m_hy[0], m_iir1[chan].m_hy[1]);
+		}
 
 		lfo.step(*this);
 		samples_per_chan[chan] = sample4;
@@ -3358,6 +3378,14 @@ void swp30_device::meg_state::step()
 	}
 	}
 
+	// S-MU2000: 1 命令ずつ追う。p と、この命令が読んだ m/r を出す
+	if(m_swp->m_dbg_meg && m_pc >= m_swp->m_dbg_meg_pc0 && m_pc < m_swp->m_dbg_meg_pc1 &&
+	   m_sample_counter >= m_swp->m_dbg_meg_from &&
+	   m_sample_counter < m_swp->m_dbg_meg_from + m_swp->m_dbg_meg_count)
+		fprintf(m_swp->m_dbg_meg, "%u %03x p=%lld m%02x=%d r%02x=%d t%d=%d\n",
+		        m_sample_counter, m_pc, (long long)m_p,
+		        sm, m_m[sm], sr, m_r[sr], t, m_t[t]);
+
 	m_delay_3 ++;
 	if(m_delay_3 == 3)
 		m_delay_3 = 0;
@@ -3413,10 +3441,63 @@ void swp30_device::adc_step()
 		m_adc[i] = std::clamp<s32>(m_meg->m_m[0x30 + i] >> 4, -0x20000, +0x1ffff);
 }
 
+// S-MU2000: MEG の中身をそのまま書き出す。逆アセンブルは tools/meg_dis.py。
+// エフェクトが今どんなプログラムで動いているかを見るための窓
+void swp30_device::dump_meg(const char *path)
+{
+	std::FILE *f = std::fopen(path, "w");
+	if(!f)
+		return;
+	for(u32 pc = 0; pc != 0x180; pc++)
+		fprintf(f, "prg %03x %016llx %04x\n", pc,
+		        (unsigned long long)m_meg->m_program[pc], u16(m_meg->m_const[pc]));
+	for(u32 i = 0; i != 0x80; i++)
+		fprintf(f, "off %02x %04x\n", i, m_meg->m_offset[i]);
+	for(u32 i = 0; i != 0x18; i++)
+		fprintf(f, "lfo %02x %04x\n", i, m_meg->m_lfo[i]);
+	for(u32 i = 0; i != 8; i++)
+		fprintf(f, "map %x %04x\n", i, m_meg->m_map[i]);
+	// ミキサの結線も。どのパートがどの母線へ行くかが分かる
+	for(u32 i = 0; i != 0x60; i++)
+		if(m_mixer[i].route[0] | m_mixer[i].route[1] | m_mixer[i].route[2])
+			fprintf(f, "mix %02x route %04x %04x %04x vol %04x %04x %04x\n", i,
+			        m_mixer[i].route[0], m_mixer[i].route[1], m_mixer[i].route[2],
+			        m_mixer[i].vol[0], m_mixer[i].vol[1], m_mixer[i].vol[2]);
+	std::fclose(f);
+}
+
 void swp30_device::sample_step()
 {
+	// S-MU2000: MEG の m レジスタ 0x20-0x3f を毎サンプル書き出す（--dump-dac）。
+	// **混ぜる前**なので、ここに出るのは MEG が 384 段回し終わった直後の姿、
+	// つまりエフェクトの出口。次の行の mixer_step が 0x20-0x2f を
+	// ミキサの出力（＝エフェクトへの送り）で上書きしてしまうので、
+	// 出口を見るにはこの位置でなければならない
+	if(m_dbg_dac && m_meg->m_sample_counter >= m_dbg_dac_from &&
+	   m_meg->m_sample_counter < m_dbg_dac_from + m_dbg_dac_count)
+	{
+		fprintf(m_dbg_dac, "%u", m_meg->m_sample_counter);
+		for(int i=0; i != 0x40; i++)
+			fprintf(m_dbg_dac, " m%02x=%d", i, m_meg->m_m[i]);
+		for(int i=0; i != 0x80; i++)
+			fprintf(m_dbg_dac, " r%02x=%d", i, m_meg->m_r[i]);
+		fprintf(m_dbg_dac, "\n");
+	}
+
 	std::array<s32, 0x40> samples_per_chan;
 	awm2_step(samples_per_chan);
+
+	// S-MU2000: 声そのものの出力（--dump-dac のときだけ）。
+	// 暴れているのが声なのかエフェクトなのかを分けるため
+	if(m_dbg_dac && m_meg->m_sample_counter >= m_dbg_dac_from &&
+	   m_meg->m_sample_counter < m_dbg_dac_from + m_dbg_dac_count) {
+		fprintf(m_dbg_dac, "awm %u", m_meg->m_sample_counter);
+		for(int i=0; i != 0x40; i++)
+			if(samples_per_chan[i])
+				fprintf(m_dbg_dac, " c%02x=%d", i, samples_per_chan[i]);
+		fprintf(m_dbg_dac, "\n");
+	}
+
 	if(::smu2000::g_verbose)
 		for(int i=0; i != 0x40; i++)
 			if(std::abs(samples_per_chan[i]) > m_dbg_awm_max) m_dbg_awm_max = std::abs(samples_per_chan[i]);
@@ -3430,18 +3511,60 @@ void swp30_device::sample_step()
 	mixer_step(samples_per_chan);
 	m_meg->lfo_step();
 
-	// S-MU2000: MEG の入口と出口を並べて出す。MAME 側にも同じものを入れてあり、
-	// 音の食い違いが MEG の前か後かを切り分けるのに使う
-	if(m_dbg_dac && m_meg->m_sample_counter >= m_dbg_dac_from &&
-	   m_meg->m_sample_counter < m_dbg_dac_from + m_dbg_dac_count)
-		fprintf(m_dbg_dac, "%u in %d %d %d %d out %d %d %d %d\n",
-		        m_meg->m_sample_counter,
-		        m_meg->m_m[0x20], m_meg->m_m[0x21], m_meg->m_m[0x22], m_meg->m_m[0x23],
-		        m_meg->m_m[0x30], m_meg->m_m[0x31], m_meg->m_m[0x32], m_meg->m_m[0x33]);
-
 	m_meg->m_sample_counter ++;
 }
 
 // S-MU2000: sound_stream_update() は MAME 専用なので削除
 // S-MU2000: DEFINE_DEVICE_TYPE は MAME 専用なので削除
 
+
+// 状態の保存と復元。
+//
+// 入れないもの
+//   m_sintab / m_program_cache / m_wave_cache …… ROM と読み口。変わらない
+//   m_buf ……………………………………………… 1 サンプルの間しか持たない置き場
+//   m_dbg_* ………………………………………… 調べもの用の数え上げ
+void swp30_device::state(state_io &s)
+{
+	s.tag("swp30");
+	m_machine.state_sync(s);
+	s.v(m_rand_seed);
+
+	// リバーブ RAM。残響の続きを合わせるのに要る
+	{
+		u32 n = u32(m_reverb_ram.size());
+		s.v(n);
+		if (!s.writing())
+			m_reverb_ram.resize(n);
+		s.mem(m_reverb_ram.data(), m_reverb_ram.size() * sizeof(u16));
+	}
+
+	s.stdarr(m_streaming);
+	s.stdarr(m_filter);
+	s.stdarr(m_iir1);
+	s.stdarr(m_envelope);
+	s.stdarr(m_lfo);
+	s.stdarr(m_mixer);
+	s.stdarr(m_melo);
+	s.stdarr(m_meli);
+	s.stdarr(m_adc);
+
+	s.tag("meg");
+	{
+		// **meg_state は親デバイスへのポインタを持っている**。まるごと写すと
+		// 読み戻した側が「保存した側の機械」を指してしまい、乱数もリバーブ
+		// RAM も別の機械のものを触りに行く。写したあとに繋ぎ直す
+		swp30_device *keep = m_meg->m_swp;
+		if (s.writing())
+			m_meg->m_swp = nullptr;   // 保存の中には入れない
+		s.v(*m_meg);
+		m_meg->m_swp = keep;
+	}
+	s.v(m_meg_program_changed);
+
+	s.v(m_sample_counter);
+	s.v(m_wave_adr); s.v(m_wave_size); s.v(m_wave_val);
+	s.v(m_revram_adr); s.v(m_revram_data);
+	s.v(m_wave_access); s.v(m_revram_enable);
+	s.v(m_keyon_mask); s.v(m_internal_adr);
+}
