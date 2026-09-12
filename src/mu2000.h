@@ -72,13 +72,29 @@ public:
 	// n サイクルぶん進める。周辺のイベントはこの中で挟む
 	void run_cycles(u64 n);
 
-	// MIDI IN A の受信が有効になったか。firmware が起動を終えた印。
-	// これを待たずに流すと、曲頭のリセットや音色指定が全部捨てられる
-	bool midi_ready() const { return m_cpu->sci(0)->rx_enabled(); }
+	// MIDI の入口。実機の DIN は **A と B の 2 口**で、それぞれ SH7043 の
+	// 内蔵 SCI ch0 / ch1 に繋がっている（docs/hardware.md）。
+	// パートは A が 1-16、B が 17-32。
+	// C と D は USB（M37640 マイコン）側で、そちらは未エミュレート
+	static constexpr int MIDI_PORTS = 2;
 
-	// MIDI IN A に 1 バイト送る。実機と同じく 31250bps の直列で流れる
-	void midi_in(u8 byte) { m_midi_queue.push_back(byte); }
-	bool midi_idle() const { return m_midi_bit < 0 && m_midi_queue.empty(); }
+	// 受信が有効になったか。firmware が起動を終えた印。
+	// これを待たずに流すと、曲頭のリセットや音色指定が全部捨てられる
+	bool midi_ready(int port = 0) const { return m_cpu->sci(port)->rx_enabled(); }
+
+	// 1 バイト送る。実機と同じく 31250bps の直列で流れる
+	void midi_in(u8 byte, int port = 0) { m_midi[port].queue.push_back(byte); }
+	bool midi_idle(int port) const
+	{
+		return m_midi[port].bit < 0 && m_midi[port].queue.empty();
+	}
+	bool midi_idle() const
+	{
+		for (const midi_line &m : m_midi)
+			if (m.bit >= 0 || !m.queue.empty())
+				return false;
+		return true;
+	}
 
 	// スレーブの SWP30 を別スレッドで回すか。
 	// 2 個の SWP30 は 1 サンプルの中では互いに独立している（相手の出力は
@@ -206,12 +222,16 @@ public:
 	u64 m_t_cpu = 0, m_t_swpm = 0, m_t_swps = 0;
 private:
 
-	// MIDI IN A。バイトを 31250bps の直列に崩して RX 線に流す
+	// MIDI IN A / B。バイトを 31250bps の直列に崩して RX 線に流す。
+	// 2 口は別々の SCI なので、状態も別々に持つ
+	struct midi_line {
+		std::deque<u8> queue;
+		int bit  = -1;    // -1 待ち / 0 スタート / 1-8 データ / 9 ストップ
+		u8  cur  = 0;
+		u64 next = 0;
+	};
 	void midi_step(u64 now);
-	std::deque<u8> m_midi_queue;
-	int m_midi_bit = -1;      // -1 待ち / 0 スタート / 1-8 データ / 9 ストップ
-	u8  m_midi_cur = 0;
-	u64 m_midi_next = 0;
+	std::array<midi_line, MIDI_PORTS> m_midi;
 };
 
 #endif // S_MU2000_MU2000_H

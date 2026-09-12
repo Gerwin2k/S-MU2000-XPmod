@@ -18,6 +18,10 @@ namespace smf {
 struct event {
 	double time;              // 秒
 	std::vector<u8> bytes;
+	// どの MIDI の口へ出すか。SMF のメタイベント `FF 21 01 pp`
+	// （ポート指定）をトラックごとに見る。無ければ 0。
+	// MU2000 は口 0 がパート 1-16、口 1 がパート 17-32
+	u8 port = 0;
 };
 
 // format 0/1 に対応。テンポ変化は追う。SMPTE 単位には未対応

@@ -36,7 +36,7 @@ bool load(const std::string &path, std::vector<event> &out, std::string &err)
 	if (div & 0x8000) { err = "SMPTE 単位の MIDI には未対応"; return false; }
 
 	// まずは全トラックを (tick, バイト列) で集める
-	struct raw { u64 tick; std::vector<u8> bytes; bool tempo; u32 usec; };
+	struct raw { u64 tick; std::vector<u8> bytes; bool tempo; u32 usec; u8 port; };
 	std::vector<raw> all;
 
 	size_t pos = 8 + be32(&d[4]);
@@ -49,6 +49,9 @@ bool load(const std::string &path, std::vector<event> &out, std::string &err)
 
 		u64 tick = 0;
 		u8  running = 0;
+		// トラックごとの出し先。`FF 21 01 pp` で決まる。無ければ 0。
+		// 昔の `FF 04`（機器名）でポートを言う流儀もあるが、そちらは見ない
+		u8  port = 0;
 		while (p < end) {
 			u64 delta = 0;                       // 可変長
 			while (p < end) {
@@ -67,7 +70,10 @@ bool load(const std::string &path, std::vector<event> &out, std::string &err)
 				u64 l = 0;
 				while (p < end) { l = (l << 7) | (d[p] & 0x7f); if (!(d[p++] & 0x80)) break; }
 				if (type == 0x51 && l == 3)
-					all.push_back({ tick, {}, true, (u32(d[p]) << 16) | (d[p+1] << 8) | d[p+2] });
+					all.push_back({ tick, {}, true,
+					                (u32(d[p]) << 16) | (d[p+1] << 8) | d[p+2], 0 });
+				if (type == 0x21 && l == 1)
+					port = d[p];
 				p += size_t(l);
 				continue;
 			}
@@ -78,7 +84,7 @@ bool load(const std::string &path, std::vector<event> &out, std::string &err)
 				if (status == 0xf0) b.push_back(0xf0);
 				b.insert(b.end(), d.begin() + p, d.begin() + std::min(p + size_t(l), end));
 				p += size_t(l);
-				all.push_back({ tick, std::move(b), false, 0 });
+				all.push_back({ tick, std::move(b), false, 0, port });
 				continue;
 			}
 
@@ -86,7 +92,7 @@ bool load(const std::string &path, std::vector<event> &out, std::string &err)
 			const int n = ((status & 0xf0) == 0xc0 || (status & 0xf0) == 0xd0) ? 1 : 2;
 			std::vector<u8> b{ status };
 			for (int i = 0; i < n && p < end; i++) b.push_back(d[p++]);
-			all.push_back({ tick, std::move(b), false, 0 });
+			all.push_back({ tick, std::move(b), false, 0, port });
 		}
 	}
 
@@ -100,7 +106,7 @@ bool load(const std::string &path, std::vector<event> &out, std::string &err)
 		sec += double(e.tick - last) * us_per_beat / (div * 1e6);
 		last = e.tick;
 		if (e.tempo) { us_per_beat = e.usec; continue; }
-		out.push_back({ sec, e.bytes });
+		out.push_back({ sec, e.bytes, e.port });
 	}
 	return true;
 }

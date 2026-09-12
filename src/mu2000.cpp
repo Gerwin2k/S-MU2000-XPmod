@@ -618,11 +618,12 @@ void mu2000::run_cycles(u64 n)
 			chunk = ev - now;
 		if (tmr != ~u64(0) && tmr - now < chunk)
 			chunk = tmr - now;
-		if (m_midi_bit >= 0 || !m_midi_queue.empty()) {
-			const u64 left = m_midi_next > now ? m_midi_next - now : 1;
-			if (left < chunk)
-				chunk = left;
-		}
+		for (const midi_line &m : m_midi)
+			if (m.bit >= 0 || !m.queue.empty()) {
+				const u64 left = m.next > now ? m.next - now : 1;
+				if (left < chunk)
+					chunk = left;
+			}
 
 		const int done = m_cpu->run_cycles(int(chunk));
 		if (done <= 0) {
@@ -646,29 +647,36 @@ void mu2000::run_cycles(u64 n)
 // その順番で向きを読むので、位相をまとめて飛ばしてはいけない。
 void mu2000::midi_step(u64 now)
 {
-	if (m_midi_bit < 0) {
-		// 直前のバイトのストップビットぶんは空けてから次を出す
-		if (m_midi_queue.empty() || now < m_midi_next)
-			return;
-		m_midi_cur = m_midi_queue.front();
-		m_midi_queue.pop_front();
-		m_midi_bit  = 0;
-		m_midi_next = now + MIDI_BIT_CYCLES;
-		logerror("midi in %02x @ %llu\n", m_midi_cur, (unsigned long long)now);
-		m_cpu->sci_rx_w<0>(0);          // スタートビット
-		return;
-	}
+	// A と B は別々の SCI に繋がっている。互いに待たせない
+	for (int port = 0; port < MIDI_PORTS; port++) {
+		midi_line &m = m_midi[port];
+		sh_sci_device *sci = m_cpu->sci(port);
 
-	if (now < m_midi_next)
-		return;
+		if (m.bit < 0) {
+			// 直前のバイトのストップビットぶんは空けてから次を出す
+			if (m.queue.empty() || now < m.next)
+				continue;
+			m.cur = m.queue.front();
+			m.queue.pop_front();
+			m.bit  = 0;
+			m.next = now + MIDI_BIT_CYCLES;
+			logerror("midi in %c %02x @ %llu\n", 'A' + port, m.cur,
+			         (unsigned long long)now);
+			sci->do_rx_w(0);            // スタートビット
+			continue;
+		}
 
-	m_midi_bit++;
-	m_midi_next = now + MIDI_BIT_CYCLES;
-	if (m_midi_bit <= 8)
-		m_cpu->sci_rx_w<0>((m_midi_cur >> (m_midi_bit - 1)) & 1);   // 下位ビットから
-	else {
-		m_cpu->sci_rx_w<0>(1);          // ストップビット
-		m_midi_bit = -1;
+		if (now < m.next)
+			continue;
+
+		m.bit++;
+		m.next = now + MIDI_BIT_CYCLES;
+		if (m.bit <= 8)
+			sci->do_rx_w((m.cur >> (m.bit - 1)) & 1);   // 下位ビットから
+		else {
+			sci->do_rx_w(1);            // ストップビット
+			m.bit = -1;
+		}
 	}
 }
 

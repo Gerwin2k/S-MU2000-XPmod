@@ -52,6 +52,9 @@ int main(int argc, char **argv)
 	double boot = -1.0;     // 負なら firmware が受信を有効にするまで待つ
 	const char *mu_dac_path = nullptr;
 	u32 mu_dac_from = 0, mu_dac_count = 0;
+	const char *meg_path = nullptr;    // MEG の中身を書き出す先
+	const char *meg_trace = nullptr;   // MEG を 1 命令ずつ追う
+	u32 meg_tr_from = 0, meg_tr_count = 0, meg_tr_pc0 = 0, meg_tr_pc1 = 0x180;
 	for (int i = 4; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--trace-swp") && i + 1 < argc)
 			swptrace = argv[++i];
@@ -148,12 +151,24 @@ int main(int argc, char **argv)
 	const size_t total = size_t((boot + seconds) * rate);
 	pcm.reserve(total * 2);
 
+	// 出し先は SMF のポート指定（`FF 21`）に従う。口 0 = MIDI IN A、
+	// 口 1 = MIDI IN B。加えて、ファイルの中に `F5 nn`（1=A / 2=B）を
+	// 入れておけばそこから切り替わる（F7 エスケープで埋める）。
+	// 実機の firmware は F5 を見ていないので、**振り分けるのはこちら側の役目**
+	int port = -1;                     // -1 なら SMF の指定に従う
 	size_t next = 0;
 	for (size_t i = pcm.size() / 2; i < total; i++) {
 		const double t = double(i) / rate - boot;
 		while (next < events.size() && events[next].time <= t) {
-			for (u8 b : events[next].bytes)
-				mu.midi_in(b);
+			const std::vector<u8> &ev = events[next].bytes;
+			if (ev.size() == 2 && ev[0] == 0xf5)
+				port = std::clamp(int(ev[1]) - 1, 0, mu2000::MIDI_PORTS - 1);
+			else {
+				const int to = port >= 0 ? port
+				             : std::min<int>(events[next].port, mu2000::MIDI_PORTS - 1);
+				for (u8 b : ev)
+					mu.midi_in(b, to);
+			}
 			next++;
 		}
 

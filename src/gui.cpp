@@ -2,7 +2,8 @@
 //
 // 実機のフロントパネル風の画面で MU2000 を動かす。
 //
-//   gui <rom ディレクトリ> [--midi 番号] [--midiout 番号] [--latency ミリ秒]
+//   gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号]
+//       [--midiout 番号] [--midiout-b 番号] [--latency ミリ秒]
 //   gui --list                             MIDI の入口と出口の一覧
 //   gui <rom ディレクトリ> --shot 絵.png    窓を出さずに絵だけ書き出す（見た目の確認用）
 //
@@ -48,8 +49,10 @@ constexpr u32 RATE = ui::AUDIO_RATE;
 struct engine {
 	mu2000 mu;
 	ui::bridge   &br;
-	ui::midi_in  &midi;
-	ui::midi_out *mout = nullptr;
+	ui::midi_in  &midi;        // MIDI IN A（パート 1-16）
+	ui::midi_in  *midi_b = nullptr;   // MIDI IN B（パート 17-32）
+	ui::midi_out *mout = nullptr;     // MIDI OUT A（A で受けたものを外へ）
+	ui::midi_out *mout_b = nullptr;   // MIDI OUT B（B で受けたものを外へ）
 
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
 	std::string      message = "起動中...";
@@ -111,9 +114,18 @@ struct engine {
 
 		u8 b;
 		while (midi.pop(b)) {
-			mu.midi_in(b);
+			mu.midi_in(b, 0);
 			if (mout) mout->send(b);
 		}
+		// B は実機の 2 つめの DIN（内蔵 SCI ch1）。パート 17-32 に届く。
+		// THRU も口ごとに分ける。A で受けたものは MIDI OUT A、
+		// B で受けたものは MIDI OUT B へ。混ぜると、外に繋いだ音源で
+		// パートの割り振りが崩れる
+		if (midi_b)
+			while (midi_b->pop(b)) {
+				mu.midi_in(b, 1);
+				if (mout_b) mout_b->send(b);
+			}
 
 		const float g = br.gain();
 
@@ -141,11 +153,15 @@ struct window_state {
 
 	std::string layout_path;           // 読んでいる panel.txt。F5 で読み直す
 	ui::player    play_file;
-	ui::midi_in  *midi = nullptr;
-	ui::midi_out *mout = nullptr;
+	ui::midi_in  *midi = nullptr;      // MIDI IN A
+	ui::midi_in  *midi_b = nullptr;    // MIDI IN B
+	ui::midi_out *mout = nullptr;      // MIDI OUT A
+	ui::midi_out *mout_b = nullptr;    // MIDI OUT B
 	int  in_dev  = -1;                 // いま開いている番号。-1 は使っていない
+	int  in_dev_b = -1;
 	int  out_dev = -1;
-	std::string in_name, out_name;
+	int  out_dev_b = -1;
+	std::string in_name, in_name_b, out_name, out_name_b;
 
 
 	// 二重書き用
@@ -189,7 +205,8 @@ std::string settings_path()
 	return dir + "\\gui.ini";
 }
 
-void load_settings(std::string &in_name, std::string &out_name)
+void load_settings(std::string &in_name, std::string &in_name_b,
+                   std::string &out_name, std::string &out_name_b)
 {
 	const std::string path = settings_path();
 	if (path.empty())
@@ -206,8 +223,10 @@ void load_settings(std::string &in_name, std::string &out_name)
 		if (eq == std::string::npos)
 			continue;
 		const std::string key = t.substr(0, eq), val = t.substr(eq + 1);
-		if (key == "midi_in")  in_name  = val;
-		if (key == "midi_out") out_name = val;
+		if (key == "midi_in")   in_name   = val;
+		if (key == "midi_in_b") in_name_b = val;
+		if (key == "midi_out")   out_name   = val;
+		if (key == "midi_out_b") out_name_b = val;
 	}
 	std::fclose(f);
 }
@@ -220,8 +239,10 @@ void save_settings()
 	FILE *f = std::fopen(path.c_str(), "wb");
 	if (!f)
 		return;
-	std::fprintf(f, "midi_in=%s\n",  g_win.in_name.c_str());
-	std::fprintf(f, "midi_out=%s\n", g_win.out_name.c_str());
+	std::fprintf(f, "midi_in=%s\n",   g_win.in_name.c_str());
+	std::fprintf(f, "midi_in_b=%s\n", g_win.in_name_b.c_str());
+	std::fprintf(f, "midi_out=%s\n",   g_win.out_name.c_str());
+	std::fprintf(f, "midi_out_b=%s\n", g_win.out_name_b.c_str());
 	std::fclose(f);
 }
 
@@ -240,7 +261,9 @@ int find_device(const std::vector<std::string> &names, const std::string &want)
 
 enum : UINT {
 	ID_IN_NONE = 900, ID_IN_BASE = 901,
+	ID_INB_NONE = 1400, ID_INB_BASE = 1401,
 	ID_OUT_NONE = 1900, ID_OUT_BASE = 1901,
+	ID_OUTB_NONE = 2400, ID_OUTB_BASE = 2401,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
 };
 
@@ -271,13 +294,21 @@ void show_port_menu(HWND hwnd, POINT screen)
 {
 	HMENU top = CreatePopupMenu();
 	HMENU mi  = CreatePopupMenu();
+	HMENU mib = CreatePopupMenu();
 	HMENU mo  = CreatePopupMenu();
+	HMENU mob = CreatePopupMenu();
 
-	fill_port_menu(mi, ui::midi_in::list(),  g_win.in_dev,  ID_IN_NONE,  ID_IN_BASE);
-	fill_port_menu(mo, ui::midi_out::list(), g_win.out_dev, ID_OUT_NONE, ID_OUT_BASE);
+	const auto ins  = ui::midi_in::list();
+	const auto outs = ui::midi_out::list();
+	fill_port_menu(mi,  ins,  g_win.in_dev,    ID_IN_NONE,   ID_IN_BASE);
+	fill_port_menu(mib, ins,  g_win.in_dev_b,  ID_INB_NONE,  ID_INB_BASE);
+	fill_port_menu(mo,  outs, g_win.out_dev,   ID_OUT_NONE,  ID_OUT_BASE);
+	fill_port_menu(mob, outs, g_win.out_dev_b, ID_OUTB_NONE, ID_OUTB_BASE);
 
-	add_item(top, MF_POPUP, UINT_PTR(mi), "MIDI IN（Domino などから受ける）");
-	add_item(top, MF_POPUP, UINT_PTR(mo), "MIDI OUT（受けたものをそのまま外へ）");
+	add_item(top, MF_POPUP, UINT_PTR(mi),  "MIDI IN A（パート 1-16）");
+	add_item(top, MF_POPUP, UINT_PTR(mib), "MIDI IN B（パート 17-32）");
+	add_item(top, MF_POPUP, UINT_PTR(mo),  "MIDI OUT A（A で受けたものを外へ）");
+	add_item(top, MF_POPUP, UINT_PTR(mob), "MIDI OUT B（B で受けたものを外へ）");
 
 	TrackPopupMenu(top, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
 	               screen.x, screen.y, 0, hwnd, nullptr);
@@ -341,6 +372,21 @@ void choose_in(int dev)
 	save_settings();
 }
 
+void choose_in_b(int dev)
+{
+	if (!g_win.midi_b)
+		return;
+	std::string err;
+	if (!g_win.midi_b->open(dev, err)) {
+		std::fprintf(stderr, "MIDI 入力 B: %s\n", err.c_str());
+		g_win.midi_b->open(-1, err);
+		dev = -1;
+	}
+	g_win.in_dev_b  = g_win.midi_b->is_open() ? dev : -1;
+	g_win.in_name_b = g_win.midi_b->device_name();
+	save_settings();
+}
+
 void choose_out(int dev)
 {
 	if (!g_win.mout)
@@ -353,6 +399,21 @@ void choose_out(int dev)
 	}
 	g_win.out_dev  = g_win.mout->is_open() ? dev : -1;
 	g_win.out_name = g_win.mout->device_name();
+	save_settings();
+}
+
+void choose_out_b(int dev)
+{
+	if (!g_win.mout_b)
+		return;
+	std::string err;
+	if (!g_win.mout_b->open(dev, err)) {
+		std::fprintf(stderr, "MIDI 出力 B: %s\n", err.c_str());
+		g_win.mout_b->open(-1, err);
+		dev = -1;
+	}
+	g_win.out_dev_b  = g_win.mout_b->is_open() ? dev : -1;
+	g_win.out_name_b = g_win.mout_b->device_name();
 	save_settings();
 }
 
@@ -483,8 +544,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		const UINT id = LOWORD(wp);
 		if (id == ID_IN_NONE)            choose_in(-1);
 		else if (id >= ID_IN_BASE  && id < ID_IN_BASE + 256)  choose_in(int(id - ID_IN_BASE));
+		else if (id == ID_INB_NONE)      choose_in_b(-1);
+		else if (id >= ID_INB_BASE && id < ID_INB_BASE + 256) choose_in_b(int(id - ID_INB_BASE));
 		else if (id == ID_OUT_NONE)      choose_out(-1);
 		else if (id >= ID_OUT_BASE && id < ID_OUT_BASE + 256) choose_out(int(id - ID_OUT_BASE));
+		else if (id == ID_OUTB_NONE)     choose_out_b(-1);
+		else if (id >= ID_OUTB_BASE && id < ID_OUTB_BASE + 256) choose_out_b(int(id - ID_OUTB_BASE));
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		InvalidateRect(hwnd, nullptr, FALSE);
@@ -611,6 +676,8 @@ int main(int argc, char **argv)
 
 	std::string dir, shot_path;
 	int midi_dev = -2;                 // -2 未指定（覚えているものを使う）/ -1 使わない
+	int midib_dev = -2;                // MIDI IN B
+	int moutb_dev = -2;                // MIDI OUT B
 	int mout_dev = -2;
 	int latency = 30;
 	int win_w = 1400, win_h = 360;
@@ -637,8 +704,10 @@ int main(int argc, char **argv)
 			return 0;
 		}
 		else if (!std::strcmp(argv[i], "--midi") && i + 1 < argc) midi_dev = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--midi-b") && i + 1 < argc) midib_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout") && i + 1 < argc) mout_dev = std::atoi(argv[++i]);
-		else if (!std::strcmp(argv[i], "--nomidi")) midi_dev = -1;
+		else if (!std::strcmp(argv[i], "--midiout-b") && i + 1 < argc) moutb_dev = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--nomidi")) { midi_dev = -1; midib_dev = -1; }
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
@@ -676,8 +745,8 @@ int main(int argc, char **argv)
 	}
 
 	static ui::bridge br;
-	static ui::midi_in  midi;
-	static ui::midi_out mout;
+	static ui::midi_in  midi, midi_b;
+	static ui::midi_out mout, mout_b;
 
 	// 絵だけ欲しい場合。ROM が無くても中身が空の画面は出せる
 	if (!shot_path.empty() && (dir.empty() || !boot_for_shot)) {
@@ -689,7 +758,8 @@ int main(int argc, char **argv)
 
 	if (dir.empty()) {
 		std::fprintf(stderr,
-			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midiout 番号]"
+			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号]"
+			" [--midiout 番号] [--midiout-b 番号]"
 			" [--latency ミリ秒] [--layout panel.txt] [--play 曲.mid]\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
@@ -698,6 +768,8 @@ int main(int argc, char **argv)
 	}
 
 	static engine eng(br, midi);
+	eng.midi_b = &midi_b;
+	eng.mout_b = &mout_b;
 	eng.mout = &mout;
 	if (!eng.load(dir)) {
 		std::fprintf(stderr, "%s\n", eng.message.c_str());
@@ -767,8 +839,10 @@ int main(int argc, char **argv)
 	g_win.br   = &br;
 	g_win.eng  = &eng;
 	g_win.layout_path = layout_path;
-	g_win.midi = &midi;
-	g_win.mout = &mout;
+	g_win.midi   = &midi;
+	g_win.midi_b = &midi_b;
+	g_win.mout   = &mout;
+	g_win.mout_b = &mout_b;
 	g_win.panel.resize(win_w, win_h);
 	apply_layout(layout_path, false);
 	g_win.panel.resize(win_w, win_h);
@@ -791,17 +865,25 @@ int main(int argc, char **argv)
 		eng.publish();
 
 		// 前に選んだ口を名前で探す。--midi / --midiout があればそちらが勝つ
-		std::string want_in, want_out;
-		load_settings(want_in, want_out);
+		std::string want_in, want_in_b, want_out, want_out_b;
+		load_settings(want_in, want_in_b, want_out, want_out_b);
 		if (midi_dev == -2)
 			midi_dev = find_device(ui::midi_in::list(), want_in);
+		if (midib_dev == -2)
+			midib_dev = find_device(ui::midi_in::list(), want_in_b);
 		if (mout_dev == -2)
 			mout_dev = find_device(ui::midi_out::list(), want_out);
+		if (moutb_dev == -2)
+			moutb_dev = find_device(ui::midi_out::list(), want_out_b);
 
 		choose_in(midi_dev);
+		choose_in_b(midib_dev);
 		choose_out(mout_dev);
-		std::printf("MIDI IN: %s\n",  g_win.in_name.empty()  ? "なし" : g_win.in_name.c_str());
-		std::printf("MIDI OUT: %s\n", g_win.out_name.empty() ? "なし" : g_win.out_name.c_str());
+		choose_out_b(moutb_dev);
+		std::printf("MIDI IN A: %s\n",  g_win.in_name.empty()  ? "なし" : g_win.in_name.c_str());
+		std::printf("MIDI IN B: %s\n",  g_win.in_name_b.empty() ? "なし" : g_win.in_name_b.c_str());
+		std::printf("MIDI OUT A: %s\n", g_win.out_name.empty()   ? "なし" : g_win.out_name.c_str());
+		std::printf("MIDI OUT B: %s\n", g_win.out_name_b.empty() ? "なし" : g_win.out_name_b.c_str());
 
 		std::string err;
 

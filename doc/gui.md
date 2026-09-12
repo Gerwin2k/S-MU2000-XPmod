@@ -5,7 +5,8 @@
 
 ```
 make            gui.exe も一緒に作る
-build/gui.exe <rom ディレクトリ> [--midi 番号] [--midiout 番号]
+build/gui.exe <rom ディレクトリ> [--midi 番号] [--midi-b 番号]
+              [--midiout 番号] [--midiout-b 番号]
               [--latency ミリ秒] [--size 1400x360]
 build/gui.exe --list                      MIDI の入口と出口の一覧
 build/gui.exe <rom> --boot --shot 絵.png   窓を出さずに絵だけ書き出す
@@ -41,14 +42,27 @@ build/gui.exe <rom ディレクトリ> --play 曲.mid
 **動かしたまま画面から選べる**。パネルに描いてある `MIDI IN A` の
 ジャックを左クリックするか、窓のどこかを右クリックすると品書きが出る。
 
+実機の DIN は **A と B の 2 口**（SH7043 内蔵 SCI の ch0 / ch1）。
+どちらも入口と THRU の出口を別々に選べる。
+
 | | 中身 |
 |---|---|
-| MIDI IN | ここから受けて鳴らす。Domino などを繋ぐ口（[doc/domino.md](domino.md)） |
-| MIDI OUT | 受けたものを**そのまま外へ流す**。実機の THRU と同じ。画面のつまみから出たコントロールチェンジや SysEx も一緒に出るので、実機と聴き比べるのに使える |
+| MIDI IN A | ここから受けて**パート 1-16** を鳴らす。Domino などを繋ぐ口（[doc/domino.md](domino.md)） |
+| MIDI IN B | 同じく**パート 17-32**。Domino の MIDI OUT B などを繋ぐ |
+| MIDI OUT A | A で受けたものを**そのまま外へ流す**。実機の THRU と同じ。画面のつまみから出たコントロールチェンジや SysEx も一緒に出る |
+| MIDI OUT B | B で受けたものを外へ。A と混ぜないので、外に繋いだ音源でもパートの割り振りが崩れない |
+
+**実機と聴き比べるとき**は、MIDI OUT A を実機の 1 番目のポート、
+MIDI OUT B を 2 番目に繋ぐ。並べ機から流した同じものが、こちらと実機の
+同じパートに届く。
 
 選んだものは `%LOCALAPPDATA%\S-MU2000\gui.ini` に**名前で**覚える。
-番号で覚えると、USB の機器を挿し直したときに別の機器へ繋がってしまう。
-`--midi` / `--midiout` を付けたときはそちらが勝つ。
+番号で覚えると、USB の機器を挿し直したときに別の機器へ繋がってしまう
+（実際、MU2000 を挿し直すと一覧の並びが変わる）。
+`--midi` / `--midi-b` / `--midiout` / `--midiout-b` を付けたときはそちらが勝つ。
+
+C と D の口は実機では USB 側（M37640 マイコン）にあり、そちらは
+まだエミュレートしていない。届くのは A/B の 32 パートまで。
 
 窓のいちばん下の行に、いま繋がっている口が出ている。
 

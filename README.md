@@ -45,12 +45,15 @@ build/midisend.exe <MIDI ファイル> [--port 番号]      MIDI 出力へ実時
 build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確認
 build/gui.exe    <rom ディレクトリ> [--midi 番号]      実機パネル風の画面で鳴らす
 build/gui.exe    --list                              MIDI の入口と出口の一覧
+build/rec.exe    --list                              音声入力の一覧
+build/rec.exe    <番号> <wav> <秒> [--send <番号> <MIDI>]  実機の音を録る
 ```
 
 **Domino など外のシーケンサから鳴らす手順は
 [doc/domino.md](doc/domino.md)**。要るのは仮想 MIDI ケーブル（loopMIDI）
 ひとつだけ。`gui.exe` は入口と出口を**動かしたまま画面から選べる**ので、
 パネルの `MIDI IN A` のジャックを押すか、窓のどこかを右クリックする。
+入口は **A と B の 2 口**（パート 1-16 と 17-32）で、THRU の出口も口ごとに選べる。
 選んだものは `%LOCALAPPDATA%\S-MU2000\gui.ini` に覚えておく。
 
 画面の中身は [doc/gui.md](doc/gui.md)。3 面ある。
