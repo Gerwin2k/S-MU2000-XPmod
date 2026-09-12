@@ -150,11 +150,11 @@ TODOs:
   aaaaaa 100011  MEG/Data         cccc cccc cccc cccc                      constant index 6*a + 1
   cccccc 100100  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR1 a0
   aaaaaa 100101  MEG/Data         cccc cccc cccc cccc                      constant index 6*a + 2
-  cccccc 100110  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR1 a1
+  cccccc 100110  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR2 b1
   aaaaaa 100111  MEG/Data         cccc cccc cccc cccc                      constant index 6*a + 3
-  cccccc 101000  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR1 b1
+  cccccc 101000  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR2 a1
   aaaaaa 101001  MEG/Data         cccc cccc cccc cccc                      constant index 6*a + 4
-  cccccc 101010  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR1 a0
+  cccccc 101010  AWM2/IIR         vvvv vvvv vvvv vvvv                      IIR2 a0
   aaaaaa 101011  MEG/Data         cccc cccc cccc cccc                      constant index 6*a + 5
 
 
@@ -617,7 +617,34 @@ void swp30_device::streaming_block::dpcm_step(u8 input)
 	m_dpcm_s2 = m_dpcm_s3;
 
 	s32 delta = m_dpcm_delta + dpcm_expand[input];
-	s32 sample = m_dpcm_s3 + (delta << scale);
+
+	// S-MU2000: **圧縮モード 0-2 の積算器は漏れる**（極が 1 ではない）。
+	//
+	// MAME は漏れの無い積分器にしているが、それだと ROM のデータが合わない。
+	// モード 0-2 のサンプルは差分が系統的に正へ偏っていて（トランペットの
+	// 上のキーレンジで 5086 バイトの総和が +3119、ループ 1 周あたり +960）、
+	// 漏れずに積むと 0.2 秒で上限に張り付き、直流の塊になる。
+	// モード 3 のサンプルは**ループ 1 周の総和がぴったり 0** に作られていて、
+	// そちらは漏れの無い積分器で合う。だから漏れるのは 0-2 だけ。
+	//
+	// 割合は実機を S/PDIF で録って決めた。トランペット（GM 57）の
+	// 音 52（モード 2）と音 51（モード 3）を 1 音ずつ鳴らして突き合わせ、
+	// 基音と 2・3 倍音の比が実機に乗るところを探した:
+	//
+	//   漏れ    h1/h2   h1/h3   15 倍音までの食い違い   30Hz 以下
+	//   実機    0.7357  1.3410        —                  0.13%
+	//   無し    0.8782  1.5637      0.041                27.12%
+	//   4/256   0.7466  1.3827      0.006                11.20%
+	//   6/256   0.7295  1.3446      0.002                 5.32%   ← これ
+	//   8/256   0.7071  1.2948      0.005                 3.07%
+	//
+	// 食い違い 0.002 は、正しく鳴っているモード 3 のサンプル（0.003）より
+	// 良い。モード 3 の音は**1 ビットも変わらない**。
+	// 残りの 30Hz 以下 5.3%（実機 0.13%）はまだ説明できていない
+	s32 acc = m_dpcm_s3;
+	if(mode != 3)
+		acc -= s32((s64(acc) * 3) >> 7);
+	s32 sample = acc + (delta << scale);
 
 	if(sample < -0x8000) {
 		sample = -0x8000;
@@ -1871,9 +1898,9 @@ u16 swp30_device::read16(offs_t addr)
 	case 0x23: return meg_const_r<1>(chan << 6);
 	case 0x24: return a0_r<0>(chan << 6);
 	case 0x25: return meg_const_r<2>(chan << 6);
-	case 0x26: return a1_r<1>(chan << 6);
+	case 0x26: return b1_r<1>(chan << 6);
 	case 0x27: return meg_const_r<3>(chan << 6);
-	case 0x28: return b1_r<1>(chan << 6);
+	case 0x28: return a1_r<1>(chan << 6);
 	case 0x29: return meg_const_r<4>(chan << 6);
 	case 0x2a: return a0_r<1>(chan << 6);
 	case 0x2b: return meg_const_r<5>(chan << 6);
@@ -1966,9 +1993,13 @@ void swp30_device::write16(offs_t addr, u16 data)
 	case 0x23: meg_const_w<1>(chan << 6, data); return;
 	case 0x24: a0_w<0>(chan << 6, data); return;
 	case 0x25: meg_const_w<2>(chan << 6, data); return;
-	case 0x26: a1_w<1>(chan << 6, data); return;
+	// **2 段目は b1 が先**。ここを a1 と取り違えると、帰還の係数に
+	// 前向きの係数（この曲では -20591 ≒ -2.5）が入り、フィルタが発散する。
+	// 1 サンプルごとに符号を変えて 2.5 倍ずつ育ち、声が 22kHz の矩形波になる。
+	// 実装のすぐ上にある表（IIR1 filters block）はもともとこの順で書いてある
+	case 0x26: b1_w<1>(chan << 6, data); return;
 	case 0x27: meg_const_w<3>(chan << 6, data); return;
-	case 0x28: b1_w<1>(chan << 6, data); return;
+	case 0x28: a1_w<1>(chan << 6, data); return;
 	case 0x29: meg_const_w<4>(chan << 6, data); return;
 	case 0x2a: a0_w<1>(chan << 6, data); return;
 	case 0x2b: meg_const_w<5>(chan << 6, data); return;
@@ -3183,6 +3214,21 @@ void swp30_device::meg_state::decode_program()
 	}
 }
 
+// S-MU2000: p（27.15）を 24bit のレジスタに詰める。
+//
+// **上下で止める**。MAME はここで 24bit に切り落として折り返していたが、
+// それだと飽和した p にディザ（下位 11bit の雑音）が乗った瞬間に
+// 正の限界 0x3fffffffff を跨ぎ、0x800000 = **最小の負**に化ける。
+// 歪み系のエフェクトは p を正の限界に張り付かせて使うので、
+// 出力が符号ごと裏返り、直流だけが残っていた。
+static inline u32 meg_pack24(s64 p)
+{
+	s64 q = p >> 15;
+	if(q >  0x7fffff) q =  0x7fffff;
+	if(q < -0x800000) q = -0x800000;
+	return u32(s32(q));
+}
+
 void swp30_device::meg_state::step()
 {
 	// S-MU2000: debugger_instruction_hook は削除
@@ -3301,9 +3347,7 @@ void swp30_device::meg_state::step()
 			s64 p = m_p;
 			if(!d.no_noise)
 				p += m_swp->rand() & 0x07e0;
-			v = (p >> 15) & 0xffffff;
-			if(v & 0x00800000)
-				v |= 0xff000000;
+			v = meg_pack24(p);
 			break;
 		}
 		case 7: v = m_m[sm]; break;
@@ -3320,9 +3364,7 @@ void swp30_device::meg_state::step()
 			s64 p = m_p;
 			if(!d.no_noise)
 				p += m_swp->rand() & 0x07e0;
-			v = (p >> 15) & 0xffffff;
-			if(v & 0x00800000)
-				v |= 0xff000000;
+			v = meg_pack24(p);
 		}
 		m_rw_value[m_delay_3] = v;
 	}
@@ -3347,7 +3389,11 @@ void swp30_device::meg_state::step()
 		else
 			m_t[t] = m_const[m_pc];
 	}
-	m_t_value[m_delay_2] = d.index ? (m_p >> 8) & 0x7fff : m_p >> (15+8);
+	// t は 16bit。p を 23bit 落としたものがそのまま入るが、p が飽和して
+	// いると 0x8000 になって符号が裏返る。ここも上下で止める
+	// （index 付きのときは 15bit の切り出しで、別の使い方）
+	m_t_value[m_delay_2] = d.index ? s16((m_p >> 8) & 0x7fff)
+	                               : s16(std::clamp<s64>(m_p >> (15+8), -0x8000, 0x7fff));
 
 	// Memory access
 	switch(d.memop) {
