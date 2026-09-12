@@ -108,6 +108,8 @@ rom ディレクトリには次を置く。
 ## ビルドについて
 
 MSYS2 / MinGW-w64 の g++ を想定している。C++20 が要る。
+`make test` で回帰試験が回る（[doc/testing.md](doc/testing.md)）。ROM が無い
+機械でも、ROM の要らない分だけは走る。
 出来た exe は **MSYS2 の DLL に依存しない**ように静的リンクしてある
 （動的リンクのままだと、素の PowerShell から起動しても何も言わずに終わる）。
 

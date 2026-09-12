@@ -3,12 +3,14 @@
 #   make          verify / boot / render / live を作る
 #                 render は MIDI ファイルを WAV に書き出す
 #                 live   は MIDI 入力を受けてその場で鳴らす
+#   make test     回帰試験（ROM が無ければ verify だけ）
 #   make clean    消す
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
 # C++20 が要る（sh.cpp が std::rotl / std::rotr を使う）。
 
 CXX      ?= g++
+PYTHON   ?= python
 # 音を作るのは重いので最適化を上げる。-O2 より 6% 速い
 CXXFLAGS ?= -std=c++20 -O3 -Wall -Wno-unused-variable -Wno-unused-but-set-variable
 
@@ -161,6 +163,21 @@ MAME_SH7042 ?= ../MU2000/mame-src/src/devices/cpu/sh/sh7042.cpp
 regen:
 	python tools/gen_sh7042_map.py $(MAME_SH7042)
 
+# 回帰試験。直したことで音が変わっていないかを見る。
+#
+# ROM は同梱できないので、ROM が無い機械では verify だけが走る（それが正しい）。
+# ROM の置き場は SMU2000_ROMS で渡せる。既定は roms/ か ../MU2000/roms。
+#   make test                     全部
+#   make test T=piano             1 件だけ
+#   make test-update              指紋を焼き直す（意図して音を変えたとき）
+TEST_EXES := $(BUILD)/verify.exe $(BUILD)/statetest.exe $(BUILD)/render.exe
+
+test: $(TEST_EXES)
+	$(PYTHON) tools/run_tests.py $(if $(T),--only $(T),)
+
+test-update: $(TEST_EXES)
+	$(PYTHON) tools/run_tests.py --update $(if $(T),--only $(T),)
+
 clean:
 	rm -rf $(BUILD)
 
@@ -172,4 +189,4 @@ clean:
 # 別の場所を触りに行っていた）。だから build の下にある .d を全部拾う
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
-.PHONY: all clean regen vst3 install-vst3 probe
+.PHONY: all clean regen vst3 install-vst3 probe test test-update
