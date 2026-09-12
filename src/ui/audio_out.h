@@ -81,6 +81,16 @@ public:
 	// 書いた音が鳴るまでの見込み
 	double output_ms() const { return queue_ms() + device_ms(); }
 
+	// **書いたのに、まだ鳴っていない量。** IAudioClock の再生位置との差なので、
+	// こちらの溜めだけでなく**ドライバが抱えている分も入る**。
+	// 溜めが 20ms なのにこれが 100ms なら、残りはドライバの中にある
+	double inflight_ms() const;
+	double inflight_worst_ms() const;
+
+	// デバイスへ渡したバイト列をそのまま書き出す（切り分け用）。
+	// start() の前に呼ぶ。止めるときに WAV として閉じる
+	void set_capture(const std::string &path) { m_cap_path = path; }
+
 	// 人が読む行
 	std::string format_line() const;
 	std::string latency_line() const;
@@ -110,6 +120,8 @@ private:
 	std::atomic<bool> m_dev_float{false};
 	std::atomic<u32>  m_target_frames{0};
 	std::atomic<u64>  m_queue_sum{0}, m_queue_n{0}, m_queue_worst{0};
+	std::atomic<u64>  m_inflight_sum{0}, m_inflight_n{0}, m_inflight_worst{0};
+	std::string       m_cap_path;
 	s64 m_qpc_freq = 1;
 };
 

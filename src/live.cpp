@@ -140,10 +140,13 @@ struct generator {
 // 二重になっていた。**標本化周波数の変換を自分でやる**ようにした分が
 // 片方にしか入らないのは困るので、こちらもそちらを使う。
 
-int run_wasapi(generator &gen, double seconds, int latency_ms, bool exclusive)
+int run_wasapi(generator &gen, double seconds, int latency_ms, bool exclusive,
+               const char *dump_dev)
 {
 	ui::audio_out out;
 	std::string err;
+	if (dump_dev)
+		out.set_capture(dump_dev);
 	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err, exclusive)) {
 		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
@@ -290,6 +293,7 @@ int main(int argc, char **argv)
 	// これ以上詰めたければ音源をもっと速くするしかない
 	int  latency_ms = 20;   // 溜める目標。実測の最悪 9.2ms + 余裕
 	bool exclusive = false;
+	const char *dump_dev = nullptr;   // デバイスへ渡したものをそのまま書き出す
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
 	bool nomidi = false, use_waveout = false, single = false;
 	const char *wav = nullptr;
@@ -302,6 +306,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--buffers") && i + 1 < argc) buffers = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency_ms = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
+		else if (!std::strcmp(argv[i], "--dump-dev") && i + 1 < argc) dump_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) wav = argv[++i];
 		else if (!std::strcmp(argv[i], "--waveout")) use_waveout = true;
@@ -367,7 +372,7 @@ int main(int argc, char **argv)
 	generator gen(mu, wav ? &rec : nullptr);
 
 	const int rc = use_waveout ? run_waveout(gen, seconds, frames, buffers)
-	                           : run_wasapi(gen, seconds, latency_ms, exclusive);
+	                           : run_wasapi(gen, seconds, latency_ms, exclusive, dump_dev);
 
 	if (wav && !rec.empty())
 		write_wav(wav, rec);

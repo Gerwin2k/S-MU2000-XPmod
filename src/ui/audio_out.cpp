@@ -40,15 +40,18 @@ bool is_pcm16(const WAVEFORMATEX *f)
 	return false;
 }
 
-// 独り占めモードで試す形式を組む。float か 16bit の 2ch
-WAVEFORMATEXTENSIBLE make_format(u32 rate, bool flt, int bits)
+// デバイスへ渡す形。24bit は 32bit の器に左詰めで入れる（RME の本来の形式）
+enum class devfmt { f32, i16, i24in32 };
+
+// 独り占めモードで試す形式を組む
+WAVEFORMATEXTENSIBLE make_format(u32 rate, bool flt, int bits, int container)
 {
 	WAVEFORMATEXTENSIBLE e{};
 	e.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
 	e.Format.nChannels       = 2;
 	e.Format.nSamplesPerSec  = rate;
-	e.Format.wBitsPerSample  = WORD(bits);
-	e.Format.nBlockAlign     = WORD(2 * bits / 8);
+	e.Format.wBitsPerSample  = WORD(container);
+	e.Format.nBlockAlign     = WORD(2 * container / 8);
 	e.Format.nAvgBytesPerSec = rate * e.Format.nBlockAlign;
 	e.Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
 	e.Samples.wValidBitsPerSample = WORD(bits);
@@ -152,6 +155,21 @@ double audio_out::slack_min_ms() const
 	return (v == ~u64(0) || !r) ? 0.0 : 1000.0 * double(v) / double(r);
 }
 
+double audio_out::inflight_ms() const
+{
+	const u64 n = m_inflight_n.load();
+	const u32 r = m_dev_rate.load();
+	if (!n || !r)
+		return 0.0;
+	return 1000.0 * (double(m_inflight_sum.load()) / double(n)) / double(r);
+}
+
+double audio_out::inflight_worst_ms() const
+{
+	const u32 r = m_dev_rate.load();
+	return r ? 1000.0 * double(m_inflight_worst.load()) / double(r) : 0.0;
+}
+
 std::string audio_out::format_line() const
 {
 	char buf[200];
@@ -159,7 +177,8 @@ std::string audio_out::format_line() const
 	              "%s / %u Hz %u ch %s / 周期 %.1f ms / 変換 %s",
 	              m_exclusive.load() ? "独り占め" : "共有",
 	              m_dev_rate.load(), m_dev_channels.load(),
-	              m_dev_float.load() ? "float" : "16bit",
+	              m_dev_bits.load() == 24 ? "24bit(32)"
+	              : (m_dev_float.load() ? "float" : "16bit"),
 	              m_period_ms.load(),
 	              m_converting.load() ? "自前 sinc" : "無し（44100 のまま）");
 	return buf;
@@ -169,10 +188,11 @@ std::string audio_out::latency_line() const
 {
 	char buf[220];
 	std::snprintf(buf, sizeof(buf),
-	              "溜め 目標 %.1f / 実測 平均 %.1f 最悪 %.1f ms、デバイス %.1f ms"
-	              " → 出るまで約 %.1f ms（器は %.1f ms）",
-	              target_ms(), queue_ms(), queue_worst_ms(), device_ms(),
-	              output_ms(), buffer_ms());
+	              "溜め 目標 %.1f / 実測 平均 %.1f 最悪 %.1f ms。"
+	              "**まだ鳴っていない量 平均 %.1f 最悪 %.1f ms**"
+	              "（GetStreamLatency %.1f / 器 %.1f ms）",
+	              target_ms(), queue_ms(), queue_worst_ms(),
+	              inflight_ms(), inflight_worst_ms(), device_ms(), buffer_ms());
 	return buf;
 }
 
@@ -193,10 +213,16 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 	DWORD  mmcss_index = 0;
 	HANDLE mmcss = nullptr;
 
+	IAudioClock *clock = nullptr;
+	UINT64 clock_freq = 0;
+	std::FILE *cap = nullptr;
+	u64 cap_frames = 0;
+
 	resampler rs;
 	std::vector<s16>   stage;
 	std::vector<float> mixbuf;
 	bool dev_float = false, exclusive = false, autoconv = false;
+	devfmt fmt = devfmt::f32;
 	u32  dev_ch = 2, dev_rate = AUDIO_RATE;
 	UINT32 target = 0;
 	const UINT32 CHUNK = 480;
@@ -226,14 +252,22 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 		if (want_exclusive) {
 			// **デバイスが言っている周波数を先に試す。** そこがデバイスの
 			// 時計なので、違う周波数を通すと（受け付けられても）速さが
-			// 合わずに音が崩れる。形式は共有モードで実績のある float を先に。
-			// 44100 がそのまま通れば変換が要らなくなるので、最後に試す
-			const struct { u32 rate; bool flt; int bits; } cands[] = {
-				{ mix->nSamplesPerSec, true, 32 }, { mix->nSamplesPerSec, false, 16 },
-				{ AUDIO_RATE, true, 32 },          { AUDIO_RATE, false, 16 },
+			// 合わずに音が崩れる。
+			//
+			// 形式は **24bit を 32bit の器に入れたものを先に**。RME のような
+			// 業務用の機械の本来の形で、16bit は受け付けても扱いが怪しい
+			// ことがある（切り刻まれたような音になった）。44100 が通れば
+			// 変換も要らなくなるので、それも試す
+			const struct { u32 rate; bool flt; int bits; int container; } cands[] = {
+				{ mix->nSamplesPerSec, false, 24, 32 },
+				{ mix->nSamplesPerSec, true,  32, 32 },
+				{ mix->nSamplesPerSec, false, 16, 16 },
+				{ AUDIO_RATE, false, 24, 32 },
+				{ AUDIO_RATE, true,  32, 32 },
+				{ AUDIO_RATE, false, 16, 16 },
 			};
 			for (const auto &c : cands) {
-				WAVEFORMATEXTENSIBLE want = make_format(c.rate, c.flt, c.bits);
+				WAVEFORMATEXTENSIBLE want = make_format(c.rate, c.flt, c.bits, c.container);
 				if (FAILED(client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
 				                                    &want.Format, nullptr)))
 					continue;
@@ -262,6 +296,8 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 				if (SUCCEEDED(hr)) {
 					exclusive = true;
 					dev_float = c.flt;
+					fmt       = c.flt ? devfmt::f32
+					          : (c.container == 32 ? devfmt::i24in32 : devfmt::i16);
 					dev_ch    = 2;
 					dev_rate  = c.rate;
 					m_period_ms.store(per / 10000.0);
@@ -294,6 +330,7 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 			}
 			const WAVEFORMATEX *use = usable ? mix : &fallback;
 			dev_float = usable && is_float(mix);
+			fmt       = dev_float ? devfmt::f32 : devfmt::i16;
 			dev_ch    = use->nChannels;
 			dev_rate  = use->nSamplesPerSec;
 			m_period_ms.store(def_period / 10000.0);
@@ -317,6 +354,7 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 		m_dev_rate.store(dev_rate);
 		m_dev_channels.store(dev_ch);
 		m_dev_float.store(dev_float);
+		m_dev_bits.store(fmt == devfmt::i24in32 ? 24 : (fmt == devfmt::i16 ? 16 : 32));
 		rs.configure(double(AUDIO_RATE), double(dev_rate));
 		m_converting.store(!rs.direct());
 		stage.resize(size_t(CHUNK + 64) * 2);
@@ -337,6 +375,19 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 		REFERENCE_TIME sl = 0;
 		if (SUCCEEDED(client->GetStreamLatency(&sl)))
 			m_stream_ms.store(sl / 10000.0);
+		// 再生位置。書いた量との差が「まだ鳴っていない量」で、
+		// **ドライバが抱えている分も入る**
+		if (SUCCEEDED(client->GetService(__uuidof(IAudioClock), (void **)&clock)))
+			clock->GetFrequency(&clock_freq);
+	}
+
+	// デバイスへ渡すものをそのまま書き出す（切り分け用）
+	if (!m_cap_path.empty()) {
+		cap = std::fopen(m_cap_path.c_str(), "wb");
+		if (cap) {
+			u8 head[44] = {};
+			std::fwrite(head, 1, 44, cap);   // 後で書き直す
+		}
 	}
 
 	// 独り占めでは毎周期ちょうど器ぶんを書く。共有では target だけ溜める
@@ -373,7 +424,7 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 				}
 				rs.pull(mixbuf.data(), int(n));
 
-				if (dev_float) {
+				if (fmt == devfmt::f32) {
 					float *out = reinterpret_cast<float *>(dst) + size_t(at) * dev_ch;
 					for (UINT32 i = 0; i < n; i++) {
 						out[i * dev_ch + 0] = mixbuf[i * 2 + 0];
@@ -381,6 +432,17 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 							out[i * dev_ch + 1] = mixbuf[i * 2 + 1];
 						for (u32 c = 2; c < dev_ch; c++)
 							out[i * dev_ch + c] = 0.0f;
+					}
+				} else if (fmt == devfmt::i24in32) {
+					// 32bit の器に左詰め。下の 8bit は 0
+					s32 *out = reinterpret_cast<s32 *>(dst) + size_t(at) * dev_ch;
+					for (UINT32 i = 0; i < n; i++) {
+						for (u32 s = 0; s < 2 && s < dev_ch; s++) {
+							const float v = std::clamp(mixbuf[i * 2 + s], -1.0f, 1.0f);
+							out[i * dev_ch + s] = s32(v * 8388607.0f) << 8;
+						}
+						for (u32 c = 2; c < dev_ch; c++)
+							out[i * dev_ch + c] = 0;
 					}
 				} else {
 					s16 *out = reinterpret_cast<s16 *>(dst) + size_t(at) * dev_ch;
@@ -421,6 +483,23 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 			if (!exclusive && FAILED(client->GetCurrentPadding(&padding)))
 				break;
 
+			// 書いたのに、まだ鳴っていない量。ドライバの分も入る
+			if (clock && clock_freq) {
+				UINT64 pos = 0;
+				if (SUCCEEDED(clock->GetPosition(&pos, nullptr))) {
+					const u64 played = u64(double(pos) / double(clock_freq)
+					                       * double(dev_rate));
+					const u64 wrote = m_produced.load();
+					if (wrote > played && m_produced.load() > u64(buf_frames) * 2) {
+						const u64 fly = wrote - played;
+						m_inflight_sum.fetch_add(fly);
+						m_inflight_n.fetch_add(1);
+						if (fly > m_inflight_worst.load())
+							m_inflight_worst.store(fly);
+					}
+				}
+			}
+
 			// 起きたときに溜まっていた量。これが待ち時間の本体
 			m_queue_sum.fetch_add(padding);
 			m_queue_n.fetch_add(1);
@@ -443,6 +522,13 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 			QueryPerformanceCounter(&t0);
 			write_frames(data, want);
 			QueryPerformanceCounter(&t1);
+
+			if (cap) {
+				const size_t bytes = size_t(want) * dev_ch *
+				                     (fmt == devfmt::i16 ? 2 : 4);
+				std::fwrite(data, 1, bytes, cap);
+				cap_frames += want;
+			}
 
 			const u64 took = u64(t1.QuadPart - t0.QuadPart);
 			m_busy_ticks.fetch_add(took);
@@ -469,6 +555,23 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 	}
 
 done:
+	if (cap) {
+		// WAV の頭を後から書く。形式はデバイスに渡したものそのまま
+		const u32 bits = (fmt == devfmt::i16) ? 16 : 32;
+		const u32 bps  = dev_rate * dev_ch * bits / 8;
+		const u32 data_bytes = u32(cap_frames * dev_ch * bits / 8);
+		std::fseek(cap, 0, SEEK_SET);
+		auto w32 = [&](u32 v) { u8 b[4] = { u8(v), u8(v >> 8), u8(v >> 16), u8(v >> 24) };
+		                        std::fwrite(b, 1, 4, cap); };
+		auto w16 = [&](u16 v) { u8 b[2] = { u8(v), u8(v >> 8) }; std::fwrite(b, 1, 2, cap); };
+		std::fwrite("RIFF", 1, 4, cap); w32(36 + data_bytes); std::fwrite("WAVE", 1, 4, cap);
+		std::fwrite("fmt ", 1, 4, cap); w32(16);
+		w16((fmt == devfmt::f32) ? 3 : 1); w16(u16(dev_ch));
+		w32(dev_rate); w32(bps); w16(u16(dev_ch * bits / 8)); w16(u16(bits));
+		std::fwrite("data", 1, 4, cap); w32(data_bytes);
+		std::fclose(cap);
+	}
+	if (clock) clock->Release();
 	if (mmcss)
 		AvRevertMmThreadCharacteristics(mmcss);
 	m_running.store(false);
