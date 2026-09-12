@@ -491,10 +491,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		char status[128] = {};
 		if (g_win.out && g_win.out->produced())
 			std::snprintf(status, sizeof(status),
-			              "CPU %.0f%%  最悪 %.1f ms  枯渇 %llu   IN: %s   OUT: %s"
+			              "CPU %.0f%%  最悪 %.1f ms  待ち %.0f ms  遅れ %llu   IN: %s   OUT: %s"
 			              "   （MIDI IN A のジャックか右クリックで口を選ぶ）",
 			              g_win.out->cpu_percent(), g_win.out->worst_ms(),
-			              (unsigned long long)g_win.out->starved(),
+			              g_win.out->output_ms(),
+			              (unsigned long long)g_win.out->late(),
 			              g_win.in_name.empty()  ? "なし" : g_win.in_name.c_str(),
 			              g_win.out_name.empty() ? "なし" : g_win.out_name.c_str());
 		else
@@ -679,7 +680,8 @@ int main(int argc, char **argv)
 	int midib_dev = -2;                // MIDI IN B
 	int moutb_dev = -2;                // MIDI OUT B
 	int mout_dev = -2;
-	int latency = 30;
+	int latency = 20;        // 溜める目標
+	bool exclusive = false;
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
@@ -709,6 +711,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--midiout-b") && i + 1 < argc) moutb_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--nomidi")) { midi_dev = -1; midib_dev = -1; }
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -760,7 +763,7 @@ int main(int argc, char **argv)
 		std::fprintf(stderr,
 			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号]"
 			" [--midiout 番号] [--midiout-b 番号]"
-			" [--latency ミリ秒] [--layout panel.txt] [--play 曲.mid]\n"
+			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid]\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
@@ -887,7 +890,7 @@ int main(int argc, char **argv)
 
 		std::string err;
 
-		if (!out.start(latency, [](s16 *o, u32 n) { eng.fill(o, n); }, err)) {
+		if (!out.start(latency, [](s16 *o, u32 n) { eng.fill(o, n); }, err, exclusive)) {
 			std::fprintf(stderr, "音声: %s\n", err.c_str());
 			eng.message = "音声デバイスを開けない";
 			eng.state.store(2);
@@ -923,8 +926,9 @@ int main(int argc, char **argv)
 	mout.close();
 
 	if (out.produced())
-		std::printf("CPU %.1f%%、1 回の最悪 %.2f ms、枯渇 %llu 回\n",
+		std::printf("CPU %.1f%%、1 回の最悪 %.2f ms、間に合わなかった %llu 回\n",
 		            out.cpu_percent(), out.worst_ms(),
-		            (unsigned long long)out.starved());
+		            (unsigned long long)out.late());
+		std::printf("%s\n%s\n", out.format_line().c_str(), out.latency_line().c_str());
 	return 0;
 }

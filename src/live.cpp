@@ -126,7 +126,7 @@ struct generator {
 		const double busy  = double(busy_ticks) / freq.QuadPart;
 		std::printf("  %.0f 秒経過  MIDI %llu バイト  CPU 使用率 %.1f%%\n",
 		            audio, (unsigned long long)g_midi.bytes(), 100.0 * busy / audio);
-		std::printf("     枯渇 %llu 回（残量ゼロ）、生成の最悪 %.1f ms（溜めは %.1f ms ぶん）\n",
+		std::printf("     間に合わなかった %llu 回、生成の最悪 %.1f ms（余裕は %.1f ms）\n",
 		            (unsigned long long)starved, 1000.0 * worst_ticks / freq.QuadPart,
 		            1000.0 * cushion_frames / RATE);
 	}
@@ -140,11 +140,11 @@ struct generator {
 // 二重になっていた。**標本化周波数の変換を自分でやる**ようにした分が
 // 片方にしか入らないのは困るので、こちらもそちらを使う。
 
-int run_wasapi(generator &gen, double seconds, int latency_ms)
+int run_wasapi(generator &gen, double seconds, int latency_ms, bool exclusive)
 {
 	ui::audio_out out;
 	std::string err;
-	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err)) {
+	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err, exclusive)) {
 		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
 	}
@@ -158,7 +158,7 @@ int run_wasapi(generator &gen, double seconds, int latency_ms)
 		std::printf("Ctrl+C で終了\n");
 
 	// 取りこぼしの判定に使う「一杯ぶん」。デバイス側の長さを 44100 側に直す
-	gen.cushion_frames = u32(out.buffer_ms() * RATE / 1000.0);
+	gen.cushion_frames = u32(out.target_ms() * RATE / 1000.0);
 
 	u64 shown = 0;
 	while (seconds <= 0.0 || gen.produced < u64(seconds * RATE)) {
@@ -171,12 +171,16 @@ int run_wasapi(generator &gen, double seconds, int latency_ms)
 		}
 		if (gen.produced - shown >= u64(RATE) * 5) {
 			shown = gen.produced;
-			gen.starved = out.starved();
+			gen.starved = out.late();
 			gen.report(gen.cushion_frames);
+			std::printf("     %s\n", out.latency_line().c_str());
 		}
 	}
 
-	gen.starved = out.starved();
+	gen.starved = out.late();
+	std::printf("待ち時間: %s\n", out.latency_line().c_str());
+	std::printf("余裕の最小: %.1f ms、間に合わなかった %llu 回\n",
+	            out.slack_min_ms(), (unsigned long long)out.late());
 	out.stop();
 	return 0;
 }
@@ -284,7 +288,8 @@ int main(int argc, char **argv)
 	// WASAPI の待ち時間。0 を渡すと Windows の最小周期（この環境で 23.5ms）に
 	// なるが、それだと音源の山で 25 秒に 1 回ほど枯渇する。30ms なら 0 回。
 	// これ以上詰めたければ音源をもっと速くするしかない
-	int  latency_ms = 30;
+	int  latency_ms = 20;   // 溜める目標。実測の最悪 9.2ms + 余裕
+	bool exclusive = false;
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
 	bool nomidi = false, use_waveout = false, single = false;
 	const char *wav = nullptr;
@@ -296,6 +301,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) frames = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--buffers") && i + 1 < argc) buffers = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency_ms = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) wav = argv[++i];
 		else if (!std::strcmp(argv[i], "--waveout")) use_waveout = true;
@@ -308,6 +314,7 @@ int main(int argc, char **argv)
 	if (dir.empty()) {
 		std::fprintf(stderr,
 			"使い方: live <rom ディレクトリ> [--midi 番号] [--latency ミリ秒]\n"
+			"        [--exclusive]  デバイスを独り占めして待ち時間を詰める\n"
 			"        live <rom ディレクトリ> --waveout [--frames 数] [--buffers 数]\n"
 			"        live --list        MIDI 入力の一覧\n");
 		return 1;
@@ -360,7 +367,7 @@ int main(int argc, char **argv)
 	generator gen(mu, wav ? &rec : nullptr);
 
 	const int rc = use_waveout ? run_waveout(gen, seconds, frames, buffers)
-	                           : run_wasapi(gen, seconds, latency_ms);
+	                           : run_wasapi(gen, seconds, latency_ms, exclusive);
 
 	if (wav && !rec.empty())
 		write_wav(wav, rec);

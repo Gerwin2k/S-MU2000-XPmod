@@ -16,7 +16,6 @@ namespace ui {
 
 namespace {
 
-// デバイスが言ってきた形式が float か（WAVE_FORMAT_EXTENSIBLE の下も見る）
 bool is_float(const WAVEFORMATEX *f)
 {
 	if (f->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
@@ -41,10 +40,32 @@ bool is_pcm16(const WAVEFORMATEX *f)
 	return false;
 }
 
+// 独り占めモードで試す形式を組む。float か 16bit の 2ch
+WAVEFORMATEXTENSIBLE make_format(u32 rate, bool flt, int bits)
+{
+	WAVEFORMATEXTENSIBLE e{};
+	e.Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+	e.Format.nChannels       = 2;
+	e.Format.nSamplesPerSec  = rate;
+	e.Format.wBitsPerSample  = WORD(bits);
+	e.Format.nBlockAlign     = WORD(2 * bits / 8);
+	e.Format.nAvgBytesPerSec = rate * e.Format.nBlockAlign;
+	e.Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+	e.Samples.wValidBitsPerSample = WORD(bits);
+	e.dwChannelMask          = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+	// KSDATAFORMAT_SUBTYPE_{PCM,IEEE_FLOAT}
+	e.SubFormat.Data1 = flt ? 3 : 1;
+	e.SubFormat.Data2 = 0x0000;
+	e.SubFormat.Data3 = 0x0010;
+	static const BYTE tail[8] = { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 };
+	std::memcpy(e.SubFormat.Data4, tail, 8);
+	return e;
+}
+
 } // namespace
 
 
-bool audio_out::start(int latency_ms, fill_fn fill, std::string &err)
+bool audio_out::start(int latency_ms, fill_fn fill, std::string &err, bool exclusive)
 {
 	if (m_thread.joinable())
 		return true;
@@ -58,8 +79,8 @@ bool audio_out::start(int latency_ms, fill_fn fill, std::string &err)
 	m_err.clear();
 
 	m_start_state.store(0);
-	m_thread = std::thread([this, latency_ms] {
-		run(latency_ms);
+	m_thread = std::thread([this, latency_ms, exclusive] {
+		run(latency_ms, exclusive);
 		m_start_state.store(m_running.load() ? 1 : 2);
 	});
 
@@ -103,19 +124,59 @@ double audio_out::buffer_ms() const
 	return r ? 1000.0 * double(m_buffer_frames.load()) / double(r) : 0.0;
 }
 
+double audio_out::queue_ms() const
+{
+	const u64 n = m_queue_n.load();
+	const u32 r = m_dev_rate.load();
+	if (!n || !r)
+		return 0.0;
+	return 1000.0 * (double(m_queue_sum.load()) / double(n)) / double(r);
+}
+
+double audio_out::queue_worst_ms() const
+{
+	const u32 r = m_dev_rate.load();
+	return r ? 1000.0 * double(m_queue_worst.load()) / double(r) : 0.0;
+}
+
+double audio_out::target_ms() const
+{
+	const u32 r = m_dev_rate.load();
+	return r ? 1000.0 * double(m_target_frames.load()) / double(r) : 0.0;
+}
+
+double audio_out::slack_min_ms() const
+{
+	const u64 v = m_slack_min.load();
+	const u32 r = m_dev_rate.load();
+	return (v == ~u64(0) || !r) ? 0.0 : 1000.0 * double(v) / double(r);
+}
+
 std::string audio_out::format_line() const
 {
-	char buf[160];
+	char buf[200];
 	std::snprintf(buf, sizeof(buf),
-	              "%u Hz %u ch %s / 溜め %.1f ms（%u フレーム）/ 周期 %.1f ms / 変換 %s",
+	              "%s / %u Hz %u ch %s / 周期 %.1f ms / 変換 %s",
+	              m_exclusive.load() ? "独り占め" : "共有",
 	              m_dev_rate.load(), m_dev_channels.load(),
 	              m_dev_float.load() ? "float" : "16bit",
-	              buffer_ms(), m_buffer_frames.load(), m_period_ms.load(),
-	              m_converting.load() ? "自前 sinc" : "無し");
+	              m_period_ms.load(),
+	              m_converting.load() ? "自前 sinc" : "無し（44100 のまま）");
 	return buf;
 }
 
-void audio_out::run(int latency_ms)
+std::string audio_out::latency_line() const
+{
+	char buf[220];
+	std::snprintf(buf, sizeof(buf),
+	              "溜め 目標 %.1f / 実測 平均 %.1f 最悪 %.1f ms、デバイス %.1f ms"
+	              " → 出るまで約 %.1f ms（器は %.1f ms）",
+	              target_ms(), queue_ms(), queue_worst_ms(), device_ms(),
+	              output_ms(), buffer_ms());
+	return buf;
+}
+
+void audio_out::run(int latency_ms, bool want_exclusive)
 {
 	if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
 		m_err = "COM を初期化できない";
@@ -132,17 +193,16 @@ void audio_out::run(int latency_ms)
 	DWORD  mmcss_index = 0;
 	HANDLE mmcss = nullptr;
 
-	// 変換と受け渡しの入れ物。音声スレッドだけが触る
 	resampler rs;
-	std::vector<s16>   stage;     // 音源から受ける 44100Hz 16bit 2ch
-	std::vector<float> mixbuf;    // 変換した後の 2ch float
-	bool dev_float = false;
+	std::vector<s16>   stage;
+	std::vector<float> mixbuf;
+	bool dev_float = false, exclusive = false, autoconv = false;
 	u32  dev_ch = 2, dev_rate = AUDIO_RATE;
-	// 1 回に変換する上限。輪の大きさに収まる範囲で区切る
+	UINT32 target = 0;
 	const UINT32 CHUNK = 480;
 
 	auto fail = [this](const char *what, HRESULT hr) {
-		char buf[128];
+		char buf[140];
 		std::snprintf(buf, sizeof(buf), "%s に失敗 (0x%08lx)", what, (unsigned long)hr);
 		m_err = buf;
 	};
@@ -156,50 +216,105 @@ void audio_out::run(int latency_ms)
 
 	hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void **)&client);
 	if (FAILED(hr)) { fail("音声デバイスの起動", hr); goto done; }
+	if (FAILED(client->GetMixFormat(&mix)) || !mix) { fail("形式の取得", E_FAIL); goto done; }
 
 	{
-		// デバイスが言ってくる形式で開く。
-		//
-		// **44100Hz 16bit を頼んで Windows に変換させてはいけない。**
-		// 既定の品質の変換器を通され、溜めもその分増える。今どきの
-		// デバイスは 48000Hz の float を言ってくるので、そのまま受けて
-		// 44100 から 48000 への変換を自分でやる（ui::resampler）
-		hr = client->GetMixFormat(&mix);
-		if (FAILED(hr) || !mix) { fail("形式の取得", hr); goto done; }
-
-		WAVEFORMATEX fallback{};
-		const bool usable = is_float(mix) || is_pcm16(mix);
-		if (!usable) {
-			// 見たことのない形式。昔どおり 44100/16bit を頼んで
-			// Windows に変換させる（音は出る、という側に倒す）
-			fallback.wFormatTag      = WAVE_FORMAT_PCM;
-			fallback.nChannels       = 2;
-			fallback.nSamplesPerSec  = AUDIO_RATE;
-			fallback.wBitsPerSample  = 16;
-			fallback.nBlockAlign     = 4;
-			fallback.nAvgBytesPerSec = AUDIO_RATE * 4;
-		}
-		const WAVEFORMATEX *use = usable ? mix : &fallback;
-		dev_float = usable && is_float(mix);
-		dev_ch    = use->nChannels;
-		dev_rate  = use->nSamplesPerSec;
-
 		REFERENCE_TIME def_period = 0, min_period = 0;
-		if (SUCCEEDED(client->GetDevicePeriod(&def_period, &min_period)))
+		client->GetDevicePeriod(&def_period, &min_period);
+
+		// ---- 独り占めモード。Windows の混ぜ合わせを通さないので一番短い
+		if (want_exclusive) {
+			// 44100 がそのまま通れば変換も要らなくなる。上から順に試す
+			const struct { u32 rate; bool flt; int bits; } cands[] = {
+				{ AUDIO_RATE, false, 16 }, { AUDIO_RATE, true, 32 },
+				{ AUDIO_RATE, false, 32 },
+				{ mix->nSamplesPerSec, false, 16 }, { mix->nSamplesPerSec, true, 32 },
+			};
+			for (const auto &c : cands) {
+				WAVEFORMATEXTENSIBLE want = make_format(c.rate, c.flt, c.bits);
+				if (FAILED(client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
+				                                    &want.Format, nullptr)))
+					continue;
+				// 周期は頼んだ長さ。デバイスの最小より短くはできない
+				REFERENCE_TIME per = REFERENCE_TIME(latency_ms > 0 ? latency_ms : 10) * 10000;
+				if (per < min_period)
+					per = min_period;
+				hr = client->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE,
+				                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+				                        per, per, &want.Format, nullptr);
+				if (hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
+					// 揃っていない長さを断られた。教えられた長さで作り直す。
+					// **client を作り直すのが決まり**（再 Initialize は通らない）
+					UINT32 aligned = 0;
+					client->GetBufferSize(&aligned);
+					client->Release();
+					client = nullptr;
+					if (FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL,
+					                         nullptr, (void **)&client)))
+						break;
+					per = REFERENCE_TIME(10000.0 * 1000.0 * aligned / c.rate + 0.5);
+					hr = client->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE,
+					                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+					                        per, per, &want.Format, nullptr);
+				}
+				if (SUCCEEDED(hr)) {
+					exclusive = true;
+					dev_float = c.flt;
+					dev_ch    = 2;
+					dev_rate  = c.rate;
+					m_period_ms.store(per / 10000.0);
+					break;
+				}
+				// 失敗したら client は Initialize 前の状態に戻す
+				client->Release();
+				client = nullptr;
+				if (FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL,
+				                         nullptr, (void **)&client)))
+					break;
+			}
+			if (!exclusive && client)
+				m_err = "独り占めで開けなかった（共有に落とす）";
+			if (!client) { fail("音声デバイスの起動", E_FAIL); goto done; }
+		}
+
+		// ---- 共有モード
+		if (!exclusive) {
+			WAVEFORMATEX fallback{};
+			const bool usable = is_float(mix) || is_pcm16(mix);
+			if (!usable) {
+				fallback.wFormatTag      = WAVE_FORMAT_PCM;
+				fallback.nChannels       = 2;
+				fallback.nSamplesPerSec  = AUDIO_RATE;
+				fallback.wBitsPerSample  = 16;
+				fallback.nBlockAlign     = 4;
+				fallback.nAvgBytesPerSec = AUDIO_RATE * 4;
+				autoconv = true;
+			}
+			const WAVEFORMATEX *use = usable ? mix : &fallback;
+			dev_float = usable && is_float(mix);
+			dev_ch    = use->nChannels;
+			dev_rate  = use->nSamplesPerSec;
 			m_period_ms.store(def_period / 10000.0);
 
-		const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-		                    (usable ? 0u : (AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-		                                    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY));
-		const REFERENCE_TIME dur = REFERENCE_TIME(latency_ms) * 10000;
-		hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, dur, 0, use, nullptr);
-		if (FAILED(hr)) { fail("音声の開始準備", hr); goto done; }
+			// **器は余裕を持って取り、溜めるのは target だけ。**
+			// 器が小さいと、起きるのが少し遅れたときに書く場所が無くなる
+			const double want_ms = latency_ms > 0 ? double(latency_ms)
+			                                     : 2.0 * def_period / 10000.0;
+			const double buf_ms = std::max(want_ms + 2.0 * def_period / 10000.0,
+			                               3.0 * def_period / 10000.0);
+			const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+			                    (autoconv ? (AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+			                                 AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY) : 0u);
+			hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags,
+			                        REFERENCE_TIME(buf_ms * 10000.0), 0, use, nullptr);
+			if (FAILED(hr)) { fail("音声の開始準備", hr); goto done; }
+			target = UINT32(want_ms * dev_rate / 1000.0);
+		}
 
+		m_exclusive.store(exclusive);
 		m_dev_rate.store(dev_rate);
 		m_dev_channels.store(dev_ch);
 		m_dev_float.store(dev_float);
-		m_dev_bits.store(use->wBitsPerSample);
-
 		rs.configure(double(AUDIO_RATE), double(dev_rate));
 		m_converting.store(!rs.direct());
 		stage.resize(size_t(CHUNK + 64) * 2);
@@ -215,7 +330,18 @@ void audio_out::run(int latency_ms)
 	hr = client->GetService(__uuidof(IAudioRenderClient), (void **)&render);
 	if (FAILED(hr)) { fail("書き込み口の取得", hr); goto done; }
 
+	{
+		// デバイス側の取り分。こちらでは短くできない
+		REFERENCE_TIME sl = 0;
+		if (SUCCEEDED(client->GetStreamLatency(&sl)))
+			m_stream_ms.store(sl / 10000.0);
+	}
+
+	// 独り占めでは毎周期ちょうど器ぶんを書く。共有では target だけ溜める
+	if (exclusive || !target || target > buf_frames)
+		target = buf_frames;
 	m_buffer_frames.store(buf_frames);
+	m_target_frames.store(target);
 
 	// 音声を作るスレッドは優先度を上げる。取りこぼすと音が切れる。
 	//
@@ -232,7 +358,6 @@ void audio_out::run(int latency_ms)
 	{
 		BYTE *data = nullptr;
 
-		// デバイスへ frames ぶん書く。2ch を超える分は黙らせる
 		auto write_frames = [&](BYTE *dst, UINT32 frames) {
 			UINT32 at = 0;
 			while (at < frames) {
@@ -270,11 +395,11 @@ void audio_out::run(int latency_ms)
 			}
 		};
 
-		// 最初に一杯まで埋めてから走らせる
-		if (SUCCEEDED(render->GetBuffer(buf_frames, &data))) {
-			write_frames(data, buf_frames);
-			m_produced.fetch_add(buf_frames);
-			render->ReleaseBuffer(buf_frames, 0);
+		// 走り出しに溜める分。**満杯ではなく target まで**
+		if (SUCCEEDED(render->GetBuffer(target, &data))) {
+			write_frames(data, target);
+			m_produced.fetch_add(target);
+			render->ReleaseBuffer(target, 0);
 		}
 
 		hr = client->Start();
@@ -290,12 +415,20 @@ void audio_out::run(int latency_ms)
 			UINT32 padding = 0;
 			if (FAILED(client->GetCurrentPadding(&padding)))
 				break;
-			// 残量がゼロなら、デバイスは前の分を鳴らし終えて待たされた。
-			// これが本当の音切れ。鳴らし始めの 1 杯目は数えない
-			if (padding == 0 && m_produced.load() > buf_frames)
-				m_starved.fetch_add(1);
 
-			const UINT32 want = buf_frames - padding;
+			// 起きたときに溜まっていた量。これが待ち時間の本体
+			m_queue_sum.fetch_add(padding);
+			m_queue_n.fetch_add(1);
+			if (padding > m_queue_worst.load())
+				m_queue_worst.store(padding);
+
+			UINT32 want = buf_frames - padding;
+			// 溜めは目標まで。満杯にすると、その分そのまま待ち時間になる
+			if (!exclusive) {
+				want = padding >= target ? 0 : std::min(want, target - padding);
+				if (!want)
+					continue;
+			}
 			if (!want)
 				continue;
 
@@ -312,6 +445,18 @@ void audio_out::run(int latency_ms)
 			if (took > m_worst_ticks.load())
 				m_worst_ticks.store(took);
 			m_produced.fetch_add(want);
+
+			// 間に合ったか。デバイスが次の音を要るまでの余裕は、
+			// 共有なら「まだ溜まっていた量」、独り占めなら「器ひとつぶん」
+			// （表と裏で 表裏の二枚 なので、裏を鳴らしている間に書く）
+			// 走り出しの数回は数えない（まだ溜まっていないのは当たり前）
+			if (m_produced.load() > u64(buf_frames) * 2) {
+				const u64 slack = exclusive ? buf_frames : padding;
+				if (slack < m_slack_min.load())
+					m_slack_min.store(slack);
+				if (double(took) / double(m_qpc_freq) > double(slack) / double(dev_rate))
+					m_late.fetch_add(1);
+			}
 
 			render->ReleaseBuffer(want, 0);
 		}
