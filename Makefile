@@ -98,7 +98,7 @@ $(BUILD)/rec.exe: $(BUILD)/src/smf.o $(BUILD)/src/rec.o $(BUILD)/src/compat/comp
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -luuid
 
 # live は Windows の MIDI 入力と音声出力を使う
-$(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/live.o
+$(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/ui/audio_out.o $(BUILD)/src/live.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lavrt
 

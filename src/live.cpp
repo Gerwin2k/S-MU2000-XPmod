@@ -16,6 +16,7 @@
 //                              供給が追いつかず細切れになる（合計 70ms 必要）
 
 #include "mu2000.h"
+#include "ui/audio_out.h"
 #include "ui/midi_in.h"
 
 #include <atomic>
@@ -133,127 +134,51 @@ struct generator {
 
 // ---- WASAPI 共有モード。イベント駆動
 
+// ---- WASAPI 共有モード。ui::audio_out に任せる
+//
+// 以前はここに WASAPI の手順を直に書いていたが、gui.exe 側（ui::audio_out）と
+// 二重になっていた。**標本化周波数の変換を自分でやる**ようにした分が
+// 片方にしか入らないのは困るので、こちらもそちらを使う。
+
 int run_wasapi(generator &gen, double seconds, int latency_ms)
 {
-	if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
-		std::fprintf(stderr, "COM を初期化できない\n");
+	ui::audio_out out;
+	std::string err;
+	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err)) {
+		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
 	}
 
-	IMMDeviceEnumerator *en = nullptr;
-	IMMDevice *dev = nullptr;
-	IAudioClient *client = nullptr;
-	IAudioRenderClient *render = nullptr;
-	HANDLE ev = CreateEventA(nullptr, FALSE, FALSE, nullptr);
-	UINT32 buf_frames = 0;
-	int rc = 1;
-	mmcss_guard mmcss;      // goto done がまたぐので、宣言はここに置く
-
-	auto fail = [](const char *what, HRESULT hr) {
-		std::fprintf(stderr, "%s に失敗 (0x%08lx)\n", what, (unsigned long)hr);
-	};
-
-	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-	                              __uuidof(IMMDeviceEnumerator), (void **)&en);
-	if (FAILED(hr)) { fail("デバイス一覧の取得", hr); goto done; }
-
-	hr = en->GetDefaultAudioEndpoint(eRender, eConsole, &dev);
-	if (FAILED(hr)) { fail("既定の音声デバイスの取得", hr); goto done; }
-
-	hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void **)&client);
-	if (FAILED(hr)) { fail("音声デバイスの起動", hr); goto done; }
-
-	{
-		// こちらは 44100Hz 16bit ステレオで作る。デバイスの形式が違っても
-		// AUTOCONVERTPCM を付けておけば Windows が変換してくれる
-		WAVEFORMATEX fmt{};
-		fmt.wFormatTag      = WAVE_FORMAT_PCM;
-		fmt.nChannels       = 2;
-		fmt.nSamplesPerSec  = RATE;
-		fmt.wBitsPerSample  = 16;
-		fmt.nBlockAlign     = 4;
-		fmt.nAvgBytesPerSec = RATE * 4;
-
-		const REFERENCE_TIME dur = REFERENCE_TIME(latency_ms) * 10000;
-		hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED,
-		                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-		                        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-		                        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-		                        dur, 0, &fmt, nullptr);
-		if (FAILED(hr)) { fail("音声の開始準備", hr); goto done; }
-	}
-
-	hr = client->SetEventHandle(ev);
-	if (FAILED(hr)) { fail("イベントの登録", hr); goto done; }
-
-	hr = client->GetBufferSize(&buf_frames);
-	if (FAILED(hr)) { fail("バッファ長の取得", hr); goto done; }
-
-	hr = client->GetService(__uuidof(IAudioRenderClient), (void **)&render);
-	if (FAILED(hr)) { fail("書き込み口の取得", hr); goto done; }
-
-	std::printf("WASAPI 共有モード  待ち時間 %.1f ms（%u サンプル）\n",
-	            1000.0 * buf_frames / RATE, buf_frames);
+	std::printf("WASAPI 共有モード  %s\n", out.format_line().c_str());
+	std::printf("MMCSS: %s\n", out.mmcss() ? "Pro Audio で登録した"
+	                                        : "登録できず（途切れやすい）");
 	if (seconds > 0.0)
 		std::printf("%.1f 秒で終了\n", seconds);
 	else
 		std::printf("Ctrl+C で終了\n");
 
-	// 音声を作るスレッドは優先度を上げる。取りこぼすと音が切れる
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-	gen.cushion_frames = buf_frames;
+	// 取りこぼしの判定に使う「一杯ぶん」。デバイス側の長さを 44100 側に直す
+	gen.cushion_frames = u32(out.buffer_ms() * RATE / 1000.0);
 
-	{
-		// 最初に一杯まで埋めてから走らせる
-		BYTE *data = nullptr;
-		if (SUCCEEDED(render->GetBuffer(buf_frames, &data))) {
-			gen.fill(reinterpret_cast<s16 *>(data), buf_frames);
-			render->ReleaseBuffer(buf_frames, 0);
-		}
-	}
-
-	hr = client->Start();
-	if (FAILED(hr)) { fail("再生の開始", hr); goto done; }
-
+	u64 shown = 0;
 	while (seconds <= 0.0 || gen.produced < u64(seconds * RATE)) {
-		if (WaitForSingleObject(ev, 2000) != WAIT_OBJECT_0) {
-			std::fprintf(stderr, "音声デバイスからの合図が来ない\n");
+		Sleep(20);
+		if (!out.running()) {
+			const std::string e = out.error();
+			if (!e.empty())
+				std::fprintf(stderr, "%s\n", e.c_str());
 			break;
 		}
-
-		UINT32 padding = 0;
-		if (FAILED(client->GetCurrentPadding(&padding)))
-			break;
-		// 残量がゼロなら、デバイスは前の分を鳴らし終えて待たされた。
-		// これが本当の音切れ。生成に何 ms かかったかより、こちらが答え。
-		// ただし鳴らし始めの 1 杯目は、まだ渡した音が減っていないので数えない
-		if (padding == 0 && gen.produced > buf_frames)
-			gen.starved++;
-		const UINT32 want = buf_frames - padding;
-		if (!want)
-			continue;
-
-		BYTE *data = nullptr;
-		if (FAILED(render->GetBuffer(want, &data)))
-			break;
-		gen.fill(reinterpret_cast<s16 *>(data), want);
-		render->ReleaseBuffer(want, 0);
-
-		if (gen.produced % (RATE * 5) < want)
-			gen.report(buf_frames);
+		if (gen.produced - shown >= u64(RATE) * 5) {
+			shown = gen.produced;
+			gen.starved = out.starved();
+			gen.report(gen.cushion_frames);
+		}
 	}
 
-	client->Stop();
-	rc = 0;
-
-done:
-	if (render) render->Release();
-	if (client) client->Release();
-	if (dev) dev->Release();
-	if (en) en->Release();
-	if (ev) CloseHandle(ev);
-	CoUninitialize();
-	return rc;
+	gen.starved = out.starved();
+	out.stop();
+	return 0;
 }
 
 // ---- WinMM waveOut。素直だが待ち時間を詰められない
