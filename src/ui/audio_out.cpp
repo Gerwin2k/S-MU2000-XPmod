@@ -271,10 +271,26 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 				if (FAILED(client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
 				                                    &want.Format, nullptr)))
 					continue;
-				// 周期は頼んだ長さ。デバイスの最小より短くはできない
-				REFERENCE_TIME per = REFERENCE_TIME(latency_ms > 0 ? latency_ms : 10) * 10000;
-				if (per < min_period)
-					per = min_period;
+				// **周期は 2 の冪のフレーム数にする。**
+				//
+				// ドライバは何を頼んでも「通った」と言うことがあるが、
+				// 業務用の機械は自分の単位（128/256/512/1024…）で動いていて、
+				// 割り切れない長さを渡すと切り刻まれたような音になる。
+				// RME を 1024 サンプルで走らせている機械に 480 フレーム
+				// （10ms）を頼んで、実際にそうなった
+				const double want_ms = latency_ms > 0 ? double(latency_ms) : 10.0;
+				u32 frames = u32(want_ms * c.rate / 1000.0 + 0.5);
+				u32 pow2 = 64;
+				while (pow2 < frames && pow2 < 8192)
+					pow2 <<= 1;
+				if (pow2 > 64 && (pow2 - frames) > (frames - (pow2 >> 1)))
+					pow2 >>= 1;          // 下のほうが近ければそちら
+				frames = pow2;
+				REFERENCE_TIME per = REFERENCE_TIME(10000000.0 * frames / c.rate + 0.5);
+				while (per < min_period && frames < 8192) {
+					frames <<= 1;
+					per = REFERENCE_TIME(10000000.0 * frames / c.rate + 0.5);
+				}
 				hr = client->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE,
 				                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
 				                        per, per, &want.Format, nullptr);
