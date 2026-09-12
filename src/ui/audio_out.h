@@ -29,6 +29,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace ui {
 
@@ -42,9 +43,18 @@ public:
 
 	~audio_out() { stop(); }
 
+	// 使える再生デバイスの名前。番号は挿し直すとずれるので、**名前で選ぶ**
+	static std::vector<std::string> list();
+
 	// latency_ms は**溜める目標の長さ**。0 以下ならデバイスの周期 2 つぶん。
-	// exclusive なら Windows の混ぜ合わせを通さない（他のアプリは鳴らせない）
-	bool start(int latency_ms, fill_fn fill, std::string &err, bool exclusive = false);
+	// exclusive なら Windows の混ぜ合わせを通さない（他のアプリは鳴らせない）。
+	// device は名前の一部（空なら Windows の既定）。**既定は勝手に変わる**ので、
+	// 聞いている口が決まっているなら指定したほうがよい
+	bool start(int latency_ms, fill_fn fill, std::string &err, bool exclusive = false,
+	           const std::string &device = std::string());
+
+	// 実際に開いた口の名前
+	std::string device_name() const { return m_dev_name; }
 	void stop();
 
 	// 具合。すべて音声スレッドが書き、他所から読んでよい
@@ -122,6 +132,7 @@ private:
 	std::atomic<u64>  m_queue_sum{0}, m_queue_n{0}, m_queue_worst{0};
 	std::atomic<u64>  m_inflight_sum{0}, m_inflight_n{0}, m_inflight_worst{0};
 	std::string       m_cap_path;
+	std::string       m_dev_name, m_want_dev;
 	s64 m_qpc_freq = 1;
 };
 

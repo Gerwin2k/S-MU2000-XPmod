@@ -65,10 +65,63 @@ WAVEFORMATEXTENSIBLE make_format(u32 rate, bool flt, int bits, int container)
 	return e;
 }
 
+// PKEY_Device_FriendlyName。INITGUID を持ち込むと他と衝突するので直に書く
+//   {a45c254e-df1c-4efd-8020-67d146a850e0} の 14 番
+const PROPERTYKEY kFriendlyName = {
+	{ 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
+
+// 口の名前を取る
+std::string endpoint_name(IMMDevice *d)
+{
+	std::string out;
+	IPropertyStore *ps = nullptr;
+	if (FAILED(d->OpenPropertyStore(STGM_READ, &ps)))
+		return out;
+	PROPVARIANT v;
+	PropVariantInit(&v);
+	if (SUCCEEDED(ps->GetValue(kFriendlyName, &v)) && v.pwszVal) {
+		char buf[256] = {};
+		WideCharToMultiByte(CP_UTF8, 0, v.pwszVal, -1, buf, sizeof(buf) - 1, nullptr, nullptr);
+		out = buf;
+	}
+	PropVariantClear(&v);
+	ps->Release();
+	return out;
+}
+
 } // namespace
 
 
-bool audio_out::start(int latency_ms, fill_fn fill, std::string &err, bool exclusive)
+std::vector<std::string> audio_out::list()
+{
+	std::vector<std::string> out;
+	const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+	IMMDeviceEnumerator *en = nullptr;
+	if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+	                               __uuidof(IMMDeviceEnumerator), (void **)&en))) {
+		IMMDeviceCollection *all = nullptr;
+		if (SUCCEEDED(en->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &all))) {
+			UINT n = 0;
+			all->GetCount(&n);
+			for (UINT i = 0; i < n; i++) {
+				IMMDevice *d = nullptr;
+				if (SUCCEEDED(all->Item(i, &d))) {
+					out.push_back(endpoint_name(d));
+					d->Release();
+				}
+			}
+			all->Release();
+		}
+		en->Release();
+	}
+	if (com)
+		CoUninitialize();
+	return out;
+}
+
+
+bool audio_out::start(int latency_ms, fill_fn fill, std::string &err, bool exclusive,
+                      const std::string &device)
 {
 	if (m_thread.joinable())
 		return true;
@@ -81,6 +134,7 @@ bool audio_out::start(int latency_ms, fill_fn fill, std::string &err, bool exclu
 	m_quit.store(false);
 	m_err.clear();
 
+	m_want_dev = device;
 	m_start_state.store(0);
 	m_thread = std::thread([this, latency_ms, exclusive] {
 		run(latency_ms, exclusive);
@@ -237,8 +291,31 @@ void audio_out::run(int latency_ms, bool want_exclusive)
 	                              __uuidof(IMMDeviceEnumerator), (void **)&en);
 	if (FAILED(hr)) { fail("デバイス一覧の取得", hr); goto done; }
 
-	hr = en->GetDefaultAudioEndpoint(eRender, eConsole, &dev);
-	if (FAILED(hr)) { fail("既定の音声デバイスの取得", hr); goto done; }
+	// 名前で指定されていればそれを探す。無ければ Windows の既定
+	if (!m_want_dev.empty()) {
+		IMMDeviceCollection *all = nullptr;
+		if (SUCCEEDED(en->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &all))) {
+			UINT n = 0;
+			all->GetCount(&n);
+			for (UINT i = 0; i < n && !dev; i++) {
+				IMMDevice *d = nullptr;
+				if (FAILED(all->Item(i, &d)))
+					continue;
+				if (endpoint_name(d).find(m_want_dev) != std::string::npos)
+					dev = d;              // 掴んだまま使う
+				else
+					d->Release();
+			}
+			all->Release();
+		}
+		if (!dev)
+			m_err = "その名前の再生デバイスが無い: " + m_want_dev;
+	}
+	if (!dev) {
+		hr = en->GetDefaultAudioEndpoint(eRender, eConsole, &dev);
+		if (FAILED(hr)) { fail("既定の音声デバイスの取得", hr); goto done; }
+	}
+	m_dev_name = endpoint_name(dev);
 
 	hr = dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void **)&client);
 	if (FAILED(hr)) { fail("音声デバイスの起動", hr); goto done; }

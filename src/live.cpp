@@ -141,18 +141,20 @@ struct generator {
 // 片方にしか入らないのは困るので、こちらもそちらを使う。
 
 int run_wasapi(generator &gen, double seconds, int latency_ms, bool exclusive,
-               const char *dump_dev)
+               const char *dump_dev, const char *audio_dev)
 {
 	ui::audio_out out;
 	std::string err;
 	if (dump_dev)
 		out.set_capture(dump_dev);
-	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err, exclusive)) {
+	if (!out.start(latency_ms, [&gen](s16 *o, u32 n) { gen.fill(o, n); }, err, exclusive,
+	               audio_dev ? audio_dev : "")) {
 		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
 	}
 
-	std::printf("WASAPI 共有モード  %s\n", out.format_line().c_str());
+	std::printf("音声の出口: %s\n", out.device_name().c_str());
+	std::printf("%s\n", out.format_line().c_str());
 	std::printf("MMCSS: %s\n", out.mmcss() ? "Pro Audio で登録した"
 	                                        : "登録できず（途切れやすい）");
 	if (seconds > 0.0)
@@ -294,19 +296,29 @@ int main(int argc, char **argv)
 	int  latency_ms = 20;   // 溜める目標。実測の最悪 9.2ms + 余裕
 	bool exclusive = false;
 	const char *dump_dev = nullptr;   // デバイスへ渡したものをそのまま書き出す
+	const char *audio_dev = nullptr;  // 音声の出口の名前（一部でよい）
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
 	bool nomidi = false, use_waveout = false, single = false;
 	const char *wav = nullptr;
 	std::string dir;
 
 	for (int i = 1; i < argc; i++) {
-		if (!std::strcmp(argv[i], "--list")) { list_midi_inputs(); return 0; }
+		if (!std::strcmp(argv[i], "--list")) {
+			list_midi_inputs();
+			std::printf("\n音声の出口:\n");
+			const std::vector<std::string> outs = ui::audio_out::list();
+			for (size_t k = 0; k < outs.size(); k++)
+				std::printf("  %zu: %s\n", k, outs[k].c_str());
+			std::printf("  --audio に名前の一部を渡すと、そこへ出す\n");
+			return 0;
+		}
 		else if (!std::strcmp(argv[i], "--midi") && i + 1 < argc) midi_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) frames = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--buffers") && i + 1 < argc) buffers = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency_ms = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--dump-dev") && i + 1 < argc) dump_dev = argv[++i];
+		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) wav = argv[++i];
 		else if (!std::strcmp(argv[i], "--waveout")) use_waveout = true;
@@ -372,7 +384,8 @@ int main(int argc, char **argv)
 	generator gen(mu, wav ? &rec : nullptr);
 
 	const int rc = use_waveout ? run_waveout(gen, seconds, frames, buffers)
-	                           : run_wasapi(gen, seconds, latency_ms, exclusive, dump_dev);
+	                           : run_wasapi(gen, seconds, latency_ms, exclusive, dump_dev,
+	                                        audio_dev);
 
 	if (wav && !rec.empty())
 		write_wav(wav, rec);

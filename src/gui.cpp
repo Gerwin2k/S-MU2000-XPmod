@@ -151,6 +151,7 @@ struct window_state {
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
 
+	std::string audio_name;            // 音の出口（名前の一部）。空なら既定
 	std::string layout_path;           // 読んでいる panel.txt。F5 で読み直す
 	ui::player    play_file;
 	ui::midi_in  *midi = nullptr;      // MIDI IN A
@@ -206,7 +207,8 @@ std::string settings_path()
 }
 
 void load_settings(std::string &in_name, std::string &in_name_b,
-                   std::string &out_name, std::string &out_name_b)
+                   std::string &out_name, std::string &out_name_b,
+                   std::string &audio_name)
 {
 	const std::string path = settings_path();
 	if (path.empty())
@@ -227,6 +229,7 @@ void load_settings(std::string &in_name, std::string &in_name_b,
 		if (key == "midi_in_b") in_name_b = val;
 		if (key == "midi_out")   out_name   = val;
 		if (key == "midi_out_b") out_name_b = val;
+		if (key == "audio_out")  audio_name = val;
 	}
 	std::fclose(f);
 }
@@ -243,6 +246,7 @@ void save_settings()
 	std::fprintf(f, "midi_in_b=%s\n", g_win.in_name_b.c_str());
 	std::fprintf(f, "midi_out=%s\n",   g_win.out_name.c_str());
 	std::fprintf(f, "midi_out_b=%s\n", g_win.out_name_b.c_str());
+	std::fprintf(f, "audio_out=%s\n", g_win.audio_name.c_str());
 	std::fclose(f);
 }
 
@@ -682,6 +686,7 @@ int main(int argc, char **argv)
 	int mout_dev = -2;
 	int latency = 20;        // 溜める目標
 	bool exclusive = false;
+	const char *audio_dev = nullptr;
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
@@ -703,6 +708,10 @@ int main(int argc, char **argv)
 				std::printf("  %zu: %s\n", k, outs[k].c_str());
 			if (outs.empty())
 				std::printf("  （なし）\n");
+			const auto aouts = ui::audio_out::list();
+			std::printf("音声の出口（--audio に名前の一部）:\n");
+			for (size_t k = 0; k < aouts.size(); k++)
+				std::printf("  %zu: %s\n", k, aouts[k].c_str());
 			return 0;
 		}
 		else if (!std::strcmp(argv[i], "--midi") && i + 1 < argc) midi_dev = std::atoi(argv[++i]);
@@ -712,6 +721,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--nomidi")) { midi_dev = -1; midib_dev = -1; }
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
+		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -864,12 +874,18 @@ int main(int argc, char **argv)
 			eng.publish();
 			return;
 		}
+		g_win.audio_name = out.device_name();
+		std::printf("音声の出口: %s\n%s\n", out.device_name().c_str(),
+		            out.format_line().c_str());
+		save_settings();
 		eng.state.store(1);
 		eng.publish();
 
 		// 前に選んだ口を名前で探す。--midi / --midiout があればそちらが勝つ
-		std::string want_in, want_in_b, want_out, want_out_b;
-		load_settings(want_in, want_in_b, want_out, want_out_b);
+		std::string want_in, want_in_b, want_out, want_out_b, want_audio;
+		load_settings(want_in, want_in_b, want_out, want_out_b, want_audio);
+		// --audio があればそちらが勝つ。無ければ前に選んだもの
+		g_win.audio_name = audio_dev ? std::string(audio_dev) : want_audio;
 		if (midi_dev == -2)
 			midi_dev = find_device(ui::midi_in::list(), want_in);
 		if (midib_dev == -2)
@@ -890,7 +906,8 @@ int main(int argc, char **argv)
 
 		std::string err;
 
-		if (!out.start(latency, [](s16 *o, u32 n) { eng.fill(o, n); }, err, exclusive)) {
+		if (!out.start(latency, [](s16 *o, u32 n) { eng.fill(o, n); }, err, exclusive,
+		               g_win.audio_name)) {
 			std::fprintf(stderr, "音声: %s\n", err.c_str());
 			eng.message = "音声デバイスを開けない";
 			eng.state.store(2);
