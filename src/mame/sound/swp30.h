@@ -9,6 +9,7 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 #include <algorithm>
@@ -20,6 +21,9 @@
 class swp30_device
 {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	swp30_device();
 
 	// S-MU2000: address_map の代わり。レジスタは 64ch x 64 スロットの格子

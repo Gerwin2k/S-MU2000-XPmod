@@ -63,6 +63,11 @@ $(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/s
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
+# statetest は状態の保存と復元が正しいかを確かめる
+$(BUILD)/statetest.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/statetest.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
 # panel はフロントパネル（LCD とボタン）を文字だけで動かす
 $(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/panel.o
 	@mkdir -p $(dir $@)
@@ -149,6 +154,12 @@ regen:
 clean:
 	rm -rf $(BUILD)
 
--include $(VST3_OBJS:.o=.d) $(UI_OBJS:.o=.d) $(BUILD)/src/gui.d $(OBJS:.o=.d) $(BUILD)/src/verify.d $(BUILD)/src/mu2000.d $(BUILD)/src/boot.d $(BUILD)/src/render.d $(BUILD)/src/live.d $(BUILD)/src/panel.d $(BUILD)/src/smf.d $(BUILD)/src/midisend.d
+# ヘッダを直したときに .o を作り直させる仕掛け（-MMD -MP が置く .d）。
+#
+# **1 つずつ並べてはいけない。** 並べ忘れた .o はヘッダを直しても作り直されず、
+# 型の大きさが食い違ったまま繋がって落ちる（statetest がこれで落ちていた。
+# swp30.h に変数を 1 つ足したら、古い大きさのまま繋がった mu2000.o が
+# 別の場所を触りに行っていた）。だから build の下にある .d を全部拾う
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 .PHONY: all clean regen vst3 install-vst3 probe

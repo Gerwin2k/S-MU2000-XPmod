@@ -149,3 +149,10 @@ void sh_intc_device::ipr_w(offs_t offset, u16 data, u16 mem_mask)
 	logerror("ipr_w %x, %04x @ %04x\n", offset, data, mem_mask);
 }
 
+
+void sh_intc_device::state(state_io &s)
+{
+	s.tag("intc");
+	s.stdarr(m_pending); s.stdarr(m_ipr);
+	s.v(m_isr); s.v(m_icr); s.v(m_lines);
+}

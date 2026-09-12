@@ -399,3 +399,28 @@ void sh7042_device::sh2_exception_internal(const char *message, int irqline, int
 	sh2_device::sh2_exception_internal(message, irqline, vector);
 	m_intc->interrupt_taken(irqline, vector);
 }
+
+void sh7042_device::state(state_io &s)
+{
+	s.tag("sh7042");
+	sh2_device::state(s);
+	s.v(m_event_cycles); s.v(m_in_event);
+	s.v(m_pcf_ah); s.v(m_pcf_al); s.v(m_pcf_b); s.v(m_pcf_c);
+	s.v(m_pcf_dh); s.v(m_pcf_dl); s.v(m_pcf_e); s.v(m_pcf_if);
+
+	// 内蔵の周辺。生まれた順にたどる
+	m_intc->state(s);
+	m_adc0->state(s);
+	m_bsc->state(s);
+	m_cmt->state(s);
+	m_dmac->state(s);
+	m_dmac0->state(s); m_dmac1->state(s); m_dmac2->state(s); m_dmac3->state(s);
+	m_mtu->state(s);
+	m_mtu0->state(s); m_mtu1->state(s); m_mtu2->state(s);
+	m_mtu3->state(s); m_mtu4->state(s);
+	m_porta->state(s); m_portb->state(s); m_portc->state(s);
+	m_portd->state(s); m_porte->state(s); m_portf->state(s);
+	for (int i = 0; i < 2; i++)
+		if (sh_sci_device *p = m_sci[i].lookup())
+			p->state(s);
+}

@@ -137,3 +137,10 @@ void sh_bsc_device::rtcor_w(offs_t, u16 data, u16 mem_mask)
 	COMBINE_DATA(&m_rtcor);
 	logerror("rtcor_w %04x\n", m_rtcor);
 }
+
+void sh_bsc_device::state(state_io &s)
+{
+	s.tag("bsc");
+	s.v(m_bcr1); s.v(m_bcr2); s.v(m_wcr1); s.v(m_wcr2);
+	s.v(m_dcr); s.v(m_rtcsr); s.v(m_rtcnt); s.v(m_rtcor);
+}

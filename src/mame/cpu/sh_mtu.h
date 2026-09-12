@@ -14,6 +14,7 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 // To generalize eventually
@@ -22,6 +23,9 @@ class sh_intc_device;
 
 class sh_mtu_channel_device : public device_t {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	enum {
 		CHAIN,
 		INPUT_A,
@@ -136,6 +140,9 @@ protected:
 
 class sh_mtu_device : public device_t {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	sh_mtu_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock = 0);
 
 	template <typename T> sh_mtu_device(const machine_config &mconfig, const char *tag, device_t *owner, T &&cpu, int timer_count)

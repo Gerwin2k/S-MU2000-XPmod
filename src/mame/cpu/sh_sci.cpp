@@ -763,3 +763,16 @@ void sh_sci_device::rx_sync_step()
 	if(!m_rx_bit)
 		rx_done();
 }
+
+void sh_sci_device::state(state_io &s)
+{
+	s.tag("sci");
+	s.v(m_tx_state); s.v(m_rx_state); s.v(m_tx_bit); s.v(m_rx_bit);
+	s.v(m_clock_state); s.v(m_tx_parity); s.v(m_rx_parity);
+	s.v(m_tx_clock_counter); s.v(m_rx_clock_counter);
+	s.v(m_clock_mode);
+	s.v(m_ext_clock_value); s.v(m_rx_value);
+	s.v(m_rdr); s.v(m_tdr); s.v(m_smr); s.v(m_scr); s.v(m_ssr);
+	s.v(m_brr); s.v(m_rsr); s.v(m_tsr);
+	s.v(m_clock_event); s.v(m_clock_step); s.v(m_divider);
+}

@@ -16,6 +16,7 @@
 // 教えてやる必要がある。受け取った側でまた MIDI のバイト列に組み直して音源へ渡す。
 
 #include "engine.h"
+#include "state.h"
 #include "view.h"
 
 #include "pluginterfaces/base/funknown.h"
@@ -211,6 +212,7 @@ public:
 			m_engine.start();
 		} else {
 			m_hush.store(true);
+			m_engine.set_processing(false);
 			report();
 		}
 		return kResultOk;
@@ -245,20 +247,49 @@ public:
 		if (stream->read(&gain, sizeof(gain), &got) == kResultOk && got == sizeof(gain) &&
 		    gain >= 0.0f && gain <= 1.0f)
 			m_engine.panel().set_gain(gain);
+		if (version < 2)
+			return kResultOk;   // 古い形。出力レベルだけ
+
+		// 機械まるごとの状態。詰めた形で入っている
+		int32 packed_size = 0;
+		if (stream->read(&packed_size, sizeof(packed_size), &got) != kResultOk ||
+		    got != sizeof(packed_size) || packed_size <= 0 || packed_size > (64 << 20))
+			return kResultOk;
+		std::vector<uint8_t> packed;
+		packed.resize(size_t(packed_size));
+		if (stream->read(packed.data(), packed_size, &got) != kResultOk ||
+		    got != packed_size)
+			return kResultOk;
+		std::vector<u8> blob;
+		if (!state_unpack(packed.data(), packed.size(), blob))
+			return kResultOk;
+
+		// 起動が終わっていないと戻せない。終わるまで待つ
+		for (int i = 0; i < 300 && m_engine.state() == smu2000::vst3::status::loading; i++)
+			Sleep(10);
+		m_engine.load_state(blob.data(), blob.size());
 		return kResultOk;
 	}
 
 	tresult PLUGIN_API getState(IBStream *stream) override
 	{
-		// 音源の中身（RAM や音色）はまだ保存できない。
-		// 版番号と出力レベルだけ。曲を開き直すと音色は MIDI から作り直しになる
+		// **機械まるごと**（CPU・RAM・SWP30・LCD）を入れる。だから曲を
+		// 開き直しても、音色もエフェクトもそのまま戻る
 		if (!stream)
 			return kResultFalse;
-		int32 version = 1;
+		int32 version = 2;
 		float gain = m_engine.panel().gain();
 		int32 written = 0;
 		stream->write(&version, sizeof(version), &written);
 		stream->write(&gain, sizeof(gain), &written);
+
+		const std::vector<uint8_t> blob = m_engine.save_state();
+		if (blob.empty())
+			return kResultOk;                 // まだ起動中など
+		const std::vector<u8> packed = state_pack(blob);
+		int32 n = int32(packed.size());
+		stream->write(&n, sizeof(n), &written);
+		stream->write(const_cast<uint8_t *>(packed.data()), n, &written);
 		return kResultOk;
 	}
 
@@ -295,6 +326,8 @@ public:
 	{
 		if (!state)
 			m_hush.store(true);
+		// 動いているあいだ、機械に触れてよいのは音声スレッドだけ
+		m_engine.set_processing(state != 0);
 		return kResultOk;
 	}
 

@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "state.h"
 #include "compat/mamecompat.h"
 #include "compat/membus.h"
 #include "mame/cpu/sh7042.h"
@@ -20,6 +21,7 @@
 
 #include <cstdio>
 #include <atomic>
+#include <array>
 #include <deque>
 #include <memory>
 #include <thread>
@@ -58,6 +60,14 @@ public:
 	bool load_lcd_font(const std::string &path);
 
 	void reset();
+
+	// 状態の保存と復元。**機械まるごと**（CPU・RAM・SWP30・LCD・タイマ）。
+	// ROM は入れないので、戻すときは同じ ROM を積んでおくこと。
+	// 正しさは「戻した続きの音が、戻さず走り続けた音と 1 バイトも
+	// 違わないこと」で確かめる（tools/state_test.py）
+	std::vector<u8> save_state() const;
+	void state(state_io &s);
+	bool load_state(const u8 *p, size_t n, std::string &err);
 
 	// n サイクルぶん進める。周辺のイベントはこの中で挟む
 	void run_cycles(u64 n);

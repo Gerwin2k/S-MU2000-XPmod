@@ -15,6 +15,7 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 class sh7042_device;
@@ -22,6 +23,9 @@ class sh_intc_device;
 
 class sh_adc_device : public device_t {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	u16 addr_r(offs_t offset);
 	u8 adcsr_r();
 	u8 adcr_r();

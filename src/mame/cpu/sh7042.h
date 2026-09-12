@@ -9,6 +9,7 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 #include "sh2.h"
@@ -24,6 +25,9 @@
 class sh7042_device : public sh2_device
 {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	sh7042_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock);
 
 	template<int Port> auto read_adc() { return m_read_adc[Port].bind(); }

@@ -20,11 +20,15 @@
 
 #pragma once
 
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 class hd44780_device
 {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	// cpu_hz: ビジーの残り時間を数えるための CPU 側の周波数
 	hd44780_device(u32 cpu_hz = 28000000, u32 lcd_hz = 270000)
 		: m_cpu_hz(cpu_hz), m_lcd_hz(lcd_hz) {}

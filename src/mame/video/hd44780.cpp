@@ -201,3 +201,15 @@ const u8 *hd44780_device::render()
 	}
 	return m_render_buf;
 }
+
+// 状態の保存と復元。字の絵（m_cgrom）は ROM なので入れない
+void hd44780_device::state(state_io &s)
+{
+	s.tag("lcd");
+	s.v(m_now); s.v(m_busy_until);
+	s.arr(m_render_buf); s.arr(m_ddram); s.arr(m_cgram);
+	s.v(m_ac); s.v(m_active_ram); s.v(m_direction); s.v(m_disp_shift);
+	s.v(m_num_line); s.v(m_char_size); s.v(m_data_len);
+	s.v(m_shift_on); s.v(m_display_on); s.v(m_cursor_on); s.v(m_blink_on);
+	s.v(m_nibble); s.v(m_ir); s.v(m_dr);
+}

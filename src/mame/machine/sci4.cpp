@@ -359,3 +359,16 @@ TIMER_CALLBACK_MEMBER(sci4_device::rx_tick)
 }
 
 DEFINE_DEVICE_TYPE(SCI4, sci4_device, "sci4", "Yamaha SCI4 quad-serial gate array")
+
+void sci4_device::state(state_io &s)
+{
+	s.tag("sci4");
+	s.stdarr(m_rx);
+	s.stdarr(m_enable); s.stdarr(m_status); s.stdarr(m_datamode);
+	s.stdarr(m_div); s.stdarr(m_cur_rx);
+	s.stdarr(m_tdr); s.stdarr(m_tsr); s.stdarr(m_tdr_full);
+	s.stdarr(m_tx_step); s.stdarr(m_tx_active);
+	s.stdarr(m_rdr); s.stdarr(m_rsr); s.stdarr(m_rdr_full);
+	s.stdarr(m_rx_step); s.stdarr(m_rx_active);
+	s.v(m_targets);
+}

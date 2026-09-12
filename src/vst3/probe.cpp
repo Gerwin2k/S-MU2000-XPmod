@@ -369,18 +369,71 @@ int run_torture(IPluginFactory *fac, const TUID cid)
 		}
 		std::printf("OK: setActive/setProcessing を 20 往復しながら process\n");
 
-		// getState / setState
-		mem_stream st;
-		if (c->getState(&st) != kResultOk) { std::printf("NG: getState\n"); bad++; }
-		st.rewind();
-		if (c->setState(&st) != kResultOk) { std::printf("NG: setState\n"); bad++; }
-		std::printf("OK: getState %zu バイト -> setState\n", st.size());
-
 		p->setProcessing(false);
 		c->setActive(false);
 		c->terminate();
 		p->release();
 		c->release();
+	}
+
+	// 3.5 状態の保存と復元。**新しい個体**でやる。使い回すと起動の途中で
+	// 止められていたりして、機械の中身が入らない
+	{
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		IAudioProcessor *p = nullptr;
+		if (c) c->queryInterface(IAudioProcessor::iid.toTUID(), (void **)&p);
+		if (c && p) {
+			c->initialize(nullptr);
+			ProcessSetup su{};
+			su.processMode = kRealtime;
+			su.symbolicSampleSize = kSample32;
+			su.maxSamplesPerBlock = 512;
+			su.sampleRate = 44100.0;
+			p->setupProcessing(su);
+			c->setActive(true);
+			p->setProcessing(true);
+
+			std::vector<float> l(512), rr(512);
+			float *ch[2] = { l.data(), rr.data() };
+			AudioBusBuffers ab{};
+			ab.numChannels = 2; ab.channelBuffers32 = ch;
+			ProcessData pd{};
+			pd.symbolicSampleSize = kSample32;
+			pd.numOutputs = 1; pd.outputs = &ab;
+			pd.numSamples = 512;
+
+			mem_stream st;
+			for (int t = 0; t < 300; t++) {
+				for (int i = 0; i < 20; i++)
+					p->process(pd);
+				st = mem_stream();
+				if (c->getState(&st) != kResultOk)
+					break;
+				if (st.size() >= 1000)
+					break;
+				Sleep(50);
+			}
+			if (st.size() < 1000) {
+				std::printf("NG: getState が %zu バイトしかない"
+				            "（機械の中身が入っていない）\n", st.size());
+				bad++;
+			} else {
+				st.rewind();
+				if (c->setState(&st) != kResultOk) {
+					std::printf("NG: setState\n");
+					bad++;
+				} else {
+					std::printf("OK: 状態を %zu バイトで保存して読み戻した\n", st.size());
+				}
+			}
+			p->setProcessing(false);
+			c->setActive(false);
+			c->terminate();
+		}
+		if (p) p->release();
+		if (c) c->release();
 	}
 
 	// 4. パラメータの問い合わせを全部

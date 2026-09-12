@@ -200,3 +200,11 @@ void sh_cmt_device::cnt_update(int clk, u64 current_time)
 		m_cnt[clk] = m_cor[clk] - ((delta - 1) >> (3 + 2*BIT(m_csr[clk], 0, 2)));
 	}
 }
+
+void sh_cmt_device::state(state_io &s)
+{
+	s.tag("cmt");
+	s.stdarr(m_next_event);
+	s.v(m_str);
+	s.stdarr(m_csr); s.stdarr(m_cnt); s.stdarr(m_cor);
+}

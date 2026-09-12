@@ -507,6 +507,9 @@ public:
 	u64   expire_cycles() const { return m_expire; }
 	void  fire() { m_expire = ~u64(0); if (m_cb) m_cb(m_param); }
 
+	// 状態の保存と復元。呼び先（m_cb）は組み立て直せるので写さない
+	template <typename IO> void state_sync(IO &s) { s.v(m_expire); s.v(m_param); }
+
 private:
 	running_machine *m_machine;
 	std::function<void(s32)> m_cb;
@@ -646,6 +649,21 @@ public:
 			m_cycles = due->expire_cycles();
 			due->fire();
 		}
+	}
+
+	// 状態の保存と復元。時計とタイマの予定を写す。
+	// タイマは生まれた順に並んでいるので、番号で対応が取れる
+	template <typename IO> void state_sync(IO &s)
+	{
+		s.tag("mach");
+		s.v(m_rand_seed);
+		s.v(m_cycles);
+		u32 n = u32(m_timers.size());
+		s.v(n);
+		if (n != m_timers.size())
+			return;                       // 数が違う。読み手が食い違いを見る
+		for (auto &t : m_timers)
+			t->state_sync(s);
 	}
 
 private:

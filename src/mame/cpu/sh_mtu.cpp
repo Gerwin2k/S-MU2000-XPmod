@@ -527,3 +527,23 @@ void sh_mtu_channel_device::update_counter(u64 cur_time)
 		exit(1);
 	}
 }
+
+void sh_mtu_device::state(state_io &s)
+{
+	s.tag("mtu");
+	s.v(m_tstr); s.v(m_tsyr); s.v(m_toer); s.v(m_tocr); s.v(m_tgcr);
+	s.v(m_tcdr); s.v(m_tddr); s.v(m_tcnts); s.v(m_tcbr);
+}
+
+void sh_mtu_channel_device::state(state_io &s)
+{
+	s.tag("mtuch");
+	s.v(m_tgr_clearing);
+	s.v(m_tcr); s.v(m_tmdr); s.v(m_tior); s.v(m_tier); s.v(m_tsr);
+	s.v(m_clock_type); s.v(m_clock_divider);
+	s.v(m_tcnt);
+	s.stdarr(m_tgr);
+	s.v(m_last_clock_update); s.v(m_event_time);
+	s.v(m_phase); s.v(m_counter_cycle);
+	s.v(m_counter_incrementing); s.v(m_channel_active);
+}

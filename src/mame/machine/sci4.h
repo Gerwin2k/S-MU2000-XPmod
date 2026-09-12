@@ -9,11 +9,15 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 class sci4_device : public device_t
 {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	sci4_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock = 8000000);
 
 	// sci port numbers are 0..2 and 30..33

@@ -74,12 +74,27 @@ public:
 	// 再生位置が飛んだ、止まった等。変換器の中身だけ捨てる
 	void flush_resampler();
 
+	// ---- 状態の保存と復元（DAW のプロジェクトに音色を覚えさせる）
+	//
+	// 音を作っている最中は、機械に触れるのは音声スレッドだけ。だから
+	// **頼んでおいて音声スレッドに作らせる**。止まっていればその場でやる。
+	// 音声スレッドを待たせない（doc/design.md）
+	void set_processing(bool on) { m_processing.store(on, std::memory_order_release); }
+	std::vector<uint8_t> save_state();
+	bool load_state(const uint8_t *p, size_t n);
+
 private:
 	void boot();
+	void serve_state();          // 音声スレッドで頼み事を片づける
 	void one_sample(float &l, float &r);
 	void build_table();
 
 	std::atomic<status> m_state{status::loading};
+	std::atomic<bool> m_processing{false};
+	std::atomic<int>  m_save_req{0};        // 0 なし / 1 頼んだ / 2 できた
+	std::atomic<int>  m_load_req{0};
+	std::vector<uint8_t> m_save_buf, m_load_buf;
+	std::atomic<uint64_t> m_fill_tick{0};   // fill() が回っているかを見る
 	std::thread         m_thread;
 	std::atomic<bool>   m_abort{false};
 

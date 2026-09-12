@@ -14,12 +14,16 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 class sh7042_device;
 
 class sh_port16_device : public device_t {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	sh_port16_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock = 0);
 	template<typename T> sh_port16_device(const machine_config &mconfig, const char *tag, device_t *owner, T &&cpu, int index, u16 default_io, u16 mask) :
 		sh_port16_device(mconfig, tag, owner)
@@ -47,6 +51,9 @@ protected:
 
 class sh_port32_device : public device_t {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	sh_port32_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock = 0);
 	template<typename T> sh_port32_device(const machine_config &mconfig, const char *tag, device_t *owner, T &&cpu, int index, u32 default_io, u32 mask) :
 		sh_port32_device(mconfig, tag, owner)

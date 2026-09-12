@@ -395,3 +395,11 @@ void sh2_device::sh2_exception_internal(const char *message, int irqline, int ve
 // S-MU2000: ここから末尾までの 295 行を削除した。
 // func_fastirq / static_generate_entry_point / generate_update_cycles /
 // static_generate_memory_accessor はすべて DRC 専用。
+
+void sh2_device::state(state_io &s)
+{
+	s.tag("sh2");
+	sh_common_execution::state(s);
+	s.v(m_test_irq); s.v(m_internal_irq_vector); s.v(m_nmi_line_state);
+	s.v(m_cpu_off); s.arr(m_irq_line_state);
+}

@@ -1876,3 +1876,14 @@ void sh_common_execution::execute_one(const uint16_t opcode)
 // S-MU2000: ここから末尾までの 2252 行を削除した。
 // すべて DRC（動的再コンパイラ）の生成コードと、そこからしか呼ばれない
 // cfunc_*/func_* ヘルパ。インタプリタ経路 execute_one() は上に残っている。
+
+void sh_common_execution::state(state_io &s)
+{
+	s.tag("shcore");
+	s.v(*m_sh2_state);          // まるごと。POD なのでそのまま写せる
+	s.v(m_pcfsel);
+	// **これが要る**。周辺（タイマ、SCI、ADC）はこの数を今の時刻として
+	// 見ているので、写し忘れると戻した瞬間から予定が全部ずれる
+	s.v(m_total_cycles);
+	s.v(m_cycles_this_run);
+}

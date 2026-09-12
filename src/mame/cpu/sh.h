@@ -7,6 +7,7 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層とバスを使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 #include "../../compat/membus.h"
 
@@ -98,6 +99,9 @@ class sh_common_execution : public device_t
 {
 
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	// Data that needs to be stored close to the generated DRC code
 	struct internal_sh2_state
 	{

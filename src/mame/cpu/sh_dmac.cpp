@@ -113,3 +113,15 @@ void sh_dmac_channel_device::chcr_w(offs_t, u32 data, u32 mem_mask)
 	COMBINE_DATA(&m_chcr);
 	logerror("chcr_w %08x\n", m_chcr);
 }
+
+void sh_dmac_device::state(state_io &s)
+{
+	s.tag("dmac");
+	s.v(m_dmaor);
+}
+
+void sh_dmac_channel_device::state(state_io &s)
+{
+	s.tag("dmach");
+	s.v(m_sar); s.v(m_dar); s.v(m_dmatcr); s.v(m_chcr);
+}

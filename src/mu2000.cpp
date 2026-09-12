@@ -715,3 +715,95 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	left  = lm;
 	right = rm;
 }
+
+// ---- 状態の保存と復元
+//
+// ROM（プログラム・波形・sin 表・字の絵）は入れない。戻すときは同じものを
+// 積んでおくこと。調べもの用の数え上げも入れない。
+
+namespace {
+
+// 保存の形。中身の並びを変えたら上げる
+constexpr u32 STATE_MAGIC   = 0x554d3253;   // "S2MU"
+constexpr u32 STATE_VERSION = 2;   // 2: MIDI の入口が A/B の 2 口になった
+
+} // namespace
+
+void mu2000::state(state_io &s)
+{
+	s.tag("mu2000");
+	m_machine.state_sync(s);
+
+	// 主記憶。番地の割り振りは build_bus() と同じ
+	s.mem(m_ram.data(),     m_ram.size());
+	s.mem(m_dram.data(),    m_dram.size());
+	s.mem(m_iram.data(),    m_iram.size());
+	s.mem(m_sampram.data(), m_sampram.size());
+
+	if (m_cpu)  m_cpu->state(s);
+	m_swpm.state(s);
+	m_swps.state(s);
+	m_lcd.state(s);
+	if (m_sci4) m_sci4->state(s);
+
+	s.tag("panel");
+	s.v(m_ledsw1); s.v(m_ledsw2); s.arr(m_sws);
+	s.v(m_enc_pending); s.v(m_enc_high); s.v(m_pe);
+	s.arr(m_sci_irq);
+	s.v(m_cycle_debt);
+	// **前のサンプルからのはみ出し**。これが無いと、戻した直後の 1 サンプルで
+	// CPU の回す量が数サイクルずれる
+	s.v(m_overrun);
+
+	// 受け取り途中の MIDI。A と B の 2 口ぶん
+	s.tag("midi");
+	for (midi_line &m : m_midi) {
+		u32 n = u32(m.queue.size());
+		s.v(n);
+		if (s.writing()) {
+			for (u8 b : m.queue)
+				s.v(b);
+		} else {
+			m.queue.clear();
+			for (u32 i = 0; i < n && s.ok(); i++) {
+				u8 b = 0;
+				s.v(b);
+				m.queue.push_back(b);
+			}
+		}
+		s.v(m.bit); s.v(m.cur); s.v(m.next);
+	}
+}
+
+std::vector<u8> mu2000::save_state() const
+{
+	std::vector<u8> out;
+	state_io s(out);
+	u32 magic = STATE_MAGIC, ver = STATE_VERSION;
+	s.v(magic);
+	s.v(ver);
+	const_cast<mu2000 *>(this)->state(s);
+	return out;
+}
+
+bool mu2000::load_state(const u8 *p, size_t n, std::string &err)
+{
+	state_io s(p, n);
+	u32 magic = 0, ver = 0;
+	s.v(magic);
+	s.v(ver);
+	if (!s.ok() || magic != STATE_MAGIC) {
+		err = "これは S-MU2000 の状態ではない";
+		return false;
+	}
+	if (ver != STATE_VERSION) {
+		err = "状態の形が違う（この版では読めない）";
+		return false;
+	}
+	state(s);
+	if (!s.ok()) {
+		err = s.error();
+		return false;
+	}
+	return true;
+}

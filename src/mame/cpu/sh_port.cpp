@@ -120,3 +120,15 @@ void sh_port32_device::io_w(offs_t, u32 data, u32 mem_mask)
 		m_cpu->do_write_port32(m_index, m_dr & m_io, m_io);
 }
 
+
+void sh_port16_device::state(state_io &s)
+{
+	s.tag("port16");
+	s.v(m_dr); s.v(m_io);
+}
+
+void sh_port32_device::state(state_io &s)
+{
+	s.tag("port32");
+	s.v(m_dr); s.v(m_io);
+}

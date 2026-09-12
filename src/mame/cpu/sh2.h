@@ -18,6 +18,7 @@
 #pragma once
 
 // S-MU2000: MAME 本体の代わりに互換層を使う
+#include "state.h"
 #include "../../compat/mamecompat.h"
 
 #include "sh.h"
@@ -25,6 +26,9 @@
 class sh2_device : public sh_common_execution
 {
 public:
+	// 状態の保存と復元（src/state.h）
+	void state(state_io &s);
+
 	void set_frt_input(int state) {} // not every CPU needs this, let the ones that do override it
 
 

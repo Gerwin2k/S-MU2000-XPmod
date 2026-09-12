@@ -340,3 +340,16 @@ int sh_adc_device::get_channel_index(int count)
 {
 	abort();
 }
+
+void sh_adc_device::state(state_io &s)
+{
+	s.tag("adc");
+	s.arr(m_addr); s.arr(m_buf);
+	s.v(m_adcsr); s.v(m_adcr);
+	s.v(m_trigger); s.v(m_start_mode); s.v(m_start_channel);
+	s.v(m_end_channel); s.v(m_start_count);
+	s.v(m_suspend_on_interrupt); s.v(m_analog_power_control);
+	s.v(m_mode); s.v(m_channel); s.v(m_count);
+	s.v(m_analog_powered); s.v(m_adtrg);
+	s.v(m_next_event);
+}
