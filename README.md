@@ -4,6 +4,10 @@ Yamaha MU2000 のソフトウェア音源。DAW に挿して使えることを�
 
 **現在の状態: VST3 として DAW に挿して鳴る。実機のフロントパネル風の画面が付いた。**
 
+作りかけを晒しながら進めている。X では `#S_MU2000`。
+
+> ヤマハとは無関係の非公式なプロジェクト。Yamaha・MU2000・XG はヤマハ株式会社の商標。
+
 実機の firmware をそのまま走らせ、MIDI を受けて発音する。2 分半の実曲を
 MAME の録音と突き合わせて、発音指示 2851 件すべてが一致、振幅も 88.7% の
 区間で 10% 以内に収まっている。実時間再生の CPU 使用率はおよそ 38%。
@@ -106,10 +110,18 @@ MSYS2 / MinGW-w64 の g++ を想定している。C++20 が要る。
 | `src/mame/sound/swp30.*` | MAME `src/devices/sound/swp30.*` — Olivier Galibert |
 | `src/mame/cpu/sh*` | MAME `src/devices/cpu/sh/` |
 | `src/mame/machine/sci4.*` | MAME `src/devices/machine/sci4.*` |
+| `src/mame/video/hd44780.*` | MAME `src/devices/video/hd44780.*` — Sandro Ronco |
 | `src/mame/ymmu2000.cpp` | MAME `src/mame/yamaha/ymmu2000.cpp` |
 
+`src/mame/cpu/sh*` は Olivier Galibert と David Haywood、パネルの絵
+（`art/mame/`）は hap と Felipe Sanches（CC0-1.0）。取り込んだ側の改変には
+`S-MU2000:` の印を付けてある。
+
 取り込み元は MAME 0.289 相当（master 2026-09-06、コミット `1fb001f9`）。
-MAME 本体はリンクしない（GPL のため）。
+MAME 本体はリンクしない（GPL のため）。VST3 は口の定義（MIT）だけを使い、
+GPLv3 と Steinberg 独自ライセンスの二択になる SDK 本体は使っていない。
+
+配るときに添えるものは [NOTICE.txt](NOTICE.txt) にまとめてある。
 
 VST3 のインターフェース定義（`third_party/vst3/pluginterfaces`）は Steinberg の
 ものだが **MIT** で配られている。GPLv3 の `public.sdk` は使っていないので、

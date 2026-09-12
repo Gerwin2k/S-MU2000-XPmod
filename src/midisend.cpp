@@ -1,3 +1,5 @@
+// license:BSD-3-Clause
+//
 // MIDI ファイルを Windows の MIDI 出力へ実時間で流す。
 //
 //   midisend --list                   MIDI 出力の一覧

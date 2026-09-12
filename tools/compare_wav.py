@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# license:BSD-3-Clause
 """二つの WAV を突き合わせる。
 
 移植の確かめに使う。MAME に鳴らさせたものと、こちらが鳴らしたものを並べて、

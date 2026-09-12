@@ -1,3 +1,4 @@
+# license:BSD-3-Clause
 # エフェクトの番地を確かめるための MIDI を組む。
 # 出来た .mid を render.exe に通し、doc/effects.md のやり方で波形を測る。
 #

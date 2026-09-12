@@ -4,3 +4,8 @@ build/
 *.exe
 *.wav
 roms/
+
+# 同じところで MAME を走らせたときに出るもの
+cfg/
+nvram/
+snap/

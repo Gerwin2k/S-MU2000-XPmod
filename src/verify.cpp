@@ -1,3 +1,5 @@
+// license:BSD-3-Clause
+//
 // 移植が成立しているかの最小確認
 #include "mame/sound/swp30.h"
 #include <cstdio>

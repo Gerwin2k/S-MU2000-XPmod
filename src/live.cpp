@@ -1,3 +1,5 @@
+// license:BSD-3-Clause
+//
 // Windows の MIDI 入力を受けて、そのまま音を鳴らす。
 //
 //   live --list                          MIDI 入力の一覧

@@ -1,3 +1,5 @@
+// license:BSD-3-Clause
+//
 // MIDI ファイルを食わせて WAV に書き出す。
 //
 //   render <rom ディレクトリ> <MIDI ファイル> <出力 wav> [秒数]

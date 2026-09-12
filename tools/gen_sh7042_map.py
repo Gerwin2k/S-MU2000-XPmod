@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# license:BSD-3-Clause
 """MAME の sh7042_device::map() から、内蔵周辺のレジスタ振り分けを生成する。
 
 MAME は address_map にレジスタを並べ、メモリ機構が幅とマスクを面倒みてくれる。
@@ -138,6 +139,9 @@ def write_expr(table, a, data, mask):
 def emit(table, ram):
     addr_lo, addr_hi = min(table), max(table)
     o = []
+    o.append("// license:BSD-3-Clause")
+    o.append("// copyright-holders:Olivier Galibert")
+    o.append("//")
     o.append("// このファイルは tools/gen_sh7042_map.py が生成した。手で直さないこと。")
     o.append("// 元は MAME の sh7042_device::map()。")
     o.append("//")

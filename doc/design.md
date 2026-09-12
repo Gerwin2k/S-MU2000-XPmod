@@ -30,6 +30,7 @@ MAME 全体は GPL だが、**必要な個々のデバイス実装はすべて B
 | `src/mame/sound/swp30.*` | MAME `src/devices/sound/` | BSD-3-Clause (Olivier Galibert) |
 | `src/mame/cpu/sh*` | MAME `src/devices/cpu/sh/` | BSD-3-Clause |
 | `src/mame/machine/sci4.*` | MAME `src/devices/machine/` | BSD-3-Clause |
+| `src/mame/video/hd44780.*` | MAME `src/devices/video/` | BSD-3-Clause (Sandro Ronco) |
 | `src/mame/ymmu2000.cpp` | MAME `src/mame/yamaha/` | BSD-3-Clause |
 
 **MAME 本体をリンクしてはいけない**（GPL 汚染で VST として配布できなくなる）。

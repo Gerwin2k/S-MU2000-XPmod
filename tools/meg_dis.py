@@ -1,3 +1,4 @@
+# license:BSD-3-Clause
 # SWP30 の MEG（エフェクト DSP）のプログラムを人の読める形にする。
 #
 #   build/render.exe roms 曲.mid out.wav 20 --dump-meg meg

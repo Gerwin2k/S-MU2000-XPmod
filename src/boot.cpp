@@ -1,3 +1,5 @@
+// license:BSD-3-Clause
+//
 // 起動の確認。ROM を読ませて CPU を走らせ、どこまで行くかを見る。
 //
 //   boot <rom ディレクトリ> [サイクル数] [--trace-swp <出力先>]

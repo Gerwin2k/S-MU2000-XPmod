@@ -1,3 +1,6 @@
+// license:BSD-3-Clause
+// copyright-holders:Olivier Galibert
+//
 // このファイルは tools/gen_sh7042_map.py が生成した。手で直さないこと。
 // 元は MAME の sh7042_device::map()。
 //

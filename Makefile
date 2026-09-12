@@ -130,6 +130,9 @@ $(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
 	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt
 	@mkdir -p $(VST3_DIR)/Contents/Resources
 	@cp -f doc/vst3-readme.txt $(VST3_DIR)/Contents/Resources/README.txt 2>/dev/null || true
+	# 取り込んだものの著作権表示。BSD-3 はバイナリで配るときも添えろと言っている
+	@cp -f LICENSE $(VST3_DIR)/Contents/Resources/LICENSE.txt
+	@cp -f NOTICE.txt $(VST3_DIR)/Contents/Resources/NOTICE.txt
 
 # 既定の置き場へ入れる。管理者権限が要ることがある
 VST3_INSTALL ?= $(PROGRAMFILES)/Common Files/VST3
