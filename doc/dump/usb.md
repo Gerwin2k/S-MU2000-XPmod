@@ -7,6 +7,24 @@ DIN の MIDI ケーブルも MIDI インターフェースも不要。
 書き出した 4 ファイルは MAME 登録のハッシュと一致し、**MIDI 版で吸ったものとも
 1 バイト残らず一致**した（独立した 2 経路での相互検証）。
 
+**ダンパを組み立てる**（`build/usbdump64.ydl` は配らない。純正ファームを
+含むので、各自の手元で作る）。土台の `roms/mu2000_flash.bin` は
+[rom-dump.md](rom-dump.md) の手順で純正アップデータから復元したもの。
+
+```bash
+python tools/dump/build_firmware.py --module usbdump --words 64 \
+       --base roms/mu2000_flash.bin -o build/firmware_usbdump64.bin
+python tools/dump/make_ydl.py --image build/firmware_usbdump64.bin \
+       --ref roms/updater/x/mu2r1_uw/part2/images/v200u22k.ydl \
+       -o build/usbdump64.ydl
+```
+
+`build_firmware.py` が中で `make_usbdump.py` を呼ぶので、ダンパ本体を別に
+作る必要はない。`make_ydl.py` は純正の `.ydl` を雛形にして、コマンド列と
+デルタタイムをそのまま流用し中身だけ差し替える。
+
+**書き込んで吸う。**
+
 ```bash
 python tools/dump/stage_ydl.py build/usbdump64.ydl
 build/upgrade_dumper/Upgrade.exe                      # 約 12 分

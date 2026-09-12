@@ -29,12 +29,26 @@ python tools/dump/ydl_extract.py part1/images/v200U12k.ydl part2/images/v200u22k
 **自作のファームウェアを実機に書き込む。** 手順は [usb.md](usb.md)。
 
 ```bash
+# ダンパを組み立てる。自分の roms/mu2000_flash.bin を土台にする
+python tools/dump/build_firmware.py --module usbdump --words 64 \
+       --base roms/mu2000_flash.bin -o build/firmware_usbdump64.bin
+python tools/dump/make_ydl.py --image build/firmware_usbdump64.bin \
+       --ref roms/updater/x/mu2r1_uw/part2/images/v200u22k.ydl \
+       -o build/usbdump64.ydl
+
+# 書き込んで吸う
 python tools/dump/stage_ydl.py build/usbdump64.ydl
 build/upgrade_dumper/Upgrade.exe                        # 約 12 分
 python tools/dump/recv_dump.py --port "Yamaha MU2000-1" --prime-port "Yamaha MU2000-1" \
        --words-per-block 64 --out roms/dump             # 約 36 分
 python tools/dump/verify_roms.py roms/dump
 ```
+
+**ダンパの .ydl は配っていない。** 中身は純正ファームウェア + 自作の
+ダンパなので、ヤマハのファームを再配布することになってしまう。上のように
+自分の手元で組み立てる。組み上がったものが正しいことは、この repo の
+スクリプトだけで作った `.ydl` が実績のあるものと 1 バイトも違わないことで
+確かめてある。
 
 ### 先に読んでほしいこと
 
