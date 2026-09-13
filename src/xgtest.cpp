@@ -351,6 +351,21 @@ int main(int argc, char **argv)
 		}
 		std::printf("RAM と問い合わせの一致: %d 個、食い違い %d\n", n, diff);
 		bad += diff;
+
+		// インサーションのパラメータ 1-10（2 バイトの 30-43）は、RAM では塊の +0x18 から 16bit の数。
+		// ディレイの時間のように 128 を超える値で確かめる。インサーション 3 を DELAY LCR にして Rch Delay を 1234 に
+		g.send({ 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x02, 0x00, 0x05, 0x00, 0xf7 });
+		g.pump(200);
+		g.send({ 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x02, 0x32, u8(1234 >> 7), u8(1234 & 0x7f), 0xf7 });
+		g.pump(200);
+		const std::vector<u8> &rv = g.mu.nvram();
+		const u32 at = xg::ram::INS_BLOCK[2] + xg::ram::INS_WIDE + 2;
+		const int wide = rv[at] << 8 | rv[at + 1];
+		std::printf("インサーションの 2 バイトのパラメータが RAM の 16bit の数に入るか: %s（%d）\n", wide == 1234 ? "合" : "違", wide);
+		if (wide != 1234) {
+			bad++;
+			problems.push_back("インサーションの 2 バイトのパラメータの RAM の位置");
+		}
 	}
 
 	for (const std::string &s : problems)
