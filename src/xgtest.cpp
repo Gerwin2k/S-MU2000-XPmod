@@ -185,6 +185,36 @@ int main(int argc, char **argv)
 				}
 			}
 		}
+		// システムとエフェクトの塊も（エフェクトの面はこれで読む）
+		const u32 BLOCKS[] = { xg::pack(0x00, 0x00, 0x00), xg::pack(0x02, 0x01, 0x00), xg::pack(0x02, 0x01, 0x20),
+		                       xg::pack(0x02, 0x01, 0x40), xg::pack(0x03, 0x00, 0x00), xg::pack(0x03, 0x01, 0x00) };
+		for (u32 blk : BLOCKS) {
+			xg::model dumped;
+			g.send(xg::dump_request(blk));
+			const u64 until = g.samples + RATE / 2;
+			for (; g.samples < until; g.samples++) {
+				g.mu.run_sample(l, r);
+				u8 b;
+				while (g.mu.midi_out_take(b))
+					dumped.feed(b);
+			}
+			for (const xg::param &p : xg::params()) {
+				// 02 01 は 20 ずつの 3 塊（リバーブ・コーラス・バリエーション）に分かれている
+				const u32 at = xg::address(p);
+				if (p.where == xg::area::part || at < blk || at - blk >= 0x20)
+					continue;
+				int a = 0, b = 0;
+				const bool in_dump = dumped.get(p, 0, a);
+				const bool single = g.ask(p, 0, b);
+				n++;
+				if (!in_dump || !single || a != b) {
+					diff++;
+					problems.push_back(label(p, 0) + ": ダンプ " +
+					                   (in_dump ? std::to_string(a) : "無し") + " / 問い合わせ " +
+					                   (single ? std::to_string(b) : "無し"));
+				}
+			}
+		}
 		std::printf("ダンプと問い合わせの一致: %d 個、食い違い %d\n", n, diff);
 		bad += diff;
 	}
@@ -245,6 +275,34 @@ int main(int argc, char **argv)
 		if (!bank_ok) {
 			bad++;
 			problems.push_back("model::set のバンク");
+		}
+
+		// 書く前に頼んだ読み返しが、書いた後に届いても、書いた値が残るか。
+		// つまみを回している最中に古い値へ戻って見えないためのもの
+		const xg::param *pan = xg::find("part.pan");
+		const u64 t0 = g.now_ms();
+		m.want_part(0);
+		g.send(m.poll(t0));                     // 頼む（音源はまだ今の値で答える）
+		g.send(m.set(*pan, 0, 20));             // 返事が来る前に書く
+		for (int t = 0; t < 10; t++) {
+			const u64 until = g.samples + RATE / 100;
+			for (; g.samples < until; g.samples++) {
+				g.mu.run_sample(l, r);
+				u8 b;
+				while (g.mu.midi_out_take(b))
+					m.feed(b);
+			}
+			g.send(m.poll(g.now_ms()));
+		}
+		int seen = -1, actual = -1;
+		m.get(*pan, 0, seen);
+		g.ask(*pan, 0, actual);
+		const bool pin_ok = seen == 20 && actual == 20;
+		std::printf("読み返しと書き込みが行き違っても書いた値が残るか: %s（写し %d / 音源 %d）\n",
+		            pin_ok ? "合" : "違", seen, actual);
+		if (!pin_ok) {
+			bad++;
+			problems.push_back("読み返しと書き込みの行き違い");
 		}
 	}
 

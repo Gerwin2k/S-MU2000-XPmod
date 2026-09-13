@@ -429,6 +429,7 @@ void engine::fill(float *left, float *right, int n)
 	if (m_direct) {
 		for (int i = 0; i < n; i++)
 			one_sample(left[i], right[i]);
+		m_drv.pump_out(*m_mu, m_bridge);
 		m_drv.publish(*m_mu, m_bridge, u32(n), u32(NATIVE_RATE), true, nullptr);
 		return;
 	}
@@ -464,6 +465,8 @@ void engine::fill(float *left, float *right, int n)
 		m_pos += m_step;
 	}
 
+	// firmware が MIDI OUT から送り出したもの（画面の問い合わせの返事）
+	m_drv.pump_out(*m_mu, m_bridge);
 	m_drv.publish(*m_mu, m_bridge, u32(n), u32(NATIVE_RATE), true, nullptr);
 
 	// 桁が落ちる前に原点を戻す。RING の倍数だけずらせば環の並びは変わらない

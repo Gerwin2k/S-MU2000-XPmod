@@ -189,9 +189,9 @@ struct engine {
 			out[i * 2 + 1] = s16(r < -32768 ? -32768 : r > 32767 ? 32767 : r);
 		}
 
-		// firmware が送り出したもの。出口が無くても取り出しておく（溜めを空ける）
-		while (mu.midi_out_take(b))
-			if (mout_mu) mout_mu->send(b);
+		// firmware が送り出したもの。画面（パラメータの層）と MIDI OUT の口へ。
+		// 出口が無くても取り出しておく（溜めを空ける）
+		drv.pump_out(mu, br, [this](u8 v) { if (mout_mu) mout_mu->send(v); });
 
 		drv.publish(mu, br, n, RATE, true, nullptr);
 		in_fill.store(false);

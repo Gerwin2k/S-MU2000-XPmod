@@ -257,7 +257,16 @@ void model::store(u32 addr, const u8 *data, size_t n)
 		const u32 lo = (addr & 0x7f) + u32(i);
 		if (lo > 0x7f)
 			break;
-		m_bytes[pack(hi, mid, u8(lo))] = data[i] & 0x7f;
+		const u32 a = pack(hi, mid, u8(lo));
+		if (!m_pinned.empty()) {
+			const auto pin = m_pinned.find(a);
+			if (pin != m_pinned.end()) {
+				if (m_now - pin->second < PIN_MS)
+					continue;                // 書いたばかり。こちらの値が新しい
+				m_pinned.erase(pin);
+			}
+		}
+		m_bytes[a] = data[i] & 0x7f;
 	}
 	if (m_waiting && addr == m_wait_addr) {
 		m_waiting = false;
@@ -289,8 +298,10 @@ std::vector<u8> model::set(const param &p, int part, int value)
 	const u32 a = address(p, part);
 	u8 data[8] = {};
 	encode(p, value, data);
-	for (int i = 0; i < p.size; i++)
+	for (int i = 0; i < p.size; i++) {
 		m_bytes[a + u32(i)] = data[i];
+		m_pinned[a + u32(i)] = m_now;
+	}
 	std::vector<u8> out = param_change(p, part, value);
 	// バンクはプログラムを書くまで効かない。写しに今のプログラムがあれば続けて送る。
 	// 無ければバンクだけ送る（次にプログラムを選んだときに効く）
@@ -315,6 +326,7 @@ void model::want_dump(u32 addr)
 
 std::vector<u8> model::poll(u64 now_ms)
 {
+	m_now = now_ms;
 	// 頼んだ返事がまだ。塊 1 つは 31250bps の線で 20ms もかからないが、
 	// firmware が手を離せないこともあるので 400ms 待ってから 1 回だけ頼み直す
 	if (m_waiting) {
@@ -342,13 +354,16 @@ std::vector<u8> model::poll(u64 now_ms)
 void model::forget(const param &p, int part)
 {
 	const u32 a = address(p, part);
-	for (int i = 0; i < p.size; i++)
+	for (int i = 0; i < p.size; i++) {
 		m_bytes.erase(a + u32(i));
+		m_pinned.erase(a + u32(i));
+	}
 }
 
 void model::forget()
 {
 	m_bytes.clear();
+	m_pinned.clear();
 	m_queue.clear();
 	m_waiting = false;
 	m_in = false;

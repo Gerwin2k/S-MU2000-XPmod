@@ -40,11 +40,31 @@ public:
 			mu.midi_in(b);
 			echo(b);
 		}
+		// パラメータの層の問い合わせ。外へは流さない
+		while (br.take_ask(b))
+			mu.midi_in(b);
 	}
 
 	void pump_midi(mu2000 &mu, bridge &br)
 	{
 		pump_midi(mu, br, [](u8) {});
+	}
+
+	// ブロックの終わりで。音源が MIDI OUT から送り出したものを画面へ渡す。
+	// echo には外の MIDI OUT の口を渡す
+	template <typename F>
+	void pump_out(mu2000 &mu, bridge &br, F &&echo)
+	{
+		u8 b;
+		while (mu.midi_out_take(b)) {
+			br.put_out(b);
+			echo(b);
+		}
+	}
+
+	void pump_out(mu2000 &mu, bridge &br)
+	{
+		pump_out(mu, br, [](u8) {});
 	}
 
 	// ホイールで回された分をダイヤルへ。実機と同じロータリーエンコーダなので、
@@ -59,6 +79,7 @@ public:
 	void publish(mu2000 &mu, bridge &br, u32 frames, u32 rate,
 	             bool ready, const char *message)
 	{
+		br.advance_clock(frames, rate);
 		m_since += frames;
 		if (m_since < rate / 40)
 			return;

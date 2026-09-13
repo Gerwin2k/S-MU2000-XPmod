@@ -20,6 +20,7 @@
 #include "bridge.h"
 #include "layout.h"
 #include "snapshot.h"
+#include "xg/model.h"
 
 #include <string>
 #include <vector>
@@ -30,12 +31,11 @@ namespace ui {
 
 enum class page { front, editor, effects };
 
-// つまみが何を動かすか。0-127 はそのままコントロールチェンジの番号
+// 触れる場所が何を動かすか
 enum : int {
 	CTL_NONE      = -1,
-	CTL_PROGRAM   = 200,
-	CTL_BANK_MSB  = 201,
-	CTL_PART      = 300,   // +0..15
+	CTL_KNOB      = 200,   // +0..17 エディタのつまみ（editor.cpp の KNOBS の並び）
+	CTL_PART      = 300,   // +0..31
 	CTL_TAB_FRONT = 400,
 	CTL_TAB_EDIT  = 401,
 	CTL_TAB_FX    = 404,
@@ -48,7 +48,6 @@ enum : int {
 	CTL_VAR_TYPE  = 504, CTL_VAR_CONN = 505, CTL_VAR_PART = 506,
 	CTL_INS1_TYPE = 507, CTL_INS1_PART = 508,
 	CTL_INS2_TYPE = 509, CTL_INS2_PART = 510,
-	CTL_FX_SEND   = 511,
 	CTL_FX_FIRST  = 500, CTL_FX_COUNT = 11,
 };
 
@@ -106,6 +105,11 @@ public:
 	bool release(bridge &br);
 	bool wheel_at(int x, int y, int delta, bridge &br);
 
+	// 画面の糸のタイマーから、描く前に呼ぶ。音源の MIDI OUT から返ってきたものを
+	// パラメータの層に読ませ、見えている面の値を問い合わせる。
+	// 戻り値は「新しい値を読んだか」
+	bool tick(bridge &br);
+
 	// 描く。status は下に小さく出す 1 行。無ければ空でよい
 	void paint(HDC dc, const snapshot &s, u64 pressed, const char *status) const;
 
@@ -117,9 +121,7 @@ private:
 	void build_spots();
 	void build_editor_spots();
 	void build_effect_spots();
-	void init_effect_values();
-	void send_all_fx(bridge &br);
-	void init_editor_values();
+	void refresh_soon() { m_refresh_at = 0; }
 
 	void paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	                 const char *status) const;
@@ -134,11 +136,12 @@ private:
 	void draw_tabs(HDC dc) const;
 	void draw_knob(HDC dc, const spot &sp) const;
 	void draw_list(HDC dc, const spot &sp) const;
-	const char *fx_text(int ctl, int v) const;
-	int  fx_limit(int ctl) const;
-	void send_fx(int ctl, bridge &br);
+	std::string fx_text(int ctl) const;
+	void fx_bounds(int ctl, bool &at_min, bool &at_max) const;
+	void step_fx(int ctl, int step, bridge &br);
 
-	int  value_of(int ctl) const;
+	const xg::param *knob_param(int ctl) const;
+	bool value_of(int ctl, int &v) const;
 	void set_value(int ctl, int v, bridge &br);
 
 	int m_w = LOGICAL_W, m_h = LOGICAL_H;
@@ -155,15 +158,12 @@ private:
 	int  m_wheel_angle = 0;
 	double m_volume_now = 1.0;
 
-	// ---- エディタが覚えている値。実機に問い合わせる術がないので、
-	// 「この画面から送った値」を持っておく。SOL2 のエディタと同じ考え方
+	// ---- エディタとエフェクトの面の値。**画面では覚えない**。
+	// 音源に問い合わせた返事をパラメータの層（doc/params.md）が持っていて、
+	// 描くときはそこを読む。パネルや曲が変えた値もそのまま出る
 	int m_part = 0;
-	u8  m_cc[16][128] = {};
-	u8  m_prog[16] = {};
-	u8  m_bank[16] = {};
-
-	// エフェクト面が覚えている値。並びは CTL_FX_FIRST から
-	int m_fx[CTL_FX_COUNT] = {};
+	xg::model m_xg;
+	u64 m_refresh_at = 0;        // 次に見えている面を読み返す時刻（音源の時計）
 
 	HFONT m_font_label = nullptr, m_font_small = nullptr;
 	// 目盛りの番号用。バー 1 本ぶんの幅に 2 桁を収める

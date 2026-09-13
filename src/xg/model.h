@@ -92,7 +92,9 @@ public:
 	// 写しにある値。まだ一度も読んでいなければ false（**決め打ちの初期値は返さない**）
 	bool get(const param &p, int part, int &value) const;
 
-	// 書く。写しをすぐ書き換え、送るバイト（パラメータチェンジ）を返す
+	// 書く。写しをすぐ書き換え、送るバイト（パラメータチェンジ）を返す。
+	// 書いた番地は少しのあいだ、返事で上書きしない。つまみを回している最中に、
+	// 書く前に頼んだ読み返しが届いて古い値へ戻って見えるのを防ぐ
 	std::vector<u8> set(const param &p, int part, int value);
 
 	// 塊の読み返しを頼む。同じものが並んでいれば足さない
@@ -118,7 +120,11 @@ private:
 	void on_sysex();
 	void store(u32 addr, const u8 *data, size_t n);
 
+	static constexpr u64 PIN_MS = 500;       // 書いた番地を返事で上書きしない時間
+
 	std::unordered_map<u32, u8> m_bytes;     // 番地 → 7bit の中身
+	std::unordered_map<u32, u64> m_pinned;   // 番地 → 書いた時刻（poll に渡された時刻で数える）
+	u64 m_now = 0;
 	std::vector<u8> m_msg;
 	bool m_in = false;
 

@@ -6,6 +6,11 @@
 // ここも **音源に手を入れず SysEx を送るだけ**。番地は資料から拾ったのではなく、
 // 送って音を測って確かめた。確かめ方は doc/effects.md に書いてある。
 //
+// 値は画面では覚えない。パラメータの層（xg::model）が音源に問い合わせた返事を読む。
+// 前は「電源投入直後に近いはず」の値を決め打ちしていたが、firmware に聞くと
+// インサーションの種別は DISTORTION、コーラスは CHORUS 1、バリエーションの接続は
+// INSERTION で、決め打ちとは違っていた。
+//
 //   02 01 00  リバーブ種別（MSB, LSB）
 //   02 01 0C  リバーブ リターン
 //   02 01 20  コーラス種別
@@ -61,6 +66,40 @@ const fx_type INS_TYPES[] = {
 
 template <size_t N> constexpr int count_of(const fx_type (&)[N]) { return int(N); }
 
+// 面の欄とパラメータの層の名前
+const char *fx_key(int ctl)
+{
+	switch (ctl) {
+	case CTL_REV_TYPE:  return "reverb.type";
+	case CTL_REV_RET:   return "reverb.return";
+	case CTL_CHO_TYPE:  return "chorus.type";
+	case CTL_CHO_RET:   return "chorus.return";
+	case CTL_VAR_TYPE:  return "variation.type";
+	case CTL_VAR_CONN:  return "variation.connect";
+	case CTL_VAR_PART:  return "variation.part";
+	case CTL_INS1_TYPE: return "insertion1.type";
+	case CTL_INS1_PART: return "insertion1.part";
+	case CTL_INS2_TYPE: return "insertion2.type";
+	case CTL_INS2_PART: return "insertion2.part";
+	default:            return nullptr;
+	}
+}
+
+const xg::param *fx_param(int ctl)
+{
+	const char *k = fx_key(ctl);
+	return k ? xg::find(k) : nullptr;
+}
+
+// 種別の値（MSB × 128 + LSB）が表の何番目か。表に無ければ -1
+int type_index(const fx_type *t, int n, int value)
+{
+	for (int i = 0; i < n; i++)
+		if ((t[i].msb << 7 | t[i].lsb) == value)
+			return i;
+	return -1;
+}
+
 const fx_type *type_table(int ctl, int &n)
 {
 	switch (ctl) {
@@ -99,129 +138,107 @@ constexpr double COL_X = 150;   // 名札の右端
 } // namespace
 
 
-int panel::fx_limit(int ctl) const
+void panel::fx_bounds(int ctl, bool &at_min, bool &at_max) const
 {
-	int n = 0;
-	if (type_table(ctl, n))
-		return n - 1;
-	switch (ctl) {
-	case CTL_VAR_CONN: return 1;              // 0 インサーション / 1 システム
-	case CTL_VAR_PART:
-	case CTL_INS1_PART:
-	case CTL_INS2_PART: return 16;            // 0-15 がパート、16 は掛けない
-	default: return 127;                      // リターン
-	}
-}
-
-const char *panel::fx_text(int ctl, int v) const
-{
-	static char buf[32];
-	int n = 0;
-	if (const fx_type *t = type_table(ctl, n))
-		return t[std::clamp(v, 0, n - 1)].name;
-	if (ctl == CTL_VAR_CONN)
-		return v ? "SYSTEM" : "INSERTION";
-	if (ctl == CTL_VAR_PART || ctl == CTL_INS1_PART || ctl == CTL_INS2_PART) {
-		if (v >= 16) return "OFF";
-		std::snprintf(buf, sizeof(buf), "PART %d", v + 1);
-		return buf;
-	}
-	std::snprintf(buf, sizeof(buf), "%d", v);
-	return buf;
-}
-
-// XG のパラメータチェンジを 1 つ送る
-void panel::send_fx(int ctl, bridge &br)
-{
-	const int v = m_fx[ctl - CTL_FX_FIRST];
-
-	auto send2 = [&](u8 h, u8 m, u8 l, u8 d1, u8 d2) {
-		const u8 msg[10] = { 0xf0, 0x43, 0x10, 0x4c, h, m, l, d1, d2, 0xf7 };
-		br.send(msg, 10);
-	};
-	auto send1 = [&](u8 h, u8 m, u8 l, u8 d) {
-		const u8 msg[9] = { 0xf0, 0x43, 0x10, 0x4c, h, m, l, d, 0xf7 };
-		br.send(msg, 9);
-	};
-
+	at_min = at_max = true;
+	const xg::param *p = fx_param(ctl);
+	int v = 0;
+	if (!p || !m_xg.get(*p, 0, v))
+		return;
 	int n = 0;
 	if (const fx_type *t = type_table(ctl, n)) {
-		const fx_type &sel = t[std::clamp(v, 0, n - 1)];
-		switch (ctl) {
-		case CTL_REV_TYPE:  send2(0x02, 0x01, 0x00, sel.msb, sel.lsb); break;
-		case CTL_CHO_TYPE:  send2(0x02, 0x01, 0x20, sel.msb, sel.lsb); break;
-		case CTL_VAR_TYPE:  send2(0x02, 0x01, 0x40, sel.msb, sel.lsb); break;
-		case CTL_INS1_TYPE: send2(0x03, 0x00, 0x00, sel.msb, sel.lsb); break;
-		case CTL_INS2_TYPE: send2(0x03, 0x01, 0x00, sel.msb, sel.lsb); break;
-		}
+		const int i = type_index(t, n, v);
+		at_min = i == 0;
+		at_max = i == n - 1;
 		return;
 	}
-
-	const u8 part = u8(v >= 16 ? 0x7f : v);
-	switch (ctl) {
-	case CTL_REV_RET:   send1(0x02, 0x01, 0x0c, u8(v)); break;
-	case CTL_CHO_RET:   send1(0x02, 0x01, 0x2c, u8(v)); break;
-	case CTL_VAR_CONN:  send1(0x02, 0x01, 0x5a, u8(v)); break;
-	case CTL_VAR_PART:  send1(0x02, 0x01, 0x5b, part);  break;
-	case CTL_INS1_PART: send1(0x03, 0x00, 0x0c, part);  break;
-	case CTL_INS2_PART: send1(0x03, 0x01, 0x0c, part);  break;
+	if (p->special >= 0) {                     // パート。0-31 の次が OFF
+		at_min = v == p->min;
+		at_max = v == p->special;
+		return;
 	}
+	at_min = v <= p->min;
+	at_max = v >= p->max;
+}
+
+std::string panel::fx_text(int ctl) const
+{
+	const xg::param *p = fx_param(ctl);
+	int v = 0;
+	if (!p || !m_xg.get(*p, 0, v))
+		return "--";
+	int n = 0;
+	if (const fx_type *t = type_table(ctl, n)) {
+		const int i = type_index(t, n, v);
+		if (i >= 0)
+			return t[i].name;
+		// 面の表に無い種別（パネルや曲が選んだもの）。番号で出す
+		char buf[32];
+		std::snprintf(buf, sizeof(buf), "TYPE %02X-%02X", v >> 7, v & 0x7f);
+		return buf;
+	}
+	return xg::format(*p, v);
+}
+
+// 1 つ隣の値へ。パラメータチェンジを 1 つ送る
+void panel::step_fx(int ctl, int step, bridge &br)
+{
+	const xg::param *p = fx_param(ctl);
+	int v = 0;
+	if (!p || !step || !m_xg.get(*p, 0, v))
+		return;                                // 読めていないうちは動かさない
+
+	int next = v;
+	int n = 0;
+	if (const fx_type *t = type_table(ctl, n)) {
+		int i = type_index(t, n, v);
+		if (i < 0) {
+			// 表に無い種別からは、値の並びで隣にあるものへ
+			i = step > 0 ? n : -1;
+			for (int k = 0; k < n; k++) {
+				const int tv = t[k].msb << 7 | t[k].lsb;
+				if (step > 0 && tv > v) { i = k - 1; break; }
+				if (step < 0 && tv < v) i = k + 1;
+			}
+		}
+		i = std::clamp(i + step, 0, n - 1);
+		next = t[i].msb << 7 | t[i].lsb;
+	} else if (p->special >= 0) {
+		// パート 1-32 の次が OFF
+		int i = (v == p->special) ? p->max + 1 : v;
+		i = std::clamp(i + step, p->min, p->max + 1);
+		next = (i > p->max) ? p->special : i;
+	} else {
+		next = std::clamp(v + step, p->min, p->max);
+	}
+	if (next != v)
+		br.send(m_xg.set(*p, 0, next));
 }
 
 
 void panel::draw_list(HDC dc, const spot &sp) const
 {
-	const int v = m_fx[sp.ctl - CTL_FX_FIRST];
 	round_box(dc, sp.r, RGB(40, 43, 48), RGB(88, 93, 100), int(4 * m_scale));
 
 	const int edge = (sp.r.right - sp.r.left) / 6;
 	RECT inner = sp.r;
 	inner.left  += edge;
 	inner.right -= edge;
-	text_in(dc, inner, fx_text(sp.ctl, v), TEXT, m_font_small,
+	const std::string label = fx_text(sp.ctl);
+	text_in(dc, inner, label.c_str(), label == "--" ? TEXT_DIM : TEXT, m_font_small,
 	        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
 	RECT l = sp.r, r = sp.r;
 	l.right = l.left + edge;
 	r.left  = r.right - edge;
-	const bool at_min = (v <= 0), at_max = (v >= fx_limit(sp.ctl));
+	bool at_min, at_max;
+	fx_bounds(sp.ctl, at_min, at_max);
 	text_in(dc, l, "<", at_min ? RGB(80, 84, 90) : ACCENT, m_font_small,
 	        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 	text_in(dc, r, ">", at_max ? RGB(80, 84, 90) : ACCENT, m_font_small,
 	        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-
-// 電源投入直後の実機に近い値。ここを起点にする。
-// **インサーションのパートは既定で OFF**。種別が NO EFFECT のまま
-// パートを割り当てると、そのパートの音が消えてしまう（実測）
-void panel::init_effect_values()
-{
-	m_fx[CTL_REV_TYPE  - CTL_FX_FIRST] = 1;    // HALL 1
-	m_fx[CTL_REV_RET   - CTL_FX_FIRST] = 64;
-	m_fx[CTL_CHO_TYPE  - CTL_FX_FIRST] = 3;    // CHORUS 3
-	m_fx[CTL_CHO_RET   - CTL_FX_FIRST] = 64;
-	m_fx[CTL_VAR_TYPE  - CTL_FX_FIRST] = 0;    // NO EFFECT
-	m_fx[CTL_VAR_CONN  - CTL_FX_FIRST] = 1;    // SYSTEM
-	m_fx[CTL_VAR_PART  - CTL_FX_FIRST] = 16;   // OFF
-	m_fx[CTL_INS1_TYPE - CTL_FX_FIRST] = 0;
-	m_fx[CTL_INS1_PART - CTL_FX_FIRST] = 16;   // OFF
-	m_fx[CTL_INS2_TYPE - CTL_FX_FIRST] = 0;
-	m_fx[CTL_INS2_PART - CTL_FX_FIRST] = 16;   // OFF
-}
-
-// 画面に出ている値を全部送り直す。音源から読み返す術がないので、
-// パネル側で触ったあとに画面と揃えたいときはこれを押す
-void panel::send_all_fx(bridge &br)
-{
-	static const int ORDER[] = {
-		CTL_REV_TYPE, CTL_REV_RET, CTL_CHO_TYPE, CTL_CHO_RET,
-		CTL_VAR_TYPE, CTL_VAR_CONN, CTL_VAR_PART,
-		CTL_INS1_TYPE, CTL_INS1_PART, CTL_INS2_TYPE, CTL_INS2_PART,
-	};
-	for (int c : ORDER)
-		send_fx(c, br);
-}
 
 void panel::build_effect_spots()
 {
@@ -235,9 +252,6 @@ void panel::build_effect_spots()
 			x += row.w[i] + 24;
 		}
 	}
-
-	m_spots.push_back({ spot_kind::action, mu2000::button::count, CTL_FX_SEND,
-		                    scale(150, 340, 150, 24), "この画面を送り直す", "" });
 }
 
 void panel::paint_effects(HDC dc, const char *status) const
@@ -274,7 +288,10 @@ void panel::paint_effects(HDC dc, const char *status) const
 		}
 	}
 
-	text_in(dc, scale(320, 340, 660, 34),
+	text_in(dc, scale(150, 356, 830, 20),
+	        "値は MU2000 に問い合わせて読み返している。パネルや曲で変えたものもここに出る。",
+	        RGB(104, 109, 116), m_font_small, DT_LEFT | DT_TOP | DT_SINGLELINE);
+	text_in(dc, scale(150, 324, 830, 34),
 	        "インサーションは掛けたいパートを選ぶと働く。バリエーションは\n"
 	        "CONNECT を INSERTION にするとインサーションとして使える。",
 	        RGB(104, 109, 116), m_font_small, DT_LEFT | DT_TOP | DT_WORDBREAK);
