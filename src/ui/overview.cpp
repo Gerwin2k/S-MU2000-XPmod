@@ -246,18 +246,30 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		}
 		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
 		const float icon_x = pos.x + fs * 2.2f;
+		// 実機の LCD に寄せて、横に 2 倍（1 ドットが横 2 : 縦 1）
 		const float dot = std::max(1.0f, std::floor((h - fs * 0.3f) / 16.0f));
+		const float dot_w = dot * 2;
 		u16 rows[16];
-		if (voice && vr && vr->icon(blk, msb, prog, rows)) {
+		if (vr) {
+			// パネルの LCD と同じ色（draw.h の LCD_BACK / LCD_GHOST / LCD_DOT）。
+			// 絵の無いもの（ドラム）も、LCD の枠だけ出して並びを揃える
+			static const ImU32 LCD_BACK  = IM_COL32(150, 205, 45, 255);
+			static const ImU32 LCD_GHOST = IM_COL32(140, 194, 44, 255);
+			static const ImU32 LCD_DOT   = IM_COL32(18, 22, 14, 255);
+			const bool has = voice && vr->icon(blk, msb, prog, rows);
 			const float top = pos.y + (h - dot * 16) * 0.5f;
-			const ImU32 ink = col(ImGuiCol_Text, 0.85f);
+			const float frame = std::max(1.0f, dot);
+			dl->AddRectFilled(ImVec2(icon_x - frame, top - frame),
+			                  ImVec2(icon_x + dot_w * 16 + frame, top + dot * 16 + frame), LCD_BACK, 2.0f);
 			for (int y = 0; y < 16; y++)
-				for (int x = 0; x < 16; x++)
-					if ((rows[y] >> (15 - x)) & 1)
-						dl->AddRectFilled(ImVec2(icon_x + x * dot, top + y * dot),
-						                  ImVec2(icon_x + (x + 1) * dot, top + (y + 1) * dot), ink);
+				for (int x = 0; x < 16; x++) {
+					const bool on = has && ((rows[y] >> (15 - x)) & 1);
+					dl->AddRectFilled(ImVec2(icon_x + x * dot_w, top + y * dot),
+					                  ImVec2(icon_x + (x + 1) * dot_w, top + (y + 1) * dot),
+					                  on ? LCD_DOT : LCD_GHOST);
+				}
 		}
-		const float text_x = icon_x + dot * 16 + fs * 0.4f;
+		const float text_x = icon_x + dot_w * 16 + fs * 0.4f;
 		dl->AddText(ImVec2(text_x, pos.y + fs * 0.1f), col(ImGuiCol_Text), vt.c_str());
 		char sub[64];
 		std::snprintf(sub, sizeof(sub), "受信 %s   M %d  L %d", has_rcv ? channel_name(rcv).c_str() : "--", msb, lsb);
@@ -475,7 +487,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1, 1));
 	if (ImGui::BeginTable("rows", NCOLS + 4, flags)) {
 		ImGui::TableSetupScrollFreeze(1, 2);            // 見出しとマスターの行は流さない
-		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 15);
+		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 17);
 		ImGui::TableSetupColumn("INS", ImGuiTableColumnFlags_WidthFixed, fs * 8.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
