@@ -39,6 +39,17 @@ std::string voice_text(int msb, int lsb, int program);
 // 左クリックでパートを選び、右クリックで出す品書き（プログラムとバンク）
 void program_menu(int part, xg::model &m, bridge &br);
 
+// ---- 説明（ヘルプ）。見出しや名前にカーソルを当てると、何に効くのかを出す（日本語・英語）。
+// 邪魔な人もいるので、窓の上のチェックボックスで消せる。選んだ状態は
+// %LOCALAPPDATA%\S-MU2000\editor.ini に覚えておく（窓どうしで共通）
+bool &help_on();
+// 直前の部品にカーソルが載っていれば、説明を出す。name は列の見出しかパラメータのキー
+void help_tip(const char *name);
+// 「説明を出す」のチェックボックスと、言語の選択
+void help_checkbox();
+// 表の見出しの行を、説明つきで出す（ImGui::TableHeadersRow の代わり）
+void headers_with_help(int columns);
+
 } // namespace xgui
 } // namespace ui
 

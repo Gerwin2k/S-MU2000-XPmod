@@ -48,6 +48,10 @@ const std::vector<param> TABLE = {
 	{ "insertion1.part",      "Ins1 Part",   area::effect, 0x03, 0x00, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
 	{ "insertion2.type",      "Ins2 Type",   area::effect, 0x03, 0x01, 0x00, 2, coding::byte7,  0,     0x3fff, -1, 0,     view::raw,    0,     nullptr },
 	{ "insertion2.part",      "Ins2 Part",   area::effect, 0x03, 0x01, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
+	{ "insertion3.type",      "Ins3 Type",   area::effect, 0x03, 0x02, 0x00, 2, coding::byte7,  0,     0x3fff, -1, 0,     view::raw,    0,     nullptr },
+	{ "insertion3.part",      "Ins3 Part",   area::effect, 0x03, 0x02, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
+	{ "insertion4.type",      "Ins4 Type",   area::effect, 0x03, 0x03, 0x00, 2, coding::byte7,  0,     0x3fff, -1, 0,     view::raw,    0,     nullptr },
+	{ "insertion4.part",      "Ins4 Part",   area::effect, 0x03, 0x03, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
 
 	// マルチパート（08 pp 00-28、41 バイト）
 	{ "part.element_reserve", "Elem Rsv",    area::part, 0x08, 0, 0x00, 1, coding::byte7,  0,    32,   -1, 2,    view::raw,    0,    nullptr },

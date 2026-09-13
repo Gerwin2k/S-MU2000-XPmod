@@ -22,7 +22,7 @@ namespace ram {
 // ワーク RAM の先頭（0x400000）からの位置
 constexpr u32 SYSTEM   = 0x226c1;   // 00 00 00-06
 constexpr u32 EFFECT   = 0x0cad8;   // 02 01 00 から。下の EFFECTS の並び
-constexpr u32 EFFECT_SIZE = 0xfe;   // 02 01 00 からインサーション 2 の終わりまで
+constexpr u32 EFFECT_SIZE = 0x156;  // 02 01 00 からインサーション 4 の終わりまで
 // パートの塊は PART_STRIDE ずつ並ぶが、**並びは XG のパート番号の順ではない**。
 // 口ごとに「10 番目のパート（ch10）が先頭、残りが 1-9, 11-16」の固定の順（ドラムかどうかに
 // よらない。パートを DRUM にしても並びは変わらなかった）
@@ -54,6 +54,8 @@ constexpr block EFFECTS[] = {
 	{ 0x02, 0x01, 0x40, 0x1c, 0x0cb02 },   // バリエーション
 	{ 0x03, 0x00, 0x00, 0x2c, 0x0cb7e },   // インサーション 1
 	{ 0x03, 0x01, 0x00, 0x2c, 0x0cbaa },   // インサーション 2
+	{ 0x03, 0x02, 0x00, 0x2c, 0x0cbd6 },   // インサーション 3
+	{ 0x03, 0x03, 0x00, 0x2c, 0x0cc02 },   // インサーション 4
 };
 
 // XG の番地から、ワーク RAM での位置。無ければ false

@@ -56,7 +56,6 @@ void pc_editor::write(const xg::param &p, int part, int v, xg::model &m, bridge 
 //   上下ドラッグ     動かす（Shift で細かく）
 //   ホイール         1 つずつ（Ctrl で 10 ずつ）
 //   ダブルクリック   数を打つ
-//   右クリック       既定の値
 bool pc_editor::knob(const xg::param &p, int part, int &v, bool known, float width)
 {
 	ImGuiIO &io = ImGui::GetIO();
@@ -68,7 +67,7 @@ bool pc_editor::knob(const xg::param &p, int part, int &v, bool known, float wid
 	ImGui::PushID(p.key);
 	ImGui::PushID(part);
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
-	ImGui::InvisibleButton("##knob", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+	ImGui::InvisibleButton("##knob", size, ImGuiButtonFlags_MouseButtonLeft);
 	const ImGuiID id = ImGui::GetItemID();
 	const bool hovered = ImGui::IsItemHovered();
 	const bool active  = ImGui::IsItemActive();
@@ -98,8 +97,6 @@ bool pc_editor::knob(const xg::param &p, int part, int &v, bool known, float wid
 				m_wheel_taken = true;
 			}
 		}
-		if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && xg::valid(p, p.def))
-			nv = p.def;
 		if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			ImGui::OpenPopup("##type");
 	}
@@ -163,8 +160,8 @@ bool pc_editor::knob(const xg::param &p, int part, int &v, bool known, float wid
 	}
 
 	if (hovered && !active)
-		ImGui::SetItemTooltip("%s  %s\nドラッグ・ホイール（Ctrl で 10）・ダブルクリックで打つ・右クリックで既定 %s",
-		                      p.label, text.c_str(), xg::format(p, p.def).c_str());
+		ImGui::SetItemTooltip("%s  %s\nドラッグ・ホイール（Ctrl で 10）・ダブルクリックで打つ",
+		                      p.label, text.c_str());
 
 	ImGui::PopID();
 	ImGui::PopID();
@@ -273,6 +270,8 @@ void pc_editor::mixer(xg::model &m, bridge &br)
 	for (int c = 0; c <= ncols; c++) {
 		ImGui::TableSetColumnIndex(c);
 		ImGui::TableHeader(ImGui::TableGetColumnName(c));
+		if (c > 0)
+			help_tip(COLS[c - 1]);
 	}
 
 	for (int i = 0; i < PARTS; i++) {
@@ -317,6 +316,7 @@ void pc_editor::part_page(xg::model &m, bridge &br)
 					const xg::param &p = P(key);
 					ImGui::AlignTextToFramePadding();
 					ImGui::TextUnformatted(p.label);
+					help_tip(p.key);
 					ImGui::SameLine(label_w);
 					value(p, m_part, m, br, std::min(fs * 9, ImGui::GetContentRegionAvail().x));
 				}
@@ -345,6 +345,7 @@ void pc_editor::part_page(xg::model &m, bridge &br)
 				const ImVec2 ts = ImGui::CalcTextSize(p.label);
 				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (cell - ts.x) * 0.5f));
 				ImGui::TextUnformatted(p.label);
+				help_tip(p.key);
 				if (p.how == xg::view::choice || is_rcv(p)) {
 					ImGui::Dummy(ImVec2(0, fs * 0.9f));
 					value(p, m_part, m, br, cell);
@@ -390,7 +391,7 @@ void pc_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
 	if (ImGui::Button(m_knobs ? "▲ 数だけにする" : "▼ つまみを出す"))
 		m_knobs = !m_knobs;
 	ImGui::SameLine();
-	ImGui::TextDisabled("値は MU2000 から読み返したもの（-- はまだ読めていない）");
+	help_checkbox();
 
 	// 左にパートの一覧、右に面
 	const float list_w = ImGui::GetFontSize() * 20;

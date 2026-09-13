@@ -4,12 +4,14 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "xg/fx_types.h"
 #include "xg/ram.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace ui {
 
@@ -88,7 +90,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 
 	ImGui::PushID(c.title);
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
-	ImGui::InvisibleButton("##cell", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+	ImGui::InvisibleButton("##cell", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
 	const ImGuiID id = ImGui::GetItemID();
 	const bool hovered = ImGui::IsItemHovered();
 	const bool active = ImGui::IsItemActive();
@@ -111,8 +113,6 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 				m_wheel_taken = true;
 			}
 		}
-		if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && xg::valid(*p, p->def))
-			nv = p->def;
 		if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			ImGui::OpenPopup("##type");
 		if (ImGui::BeginPopup("##type")) {
@@ -158,7 +158,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 	            known ? col(ImGuiCol_Text) : col(ImGuiCol_TextDisabled), text.c_str());
 
 	if (hovered && !active)
-		ImGui::SetItemTooltip(editable ? "%s  %s\n左右か上下にドラッグ・ホイール・ダブルクリックで打つ・右クリックで既定"
+		ImGui::SetItemTooltip(editable ? "%s  %s\n左右か上下にドラッグ・ホイール・ダブルクリックで打つ"
 		                               : "%s  %s\n演奏の値（表示だけ）", c.title, text.c_str());
 	ImGui::PopID();
 }
@@ -201,6 +201,51 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		std::snprintf(sub, sizeof(sub), "受信 %s   M %d  L %d", has_rcv ? channel_name(rcv).c_str() : "--", msb, lsb);
 		dl->AddText(ImVec2(pos.x + fs * 2.4f, pos.y + fs * 1.15f), col(ImGuiCol_TextDisabled), sub);
 		dl->PopClipRect();
+	}
+
+	// ---- インサーション。このパートに割り当てられているものを、印と種別の名前で。
+	// バリエーションも接続が INSERTION ならこのパートだけに掛かるので並べる
+	ImGui::TableNextColumn();
+	{
+		struct fx { const char *mark; ImU32 color; std::string name; };
+		std::vector<fx> on;
+		static const char *const INS[4][3] = {
+			{ "1", "insertion1.part", "insertion1.type" }, { "2", "insertion2.part", "insertion2.type" },
+			{ "3", "insertion3.part", "insertion3.type" }, { "4", "insertion4.part", "insertion4.type" },
+		};
+		int who = 0, type = 0;
+		for (const auto &ins : INS)
+			if (m.get(P(ins[1]), 0, who) && who == part && m.get(P(ins[2]), 0, type))
+				on.push_back({ ins[0], IM_COL32(214, 160, 48, 255), xg::fx_name(type) });
+		int conn = 1;
+		if (m.get(P("variation.connect"), 0, conn) && conn == 0 && m.get(P("variation.part"), 0, who) &&
+		    who == part && m.get(P("variation.type"), 0, type))
+			on.push_back({ "V", IM_COL32(150, 110, 220, 255), xg::fx_name(type) });
+
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const float w = ImGui::GetContentRegionAvail().x;
+		ImGui::Dummy(ImVec2(w, h));
+		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+		const float line = fs * 1.05f;
+		for (size_t i = 0; i < on.size() && i < 2; i++) {
+			const float y = pos.y + fs * 0.1f + line * float(i);
+			const float bw = fs * 1.0f;
+			dl->AddRectFilled(ImVec2(pos.x + fs * 0.2f, y + 1), ImVec2(pos.x + fs * 0.2f + bw, y + fs), on[i].color, 3.0f);
+			const ImVec2 ms = ImGui::CalcTextSize(on[i].mark);
+			dl->AddText(ImVec2(pos.x + fs * 0.2f + (bw - ms.x) * 0.5f, y), IM_COL32(20, 20, 20, 255), on[i].mark);
+			std::string name = on[i].name;
+			if (i == 1 && on.size() > 2)
+				name += " ほか";
+			dl->AddText(ImVec2(pos.x + fs * 1.5f, y), col(ImGuiCol_Text), name.c_str());
+		}
+		dl->PopClipRect();
+		if (!on.empty() && ImGui::IsItemHovered()) {
+			std::string tip;
+			for (const fx &f : on)
+				tip += std::string(f.mark[0] == 'V' ? "バリエーション（INSERTION）: " : "インサーション ") +
+				       (f.mark[0] == 'V' ? "" : std::string(f.mark) + ": ") + f.name + "\n";
+			ImGui::SetTooltip("%s", tip.c_str());
+		}
 	}
 
 	// 受信チャンネルから、見張りの口×チャンネル
@@ -282,17 +327,20 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	const float fs = ImGui::GetFontSize();
 	const float h = fs * 2.3f;
 
+	help_checkbox();
+
 	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV |
 	                              ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
 	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1, 1));
-	if (ImGui::BeginTable("rows", NCOLS + 3, flags)) {
+	if (ImGui::BeginTable("rows", NCOLS + 4, flags)) {
 		ImGui::TableSetupScrollFreeze(1, 1);
 		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 15);
+		ImGui::TableSetupColumn("INS", ImGuiTableColumnFlags_WidthFixed, fs * 8.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
 			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed, fs * 3.4f);
-		ImGui::TableSetupColumn("鍵盤", ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableHeadersRow();
+		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
+		headers_with_help(NCOLS + 4);
 
 		for (int part = 0; part < PARTS; part++) {
 			ImGui::TableNextRow(0, h);
