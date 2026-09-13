@@ -351,11 +351,9 @@ void fx_menu(int part, xg::model &m, bridge &br)
 		}
 		ImGui::Separator();
 		ImGui::TextDisabled("種類");
-		for (const xg::fx_type &t : xg::INS_TYPES) {
-			const int value = t.msb << 7 | t.lsb;
-			if (ImGui::MenuItem(t.name, nullptr, has_type && value == type))
-				br.send(m.set(P(f.type_key), 0, value));
-		}
+		int chosen = 0;
+		if (fx_type_menu(xg::ins_types(), has_type ? type : -1, chosen))
+			br.send(m.set(P(f.type_key), 0, chosen));
 		ImGui::EndMenu();
 	}
 	ImGui::Separator();
@@ -954,6 +952,7 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 	{
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 		const float w = ImGui::GetContentRegionAvail().x;
+		ImGui::SetNextItemAllowOverlap();
 		if (ImGui::InvisibleButton("##name", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight))
 			m_part = part;
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
@@ -970,9 +969,14 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		int msb = 0, lsb = 0, prog = 0, rcv = 0;
 		const bool voice = m.get(P("part.bank_msb"), part, msb) && m.get(P("part.bank_lsb"), part, lsb) &&
 		                   m.get(P("part.program"), part, prog);
-		const bool has_rcv = m.get(P("part.rcv_channel"), part, rcv);
+		bool has_rcv = m.get(P("part.rcv_channel"), part, rcv);
+		const bool silenced = m_saved_rcv[part] >= 0;
+		if (silenced) {
+			rcv = m_saved_rcv[part];                 // 表示は元のチャンネル
+			has_rcv = true;
+		}
 		const std::string name = part_name(part);
-		dl->AddText(ImVec2(pos.x + fs * 0.3f, pos.y + fs * 0.1f), col(ImGuiCol_Text), name.c_str());
+		dl->AddText(ImVec2(pos.x + fs * 0.3f, pos.y + fs * 0.1f), silenced ? col(ImGuiCol_TextDisabled) : col(ImGuiCol_Text), name.c_str());
 		// 音色の名前と楽器の絵。利用者の ROM から読めれば MU2000 の本当の名前、
 		// 読めなければ GM の名前（xg/voices.h）
 		std::string vt = voice ? voice_text(msb, lsb, prog) : "--";
@@ -1014,14 +1018,20 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		const float text_x = icon_x + dot_w * 16 + fs * 0.4f;
 		dl->AddText(ImVec2(text_x, pos.y + fs * 0.1f), col(ImGuiCol_Text), vt.c_str());
 		char sub[64];
-		std::snprintf(sub, sizeof(sub), "受信 %s   M %d  L %d", has_rcv ? channel_name(rcv).c_str() : "--", msb, lsb);
+		if (silenced)
+			std::snprintf(sub, sizeof(sub), "受信 %s（%s）", channel_name(rcv).c_str(), m_mute[part] ? "ミュート" : "ソロの外");
+		else
+			std::snprintf(sub, sizeof(sub), "受信 %s   M %d  L %d", has_rcv ? channel_name(rcv).c_str() : "--", msb, lsb);
 		dl->AddText(ImVec2(text_x, pos.y + fs * 1.15f), col(ImGuiCol_TextDisabled), sub);
 		dl->PopClipRect();
+		mute_buttons(part, pos.x, pos.y, w, h);
 	}
 
-	// 受信チャンネルから、見張りの口×チャンネル
+	// 受信チャンネルから、見張りの口×チャンネル（ミュート中は元のチャンネル）
 	int rcv = 127;
 	m.get(P("part.rcv_channel"), part, rcv);
+	if (m_saved_rcv[part] >= 0)
+		rcv = m_saved_rcv[part];
 	const int slot = rcv >= 0 && rcv < 32 ? rcv : -1;
 
 	// ---- VEL メーター
@@ -1097,17 +1107,13 @@ const overview::column &column_of(const char *title)
 	return COLUMNS[0];
 }
 
-// 種類の品書き。今の種類に印
-template <size_t N>
-void type_menu(const xg::fx_type (&types)[N], const char *key, xg::model &m, bridge &br)
+// 種類の品書き（分類 → 系統 → LSB 違い）。今の種類に印
+void type_menu(const std::vector<xg::fx_type> &types, const char *key, xg::model &m, bridge &br)
 {
-	int cur = 0;
+	int cur = 0, chosen = 0;
 	const bool has = m.get(P(key), 0, cur);
-	for (const xg::fx_type &t : types) {
-		const int value = t.msb << 7 | t.lsb;
-		if (ImGui::MenuItem(t.name, nullptr, has && value == cur))
-			br.send(m.set(P(key), 0, value));
-	}
+	if (fx_type_menu(types, has ? cur : -1, chosen))
+		br.send(m.set(P(key), 0, chosen));
 }
 
 // 掛け先のパートの品書き（A1-B16 と OFF）
@@ -1132,8 +1138,7 @@ void part_menu(const char *key, xg::model &m, bridge &br, bool with_off)
 
 // システムのエフェクト（リバーブ・コーラス・バリエーション）の 1 マス。
 // 上の行が種類（右クリックで選ぶ）、下が戻り量の棒
-template <size_t N>
-void overview::system_fx_cell(const char *title, const xg::fx_type (&types)[N], const char *type_key,
+void overview::system_fx_cell(const char *title, const std::vector<xg::fx_type> &types, const char *type_key,
                               const char *return_col, bool variation, xg::model &m, const xg_snapshot &ram,
                               bridge &br, float h)
 {
@@ -1218,7 +1223,7 @@ void overview::insertion_cell(int slot_index, xg::model &m, bridge &br, float h)
 		ImGui::TextDisabled("%s", f.title);
 		ImGui::Separator();
 		if (ImGui::BeginMenu("種類")) {
-			type_menu(xg::INS_TYPES, f.type_key, m, br);
+			type_menu(xg::ins_types(), f.type_key, m, br);
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("掛けるパート")) {
@@ -1262,7 +1267,7 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 	constexpr int NCOL = 11;
 	if (!ImGui::BeginTable("master", NCOL, flags))
 		return;
-	ImGui::TableSetupColumn("マスター", ImGuiTableColumnFlags_WidthFixed, fs * 17);
+	ImGui::TableSetupColumn("マスター", ImGuiTableColumnFlags_WidthFixed, fs * 18.5f);
 	ImGui::TableSetupColumn("M.VOL", ImGuiTableColumnFlags_WidthFixed, fs * 3.4f);
 	// 音の流れの順（インサーション → バリエーション → コーラス → リバーブ → マスター EQ）
 	ImGui::TableSetupColumn("INS 1", ImGuiTableColumnFlags_WidthFixed, fs * 7);
@@ -1302,11 +1307,11 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 		insertion_cell(i, m, br, h);
 	}
 	ImGui::TableNextColumn();
-	system_fx_cell("バリエーション", xg::INS_TYPES, "variation.type", "VAR", true, m, ram, br, h);
+	system_fx_cell("バリエーション", xg::ins_types(), "variation.type", "VAR", true, m, ram, br, h);
 	ImGui::TableNextColumn();
-	system_fx_cell("コーラス", xg::CHO_TYPES, "chorus.type", "CHO", false, m, ram, br, h);
+	system_fx_cell("コーラス", xg::cho_types(), "chorus.type", "CHO", false, m, ram, br, h);
 	ImGui::TableNextColumn();
-	system_fx_cell("リバーブ", xg::REV_TYPES, "reverb.type", "REV", false, m, ram, br, h);
+	system_fx_cell("リバーブ", xg::rev_types(), "reverb.type", "REV", false, m, ram, br, h);
 	ImGui::TableNextColumn();
 	master_eq_cell(m, br, h);
 
@@ -1354,9 +1359,82 @@ void overview::release_keys(bridge &br)
 }
 
 
+void overview::mute_buttons(int part, float px, float py, float w, float h)
+{
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const ImVec2 pos(px, py);
+	const float bw = fs * 1.25f, bh = (h - fs * 0.3f) * 0.5f;
+	const float x = pos.x + w - bw - fs * 0.15f;
+	struct { const char *id, *mark; bool *on; ImU32 lit; float y; const char *tip; } b[] = {
+		{ "##mute", "M", &m_mute[part], IM_COL32(230, 80, 60, 255),  pos.y + fs * 0.1f,
+		  "ミュート（このパートを鳴らさない）" },
+		{ "##solo", "S", &m_solo[part], IM_COL32(240, 200, 60, 255), pos.y + fs * 0.2f + bh,
+		  "ソロ（S を入れたパートだけを鳴らす）" },
+	};
+	for (auto &e : b) {
+		ImGui::SetCursorScreenPos(ImVec2(x, e.y));
+		if (ImGui::InvisibleButton(e.id, ImVec2(bw, bh)))
+			*e.on = !*e.on;
+		const bool hot = ImGui::IsItemHovered();
+		if (hot)
+			ImGui::SetItemTooltip("%s", e.tip);
+		dl->AddRectFilled(ImVec2(x, e.y), ImVec2(x + bw, e.y + bh),
+		                  *e.on ? e.lit : col(hot ? ImGuiCol_ButtonHovered : ImGuiCol_Button), 3.0f);
+		const ImVec2 ts = ImGui::CalcTextSize(e.mark);
+		dl->AddText(ImVec2(x + (bw - ts.x) * 0.5f, e.y + (bh - ts.y) * 0.5f),
+		            *e.on ? IM_COL32(20, 20, 20, 255) : col(ImGuiCol_Text), e.mark);
+	}
+	ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h));
+	ImGui::Dummy(ImVec2(0, 0));
+}
+
+
+void overview::apply_mutes(xg::model &m, bridge &br)
+{
+	bool any_solo = false;
+	for (int p = 0; p < PARTS; p++)
+		any_solo |= m_solo[p];
+	const xg::param &prcv = P("part.rcv_channel");
+	for (int p = 0; p < PARTS; p++) {
+		const bool want = m_mute[p] || (any_solo && !m_solo[p]);
+		int rcv = 127;
+		const bool known = m.get(prcv, p, rcv);
+		if (m_saved_rcv[p] >= 0 && known && rcv != 127)
+			m_saved_rcv[p] = -1;                    // 曲などが受信チャンネルを書き換えた
+		if (want && m_saved_rcv[p] < 0 && known && rcv < 32) {
+			// 鳴っている音を先に止める（受信を切るとノートオフも届かなくなるため）
+			const u8 off[3] = { u8(0xb0 | (rcv & 15)), 120, 0 };
+			if (rcv >= 16) br.send_b(off, 3);
+			else           br.send(off, 3);
+			br.send(m.set(prcv, p, 127));
+			m_saved_rcv[p] = rcv;
+		} else if (!want && m_saved_rcv[p] >= 0) {
+			br.send(m.set(prcv, p, m_saved_rcv[p]));
+			m_saved_rcv[p] = -1;
+		}
+	}
+}
+
+
+void overview::hidden(bridge &br)
+{
+	release_keys(br);
+	// ミュートとソロは、この窓で聞き比べるためのもの。閉じたら外す（受信チャンネルを戻す）
+	for (int p = 0; p < PARTS; p++) {
+		m_mute[p] = m_solo[p] = false;
+		if (m_saved_rcv[p] >= 0 && m_model)
+			br.send(m_model->set(P("part.rcv_channel"), p, m_saved_rcv[p]));
+		m_saved_rcv[p] = -1;
+	}
+}
+
+
 void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
 	m_wheel_taken = false;
+	m_model = &m;
+	apply_mutes(m, br);
 	const ImGuiViewport *vp = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(vp->WorkPos);
 	ImGui::SetNextWindowSize(vp->WorkSize);
@@ -1380,7 +1458,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1, 1));
 	if (ImGui::BeginTable("rows", NCOLS + 3, flags)) {
 		ImGui::TableSetupScrollFreeze(1, 1);            // 見出しは流さない
-		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 17);
+		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 18.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
 			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed,

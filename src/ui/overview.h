@@ -24,12 +24,19 @@ public:
 	int default_width() const override  { return 1680; }
 	int default_height() const override { return 760; }
 	void draw(xg::model &m, const xg_snapshot &ram, bridge &br) override;
-	void hidden(bridge &br) override { release_keys(br); }
+	// 閉じたら、鳴らしている鍵を離し、ミュートとソロを外す（受信チャンネルを戻す）
+	void hidden(bridge &br) override;
 
 	struct column;                   // 列の中身（overview.cpp）
 
 private:
 	void release_keys(bridge &br);          // マウスで鳴らしている鍵を全部離す
+	// ミュートとソロを音源に効かせる。消すパートは受信チャンネルを OFF にし（先に
+	// そのチャンネルへオールサウンドオフ）、戻すパートは覚えておいたチャンネルに戻す。
+	// 曲の XG リセットなどで受信チャンネルが書き換わったら、覚えを捨ててもう一度消す
+	void apply_mutes(xg::model &m, bridge &br);
+	// パートの欄の右端の M / S の印
+	void mute_buttons(int part, float x, float y, float w, float h);
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
 	// INS 列の 1 マス。右クリックで掛ける・外す・種類、印のドラッグで別のパートへ
 	void ins_cell(int part, xg::model &m, bridge &br, float h);
@@ -46,8 +53,7 @@ private:
 	// 上のマスターの表。マスターボリューム、移調、リバーブ・コーラス・バリエーションの種類と戻り、
 	// インサーション 1-4 の種類と掛け先、全パートの鍵盤
 	void master_pane(xg::model &m, const xg_snapshot &ram, bridge &br);
-	template <size_t N>
-	void system_fx_cell(const char *title, const xg::fx_type (&types)[N], const char *type_key,
+	void system_fx_cell(const char *title, const std::vector<xg::fx_type> &types, const char *type_key,
 	                    const char *return_col, bool variation, xg::model &m, const xg_snapshot &ram,
 	                    bridge &br, float h);
 	void insertion_cell(int slot_index, xg::model &m, bridge &br, float h);
@@ -60,6 +66,11 @@ private:
 	int    m_playing[32] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 	                         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 	int    m_playing_slot[32] = {};   // 鳴らしている鍵（-1 は無し）と、そのときの受信の口×チャンネル
+	xg::model *m_model = nullptr;     // 閉じたときに受信チャンネルを戻すため（draw で覚える）
+	bool   m_mute[32] = {}, m_solo[32] = {};
+	int    m_saved_rcv[32] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	                           -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+	                                  // ミュートで OFF にする前の受信チャンネル（-1 は消していない）
 	double m_scrolled_at = -1;        // ホイールで表をスクロールした時刻（エディタと同じ決まり）
 	bool   m_wheel_taken = false;
 };
