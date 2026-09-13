@@ -41,6 +41,14 @@ bool pc_window::visible() const
 	return m_hwnd && IsWindowVisible(m_hwnd);
 }
 
+void pc_window::shutdown(bridge &br)
+{
+	if (!m_imgui)
+		return;
+	ImGui::SetCurrentContext(m_imgui);
+	m_view->hidden(br);
+}
+
 bool pc_window::show(HINSTANCE inst, std::string &err)
 {
 	if (!m_hwnd && !create(inst, err))

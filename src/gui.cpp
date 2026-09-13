@@ -1212,6 +1212,15 @@ int main(int argc, char **argv)
 		DispatchMessageA(&msg);
 	}
 
+	// PC の窓に閉じたと知らせる（一覧のミュートを外して受信チャンネルを戻すなど）。
+	// 送ったものは音声の糸が流すので、少し待ってから止める
+	if (g_win.br) {
+		g_win.list.shutdown(*g_win.br);
+		g_win.pc.shutdown(*g_win.br);
+		g_win.fx.shutdown(*g_win.br);
+		Sleep(100);
+	}
+
 	// **先に MIDI ファイルを止める。** 止めたときのオールノートオフは音声の糸が THRU から
 	// 外へ流すので、音を先に止めると外の機器（実機）に届かず鳴りっぱなしになる。
 	// 止めてから、音声の糸が流し終えるのを少し待つ

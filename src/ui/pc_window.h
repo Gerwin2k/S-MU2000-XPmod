@@ -35,6 +35,8 @@ public:
 	// 出す。初めてなら窓と描画装置を作る。失敗したら err に理由
 	bool show(HINSTANCE inst, std::string &err);
 	bool visible() const;
+	// gui を終えるとき。中身に「閉じた」と知らせる（ミュートを外すなど）
+	void shutdown(bridge &br);
 
 	// タイマーから。見えていなければ何もしない
 	void frame(xg::model &m, const xg_snapshot &ram, bridge &br);
