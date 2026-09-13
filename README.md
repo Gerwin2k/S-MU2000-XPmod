@@ -8,6 +8,33 @@ Yamaha MU2000 のソフトウェア音源。DAW に挿して使えることを�
 
 > ヤマハとは無関係の非公式なプロジェクト。Yamaha・MU2000・XG はヤマハ株式会社の商標。
 
+## 実機由来のデータは、配らない・載せない
+
+**このリポジトリが公開しているのは、エミュレータと吸い出し道具のソースコードだけ。**
+ヤマハの ROM・波形データ・ファームウェアは、このリポジトリにも配布物にも入っていないし、
+今後も入れない。動かすのに要る ROM は、利用者が**自分の持っている MU2000 から各自で取り出す**。
+
+ソースコードを公開することと、実機から取り出したデータを公開・共有することは**別の話**で、
+このプロジェクトは後者をしない。使う人にも次をお願いする。
+
+* 吸い出した波形 ROM・プログラム ROM のイメージを、GitHub その他どこにも再配布しない
+* 実機由来の ROM イメージを、Issue・Pull Request・Discussion・Release・添付ファイルなどに
+  載せない。不具合の報告は、ハッシュ値・ログ・MIDI ファイル・録音で足りる
+* 吸い出しの途中で作ったカスタムファームウェア、改変したファームウェアイメージ、
+  カスタムの `.ydl`（ダンパなど）も配らない。どれも純正ファームウェアを含んでいる
+* ヤマハの更新プログラム（`mu2r1_uw.zip`）は、ヤマハの配布ページから各自で入手する
+
+これらの実機由来のデータは、S-MU2000 のソースコードとは扱いが別で、
+下の「由来とライセンス」の対象でもない。
+
+> **Notice (English).** This repository contains source code only. It does not include
+> or distribute any Yamaha ROM, wave data or firmware, and never will. To run it, you
+> extract the ROMs from your own MU2000. Publishing this source code and sharing data taken
+> from the hardware are separate matters; this project does only the former.
+> Please do not upload ROM images, wave dumps, custom or modified firmware images, or
+> custom `.ydl` files anywhere, including Issues, Pull Requests, Discussions, Releases and
+> attachments. Hashes, logs, MIDI files and recordings are enough for bug reports.
+
 実機の firmware をそのまま走らせ、MIDI を受けて発音する。2 分半の実曲を
 MAME の録音と突き合わせて、発音指示 2851 件すべてが一致、振幅も 88.7% の
 区間で 10% 以内に収まっている。実時間再生の CPU 使用率はおよそ 38%。
@@ -29,6 +56,7 @@ MAME でも MU2000 は鳴る。だが MAME は自分で時計を持って実時�
 ## ROM について
 
 **ROM は同梱しない。** 利用者が自分の MU2000 から吸い出す必要がある。
+吸い出したものの扱いは、上の「[実機由来のデータは、配らない・載せない](#実機由来のデータは配らない載せない)」のとおり。
 
 | ROM | 内容 |
 |---|---|
