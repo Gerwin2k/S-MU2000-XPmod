@@ -2,6 +2,8 @@
 
 #include "overview.h"
 
+#include "eq_curve.h"
+
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "xg/fx_types.h"
@@ -624,50 +626,13 @@ void overview::filter_cell(int part, xg::model &m, bridge &br, float w, float h)
 
 namespace {
 
-// XG の EQ の周波数の表（値 0-60 → Hz）。パートの EQ、マスター EQ、エフェクトの EQ で共通
-constexpr int EQ_HZ[61] = {
-	20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 70, 80, 90, 100, 110, 125, 140, 160, 180,
-	200, 225, 250, 280, 315, 355, 400, 450, 500, 560, 630, 700, 800, 900, 1000, 1100, 1200, 1400, 1600, 1800,
-	2000, 2200, 2500, 2800, 3200, 3600, 4000, 4500, 5000, 5600, 6300, 7000, 8000, 9000, 10000, 11000, 12000, 14000, 16000, 18000,
-	20000 };
-
-std::string hz_text(int index)
-{
-	const int hz = EQ_HZ[std::clamp(index, 0, 60)];
-	char buf[16];
-	if (hz >= 1000) std::snprintf(buf, sizeof(buf), hz % 1000 ? "%.1fk" : "%.0fk", hz / 1000.0);
-	else            std::snprintf(buf, sizeof(buf), "%d", hz);
-	return buf;
-}
-
-// 周波数の軸。20Hz-20kHz を対数で並べる。t は 0-1
-float t_of_hz(float hz) { return std::log10(hz / 20.0f) / 3.0f; }
-float hz_of_t(float t)  { return 20.0f * std::pow(10.0f, t * 3.0f); }
-
-// 周波数の表の値のうち、横の位置 t に一番近いもの（lo-hi の中で）
-int index_near(float t, int lo, int hi)
-{
-	int best = lo;
-	for (int i = lo; i <= hi; i++)
-		if (std::fabs(t_of_hz(float(EQ_HZ[i])) - t) < std::fabs(t_of_hz(float(EQ_HZ[best])) - t))
-			best = i;
-	return best;
-}
-
-// EQ の 1 帯の、周波数 f での持ち上がり（dB）。見た目だけの形
-enum class band_shape { low_shelf, high_shelf, peak };
-float band_db(band_shape s, float gain_db, float fc, float q, float f)
-{
-	const float r = f / fc;
-	switch (s) {
-	case band_shape::low_shelf:  return gain_db / (1.0f + r * r);
-	case band_shape::high_shelf: return gain_db * r * r / (1.0f + r * r);
-	default: {
-		const float x = q * (r - 1.0f / r);
-		return gain_db / (1.0f + x * x);
-	}
-	}
-}
+using eq::HZ;
+using eq::hz_text;
+using eq::t_of_hz;
+using eq::hz_of_t;
+using eq::index_near;
+using eq::band_db;
+using band_shape = eq::shape;
 
 struct eq_band {
 	band_shape shape;
@@ -704,7 +669,7 @@ int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, flo
 	const float DB = 15.0f;
 	auto x_of = [&](float hz) { return x0 + (x1 - x0) * t_of_hz(hz); };
 	auto y_of = [&](float db) { return (top + bottom) * 0.5f - (bottom - top) * 0.5f * std::clamp(db, -DB, DB) / DB; };
-	auto handle = [&](const eq_band &b) { return ImVec2(x_of(float(EQ_HZ[b.vf])), y_of(float(b.vg - 64))); };
+	auto handle = [&](const eq_band &b) { return ImVec2(x_of(float(HZ[b.vf])), y_of(float(b.vg - 64))); };
 
 	// 押した瞬間に一番近い点を選ぶ。ずれを覚えて、点が指に飛ばないようにする
 	int &grab = *ImGui::GetStateStorage()->GetIntRef(iid, -1);
@@ -764,7 +729,7 @@ int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, flo
 			const float f = hz_of_t(t);
 			float db = 0;
 			for (int k = 0; k < n; k++)
-				db += band_db(bands[k].shape, float(bands[k].vg - 64), float(EQ_HZ[bands[k].vf]),
+				db += band_db(bands[k].shape, float(bands[k].vg - 64), float(HZ[bands[k].vf]),
 				              bands[k].q ? bands[k].vq / 10.0f : 0.7f, f);
 			pts.push_back(ImVec2(x0 + (x1 - x0) * t, y_of(db)));
 		}

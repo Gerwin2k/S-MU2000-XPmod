@@ -7,9 +7,12 @@
 #include "xg/fx_params.h"
 #include "xg/fx_types.h"
 #include "fx_help.h"
+#include "eq_curve.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <vector>
 #include <cstdio>
 #include <string>
 
@@ -137,6 +140,161 @@ bool fx_editor::knob(const char *id, int &v, int lo, int hi, float size, const c
 	const bool changed = nv != v;
 	v = nv;
 	return changed;
+}
+
+
+// EQ の特性のグラフ。横が周波数（20Hz-20kHz の対数）、縦がゲイン（±15dB）。
+// 帯の点をつまんで、横で周波数、縦でゲイン。真ん中の帯は点の近くでホイールを回すと幅。
+// パラメータは LCD の名前で見分ける（EQ LowFreq / Low Freq など）
+void fx_editor::eq_graph(const xg::fx_def &def, u8 blk, xg::model &m, bridge &br, ImVec2 p0, ImVec2 p1)
+{
+	struct band { eq::shape shape; int freq = -1, gain = -1, width = -1; int vf = 0, vg = 64, vw = 10; };
+	auto find = [&](std::initializer_list<const char *> names) {
+		for (int i = 0; i < def.count; i++)
+			for (const char *n : names)
+				if (!std::strcmp(def.params[i].label, n))
+					return i;
+		return -1;
+	};
+	band bands[3];
+	bands[0].shape = eq::shape::low_shelf;
+	bands[0].freq = find({ "EQ LowFreq", "Low Freq" });
+	bands[0].gain = find({ "EQ LowGain", "Low Gain" });
+	bands[1].shape = eq::shape::peak;
+	bands[1].freq = find({ "EQ MidFreq", "Mid Freq", "EQ Freq" });
+	bands[1].gain = find({ "EQ MidGain", "Mid Gain", "EQ Gain" });
+	bands[1].width = find({ "EQ MidWidt", "Mid Width", "EQ Width" });
+	bands[2].shape = eq::shape::high_shelf;
+	bands[2].freq = find({ "EQHighFreq", "High Freq" });
+	bands[2].gain = find({ "EQHighGain", "High Gain" });
+
+	auto value = [&](int index, int &v) {
+		const xg::fx_param &fp = def.params[index];
+		if (!m.get_raw(xg::pack(0x03, blk, fp.addr), fp.size, v))
+			return false;
+		v = std::clamp(v, int(fp.lo), int(fp.hi));
+		return true;
+	};
+	std::vector<band *> used;
+	for (band &b : bands) {
+		if (b.freq < 0 || b.gain < 0)
+			continue;
+		if (!value(b.freq, b.vf) || !value(b.gain, b.vg))
+			continue;
+		if (b.width >= 0 && !value(b.width, b.vw))
+			b.width = -1;
+		used.push_back(&b);
+	}
+	if (used.empty())
+		return;
+
+	ImGuiIO &io = ImGui::GetIO();
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	ImGui::SetCursorScreenPos(p0);
+	ImGui::InvisibleButton("##eqgraph", ImVec2(p1.x - p0.x, p1.y - p0.y));
+	const ImGuiID id = ImGui::GetItemID();
+	const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+
+	const float pad = fs * 0.6f;
+	const float x0 = p0.x + pad * 2.5f, x1 = p1.x - pad, top = p0.y + pad, bottom = p1.y - pad * 1.6f;
+	const float DB = 15.0f;
+	auto x_of = [&](float hz) { return x0 + (x1 - x0) * eq::t_of_hz(hz); };
+	auto y_of = [&](float db) { return (top + bottom) * 0.5f - (bottom - top) * 0.5f * std::clamp(db, -DB, DB) / DB; };
+	auto handle = [&](const band &b) { return ImVec2(x_of(float(eq::HZ[std::clamp(b.vf, 0, 60)])), y_of(float(b.vg - 64))); };
+	auto nearest = [&]() {
+		int best = -1; float bd = 1e9f;
+		for (size_t k = 0; k < used.size(); k++) {
+			const ImVec2 h = handle(*used[k]);
+			const float d = (h.x - io.MousePos.x) * (h.x - io.MousePos.x) + (h.y - io.MousePos.y) * (h.y - io.MousePos.y);
+			if (d < bd) { bd = d; best = int(k); }
+		}
+		return best;
+	};
+
+	int &grab = *ImGui::GetStateStorage()->GetIntRef(id, -1);
+	float &gx = *ImGui::GetStateStorage()->GetFloatRef(id + 1, 0.0f);
+	float &gy = *ImGui::GetStateStorage()->GetFloatRef(id + 2, 0.0f);
+	if (ImGui::IsItemActivated()) {
+		grab = nearest();
+		if (grab >= 0) {
+			const ImVec2 h = handle(*used[grab]);
+			gx = h.x - io.MousePos.x;
+			gy = h.y - io.MousePos.y;
+		}
+	}
+	if (!active)
+		grab = -1;
+	if (active && grab >= 0 && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+		const band &b = *used[grab];
+		const xg::fx_param &pf = def.params[b.freq], &pg = def.params[b.gain];
+		const int nf = eq::index_near((io.MousePos.x + gx - x0) / (x1 - x0), pf.lo, pf.hi);
+		const float db = -((io.MousePos.y + gy) - (top + bottom) * 0.5f) / ((bottom - top) * 0.5f) * DB;
+		const int ng = std::clamp(int(std::lround(64 + db)), int(pg.lo), int(pg.hi));
+		if (nf != b.vf) br.send(m.set_raw(xg::pack(0x03, blk, pf.addr), pf.size, nf));
+		if (ng != b.vg) br.send(m.set_raw(xg::pack(0x03, blk, pg.addr), pg.size, ng));
+		m_focus = b.gain;
+	}
+	const int hot = active ? grab : hovered ? nearest() : -1;
+	if (hovered && hot >= 0) {
+		const band &b = *used[hot];
+		m_focus = b.gain;
+		if (b.width >= 0) {
+			ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+			if (io.MouseWheel != 0.0f) {
+				const xg::fx_param &pw = def.params[b.width];
+				const int nw = std::clamp(b.vw + (io.MouseWheel > 0 ? 1 : -1) * (io.KeyCtrl ? 10 : 2), int(pw.lo), int(pw.hi));
+				if (nw != b.vw) br.send(m.set_raw(xg::pack(0x03, blk, pw.addr), pw.size, nw));
+				m_focus = b.width;
+			}
+		}
+	}
+
+	// 描く
+	dl->AddRectFilled(p0, p1, IM_COL32(10, 12, 10, 150), 8.0f);
+	const ImU32 grid = IM_COL32(255, 255, 255, 40), label = IM_COL32(255, 255, 255, 130);
+	for (float db : { -12.0f, -6.0f, 0.0f, 6.0f, 12.0f }) {
+		dl->AddLine(ImVec2(x0, y_of(db)), ImVec2(x1, y_of(db)), db == 0.0f ? IM_COL32(255, 255, 255, 90) : grid);
+		char t[8];
+		std::snprintf(t, sizeof(t), "%+.0f", db);
+		dl->AddText(ImVec2(p0.x + pad * 0.4f, y_of(db) - fs * 0.5f), label, db == 0.0f ? "0" : t);
+	}
+	for (float hz : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f }) {
+		dl->AddLine(ImVec2(x_of(hz), top), ImVec2(x_of(hz), bottom), grid);
+		char t[8];
+		if (hz >= 1000) std::snprintf(t, sizeof(t), "%.0fk", hz / 1000);
+		else            std::snprintf(t, sizeof(t), "%.0f", hz);
+		dl->AddText(ImVec2(x_of(hz) - ImGui::CalcTextSize(t).x * 0.5f, bottom + pad * 0.3f), label, t);
+	}
+	const int np = std::max(16, int(x1 - x0) / 2);
+	std::vector<ImVec2> pts;
+	pts.reserve(np + 1);
+	for (int i = 0; i <= np; i++) {
+		const float t = float(i) / float(np);
+		const float f = eq::hz_of_t(t);
+		float db = 0;
+		for (const band *b : used)
+			db += eq::band_db(b->shape, float(b->vg - 64), float(eq::HZ[std::clamp(b->vf, 0, 60)]),
+			                  b->width >= 0 ? b->vw / 10.0f : 0.7f, f);
+		pts.push_back(ImVec2(x0 + (x1 - x0) * t, y_of(db)));
+	}
+	dl->PathClear();
+	dl->PathLineTo(ImVec2(x0, y_of(0)));
+	for (const ImVec2 &p : pts) dl->PathLineTo(p);
+	dl->PathLineTo(ImVec2(x1, y_of(0)));
+	dl->PathFillConcave(IM_COL32(150, 230, 90, 50));
+	dl->AddPolyline(pts.data(), int(pts.size()), IM_COL32(150, 230, 90, 255), 0, std::max(2.0f, fs * 0.12f));
+	const char *const names[] = { "L", "M", "H" };
+	for (size_t k = 0; k < used.size(); k++) {
+		const ImVec2 h = handle(*used[k]);
+		const bool on = int(k) == hot;
+		dl->AddCircleFilled(h, on ? fs * 0.55f : fs * 0.42f, on ? IM_COL32(255, 255, 240, 255) : IM_COL32(150, 230, 90, 255), 20);
+		const char *n = names[used[k] - bands];
+		dl->AddText(ImVec2(h.x - ImGui::CalcTextSize(n).x * 0.5f, h.y - fs * 0.5f), IM_COL32(10, 12, 10, 255), n);
+	}
+	if (hovered && !active && hot >= 0)
+		ImGui::SetItemTooltip(help_lang() == 1 ? "Drag a point: sideways for frequency, up/down for gain. Wheel on M for width."
+		                                       : "点をつまんで、横で周波数、縦でゲイン。M の点ではホイールで幅");
 }
 
 
@@ -281,6 +439,12 @@ void fx_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
 			if (ImGui::IsItemHovered() || ImGui::IsItemActive())
 				m_focus = i;
 		}
+		// EQ のパラメータを持つ種類は、つまみの下に特性のグラフ
+		const int rows = (def->count + per_row - 1) / per_row;
+		const float gy0 = y + float(rows) * (cell_h + fs * 0.6f);
+		const float gy1 = note0.y - fs * 0.6f;
+		if (gy1 - gy0 > fs * 4.0f)
+			eq_graph(*def, blk, m, br, ImVec2(left - fs * 0.4f, gy0), ImVec2(right + fs * 0.4f, gy1));
 	}
 	dl->AddRectFilled(note0, note1, IM_COL32(0, 0, 0, 70), 8.0f);
 	if (def && m_focus >= 0 && m_focus < def->count) {
