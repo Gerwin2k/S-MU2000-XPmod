@@ -37,6 +37,37 @@ ImU32 part_color(int part)
 	return IM_COL32(int(r * 255), int(g * 255), int(b * 255), 255);
 }
 
+// 鍵盤の上の点が、どの鍵か。黒鍵を先に見る。外なら -1。vel に強さ（下ほど強い）
+int key_at(ImVec2 pos, float w, float h, ImVec2 at, int &vel)
+{
+	const float fs = ImGui::GetFontSize();
+	const float pad = fs * 0.2f;
+	const float top = pos.y + pad, bottom = pos.y + h - pad;
+	static const bool BLACK[12] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
+	static const float WHITE_POS[12] = { 0, 0.6f, 1, 1.6f, 2, 3, 3.6f, 4, 4.6f, 5, 5.6f, 6 };
+	const float kw = (w - pad * 2) / 75;
+	const float left = pos.x + pad;
+	if (at.y < top || at.y > bottom || at.x < left || at.x > left + kw * 75)
+		return -1;
+	const float frac = (at.y - top) / std::max(1.0f, bottom - top);
+	vel = std::clamp(int(30 + 97 * frac), 1, 127);
+	if (at.y < top + (bottom - top) * 0.6f) {
+		for (int note = 0; note < 128; note++) {
+			if (!BLACK[note % 12]) continue;
+			const float x = left + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
+			if (at.x >= x && at.x < x + kw * 0.8f)
+				return note;
+		}
+	}
+	for (int note = 0; note < 128; note++) {
+		if (BLACK[note % 12]) continue;
+		const float x = left + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
+		if (at.x >= x && at.x < x + kw)
+			return note;
+	}
+	return -1;
+}
+
 // 128 鍵の鍵盤。color は鍵ごとの色（0 なら押さえていない）
 template <typename F>
 void draw_keys(ImDrawList *dl, ImVec2 pos, float w, float h, F color)
@@ -501,7 +532,31 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 	{
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 		const float w = ImGui::GetContentRegionAvail().x;
-		ImGui::Dummy(ImVec2(w, h));
+		// 押すと鳴らす（左でも右でも）。押したまま横に動かすと鍵が替わる。離すとノートオフ。
+		// 送り先はこのパートの受信チャンネル（口 B なら口 B へ）
+		ImGui::InvisibleButton("##keys", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+		const bool down = ImGui::IsItemActive() && slot >= 0 &&
+		                  (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right));
+		int vel = 100;
+		const int want = down ? key_at(pos, w, h, ImGui::GetIO().MousePos, vel) : -1;
+		if (want != m_playing[part]) {
+			auto send = [&](const u8 msg[3]) {
+				if (m_playing_slot[part] >= 16) br.send_b(msg, 3);
+				else                            br.send(msg, 3);
+			};
+			if (m_playing[part] >= 0) {
+				const u8 off[3] = { u8(0x80 | (m_playing_slot[part] & 15)), u8(m_playing[part]), 64 };
+				send(off);
+			}
+			m_playing[part] = want;
+			if (want >= 0) {
+				m_playing_slot[part] = slot;
+				const u8 on[3] = { u8(0x90 | (slot & 15)), u8(want), u8(vel) };
+				send(on);
+			}
+		}
+		if (ImGui::IsItemHovered() && !down && slot >= 0)
+			ImGui::SetItemTooltip("押すと鳴らす（左右どちらのボタンでも）。下ほど強く");
 		draw_keys(dl, pos, w, h, [&](int note) -> ImU32 {
 			return slot >= 0 && ((ram.notes[slot][note >> 6] >> (note & 63)) & 1) ? NOTE_ON : 0;
 		});

@@ -45,6 +45,11 @@ public:
 		// パラメータの層の問い合わせ。外へは流さない
 		while (br.take_ask(b))
 			mu.midi_in(b);
+		// 画面から口 B へ（一覧の鍵盤）。外へは流さない
+		while (br.take_midi_b(b)) {
+			mu.midi_in(b, 1);
+			watch(b, 1);
+		}
 	}
 
 	void pump_midi(mu2000 &mu, bridge &br)
