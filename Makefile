@@ -4,6 +4,7 @@
 #                 render は MIDI ファイルを WAV に書き出す
 #                 live   は MIDI 入力を受けてその場で鳴らす
 #   make check    run the checks that need no ROMs (verify)
+#   make test     回帰試験（ROM が無ければ verify だけ）
 #   make clean    消す
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
@@ -26,6 +27,7 @@ endif
 
 ifeq ($(PLATFORM),windows)
 CXX      ?= g++
+PYTHON   ?= python
 # MSYS2 の DLL に依存させない。動的リンクのままだと、MSYS2 の環境の外
 # （素の PowerShell など）では起動に失敗して何も言わずに終わる
 LDFLAGS  ?= -static -static-libgcc -static-libstdc++
@@ -36,6 +38,8 @@ else
 ifeq ($(origin CXX),default)
 CXX      := clang++
 endif
+# macOS answers to python3; plain "python" is not usually there
+PYTHON   ?= python3
 LDFLAGS  ?=
 EXE      :=
 # Apple Clang is stricter than GCC. The imported MAME sources do not put override
@@ -78,7 +82,7 @@ ifeq ($(PLATFORM),windows)
 # vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
 all: $(BUILD)/verify$(EXE) $(BUILD)/boot$(EXE) $(BUILD)/render$(EXE) \
      $(BUILD)/live$(EXE) $(BUILD)/midisend$(EXE) $(BUILD)/panel$(EXE) $(BUILD)/gui$(EXE) \
-     $(BUILD)/statetest$(EXE) $(BUILD)/rec$(EXE) \
+     $(BUILD)/statetest$(EXE) $(BUILD)/rec$(EXE) $(BUILD)/blocktime$(EXE) \
      vst3 $(BUILD)/vst3probe$(EXE)
 else
 # macOS. vst3 and vst3probe are defined below
@@ -93,6 +97,22 @@ $(BUILD)/verify$(EXE): $(OBJS) $(BUILD)/src/verify.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/boot$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+# 1 ブロックを作るのに何 ms かかるかを測る。音声デバイスは使わない。
+# 待ち時間の下限はこの最悪値で決まる（doc/todo.md 2 番）
+#
+# Windows only for now: it measures with QueryPerformanceCounter directly.
+# Nothing in the macOS build needs it, so it is not in the macOS all target
+ifeq ($(PLATFORM),windows)
+$(BUILD)/blocktime$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/blocktime.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+endif
+
+# パラメータの層の定義表を firmware に確かめさせる（doc/params.md）
+$(BUILD)/xgtest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/xg/model.o $(BUILD)/src/xgtest.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -119,7 +139,7 @@ ifeq ($(PLATFORM),windows)
 # gui は実機のフロントパネル風の画面を出す
 UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp \
            src/ui/audio_out.cpp src/ui/midi_in.cpp src/ui/midi_out.cpp \
-           src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp
+           src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp src/xg/model.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 
 $(BUILD)/gui$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(BUILD)/src/gui.o
@@ -138,7 +158,7 @@ $(BUILD)/rec$(EXE): $(BUILD)/src/smf.o $(BUILD)/src/rec.o $(BUILD)/src/compat/co
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -luuid
 
 # live は Windows の MIDI 入力と音声出力を使う
-$(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/live.o
+$(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/ui/audio_out.o $(BUILD)/src/live.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lavrt
 
@@ -158,7 +178,7 @@ VST3_SDK_SRCS := 	third_party/vst3/pluginterfaces/base/funknown.cpp 	third_party
 
 VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp \
              src/vst3/view.cpp src/ui/panel.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/editor.cpp \
-             src/ui/effects.cpp $(VST3_SDK_SRCS)
+             src/ui/effects.cpp src/xg/model.cpp $(VST3_SDK_SRCS)
 VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
 
 $(BUILD)/vst3obj/%.o: %.cpp
@@ -230,6 +250,7 @@ $(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(MAC_IO_OBJS) $(BUILD)/src/l
 MAC_GUI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp \
                 src/ui/png.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp \
                 src/ui/audio_out_mac.cpp src/ui/midi_in_mac.cpp src/ui/midi_out_mac.cpp \
+                src/xg/model.cpp \
                 src/compat/gdi_mac.cpp src/ui/window_mac.mm src/gui_mac.cpp
 MAC_GUI_OBJS := $(MAC_GUI_SRCS:%.cpp=$(BUILD)/%.o)
 MAC_GUI_OBJS := $(MAC_GUI_OBJS:%.mm=$(BUILD)/%.o)
@@ -263,7 +284,7 @@ VST3_SDK_SRCS := \
 VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp \
              src/vst3/view.cpp src/vst3/view_mac.mm src/compat/gdi_mac.cpp \
              src/ui/panel.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/editor.cpp \
-             src/ui/effects.cpp $(VST3_SDK_SRCS)
+             src/ui/effects.cpp src/xg/model.cpp $(VST3_SDK_SRCS)
 VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
 VST3_OBJS := $(VST3_OBJS:%.mm=$(BUILD)/vst3obj/%.o)
 
@@ -379,11 +400,29 @@ $(BUILD)/%.o: %.cpp
 MAME_SH7042 ?= ../MU2000/mame-src/src/devices/cpu/sh/sh7042.cpp
 
 regen:
-	python tools/gen_sh7042_map.py $(MAME_SH7042)
+	$(PYTHON) tools/gen_sh7042_map.py $(MAME_SH7042)
 
 # Checks that need no ROMs; this is how the port is shown to hold together
 check: $(BUILD)/verify$(EXE)
 	$(BUILD)/verify$(EXE)
+
+# 回帰試験。直したことで音が変わっていないかを見る。
+#
+# ROM は同梱できないので、ROM が無い機械では verify だけが走る（それが正しい）。
+# ROM の置き場は SMU2000_ROMS で渡せる。既定は roms/ か ../MU2000/roms。
+#   make test                     全部
+#   make test T=piano             1 件だけ
+#   make test-update              指紋を焼き直す（意図して音を変えたとき）
+#
+# The test names are the same on both platforms: run_tests.py is the one that
+# knows whether the binaries carry an .exe suffix (tools/run_tests.py)
+TEST_EXES := $(BUILD)/verify$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/render$(EXE) $(BUILD)/xgtest$(EXE)
+
+test: $(TEST_EXES)
+	$(PYTHON) tools/run_tests.py $(if $(T),--only $(T),)
+
+test-update: $(TEST_EXES)
+	$(PYTHON) tools/run_tests.py --update $(if $(T),--only $(T),)
 
 clean:
 	rm -rf $(BUILD)
@@ -396,4 +435,4 @@ clean:
 # 別の場所を触りに行っていた）。だから build の下にある .d を全部拾う
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
-.PHONY: all clean regen check vst3 install-vst3 probe au install-au au-probe check-au
+.PHONY: all clean regen check test test-update vst3 install-vst3 probe au install-au au-probe check-au

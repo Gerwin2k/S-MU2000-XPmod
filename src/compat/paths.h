@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include <cerrno>
 #include <cstdio>
 #include <string>
 
@@ -188,6 +189,51 @@ inline bool is_dir(const std::string &p)
 #else
 	struct stat st{};
 	return ::stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+// One directory level, no parents. Already existing counts as success
+inline bool make_dir(const std::string &p)
+{
+	if (p.empty())
+		return false;
+#if defined(_WIN32)
+	return CreateDirectoryA(p.c_str(), nullptr) != 0 || GetLastError() == ERROR_ALREADY_EXISTS;
+#else
+	return ::mkdir(p.c_str(), 0755) == 0 || errno == EEXIST;
+#endif
+}
+
+// A directory that has to exist, made if it does not, parents included. The
+// NVRAM file lives two levels under the settings directory, and on a machine
+// that has never run this before neither level is there yet
+inline bool ensure_dir(const std::string &path)
+{
+	if (path.empty())
+		return false;
+	if (is_dir(path))
+		return true;
+	std::string at = path;
+	while (!at.empty() && (at.back() == '/' || at.back() == '\\'))
+		at.pop_back();
+	for (size_t i = 1; i < at.size(); i++) {
+		if (at[i] != '/' && at[i] != '\\')
+			continue;
+		make_dir(at.substr(0, i));
+	}
+	return make_dir(at);
+}
+
+// Rename, replacing the destination if it is already there. std::rename does
+// not replace on Windows, and the NVRAM write leans on the replacement being
+// one step, so that side goes through MoveFileEx
+inline bool replace_file(const std::string &from, const std::string &to)
+{
+#if defined(_WIN32)
+	return MoveFileExA(from.c_str(), to.c_str(),
+	                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+	return std::rename(from.c_str(), to.c_str()) == 0;
 #endif
 }
 

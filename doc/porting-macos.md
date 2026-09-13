@@ -20,10 +20,35 @@ Target: **Apple silicon (arm64) only.** Build with the system clang++.
 ```
 make          build every tool and both plug-in bundles
 make check    ROM-free sanity check (runs build/verify)
+make test     the regression suite (audio fingerprints + xgtest)
 make probe    load the VST3 bundle in a headless host
 make au-probe load the AU bundle in a headless host
 make check-au same, plus the AU's torture test
 ```
+
+### Since the upstream merge
+
+37 commits were merged in from `tarboh/S-MU2000` (the parameter layer, the
+regression suite, MIDI OUT, the NVRAM settings file, the driver/resampler
+rewrite). Most of it is shared code and arrived working; `make test` passes here
+with upstream's fingerprints unchanged, which is the strongest statement that
+both platforms compute the same audio.
+
+Three macOS gaps are deliberate — they were left out to keep the merge a merge,
+and are the first things to pick up afterwards:
+
+* `live --exclusive`, `--audio <name>` and `--dump-dev` are parsed but only the
+  Windows side acts on them. CoreAudio can do all three (hog mode, device
+  selection, a capture WAV); `ui::audio_out` on macOS does not implement them yet.
+* The GUI cannot pick the machine's own **MIDI OUT** (upstream's `mout_mu`), so an
+  external editor cannot read or write the settings over a virtual port. The
+  engine already routes it; only the menu entry is missing.
+* `src/blocktime.cpp` is Windows-only (it calls `QueryPerformanceCounter`
+  directly) and is therefore not in the macOS `all` target. Its measurement
+  would port in a few lines through `smu2000::perf_ticks()`.
+
+`live` does now take part in the settings file (upstream saves NVRAM on exit),
+and the GUI does not yet: `ui::engine::use_nvram` is left false there.
 
 ## The core needed one change
 

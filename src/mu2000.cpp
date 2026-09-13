@@ -566,6 +566,11 @@ void mu2000::reset()
 	m_cpu->sci_rx_w<0>(1);
 	m_cpu->sci_rx_w<1>(1);
 
+	// MIDI OUT。SCI ch0 の送信線（MAME も ch0 を mdout へ繋いでいる）
+	m_tx_r = m_tx_w = 0;
+	m_tx_bit = -1;
+	m_cpu->write_sci_tx<0>().set([this](int s) { tx_line(s); });
+
 	start_devices();
 
 	for (auto &d : m_config.m_devices)
@@ -645,6 +650,31 @@ void mu2000::run_cycles(u64 n)
 //
 // 実機のエンコーダは A 相と B 相が 1/4 周期ずれて開閉する。firmware は
 // その順番で向きを読むので、位相をまとめて飛ばしてはいけない。
+void mu2000::tx_line(int state)
+{
+	if (m_tx_bit < 0) {
+		if (!state) {            // スタートビット
+			m_tx_bit = 0;
+			m_tx_cur = 0;
+		}
+		return;
+	}
+	if (m_tx_bit < 8) {
+		m_tx_cur |= u8((state ? 1 : 0) << m_tx_bit);
+		m_tx_bit++;
+		return;
+	}
+	// ストップビット。0 なら枠がずれているので、その 1 バイトは捨てる
+	m_tx_bit = -1;
+	if (!state)
+		return;
+	const size_t next = (m_tx_w + 1) & TX_MASK;
+	if (next == m_tx_r)
+		return;                  // 溢れ。誰も読んでいない
+	m_tx_buf[m_tx_w] = m_tx_cur;
+	m_tx_w = next;
+}
+
 void mu2000::midi_step(u64 now)
 {
 	// A と B は別々の SCI に繋がっている。互いに待たせない
@@ -688,7 +718,19 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	const u64 cycles = m_cycle_debt / 44100;
 	m_cycle_debt -= cycles * 44100;
 
+	// 内訳を測る（set_profile(true) のときだけ）
+	// (smu2000::perf_ticks() is QueryPerformanceCounter on Windows, so the
+	//  measurement is the same one on both platforms -- see compat/platform.h)
+	u64 pt0 = 0, pt1 = 0, pt2 = 0;
+	if (m_profile)
+		pt0 = smu2000::perf_ticks();
+
 	run_cycles(cycles);
+
+	if (m_profile) {
+		pt1 = smu2000::perf_ticks();
+		m_t_cpu += pt1 - pt0;
+	}
 
 	// マスタとスレーブを 1 サンプルずつ進める。
 	// 別スレッドが空いていればスレーブをそちらに投げ、同時に走らせる
@@ -705,6 +747,12 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	} else {
 		m_swpm.run_sample(lm, rm);
 		m_swps.run_sample(ls, rs);
+	}
+
+	if (m_profile) {
+		pt2 = smu2000::perf_ticks();
+		m_t_swpm += pt2 - pt1;
+		m_t_n++;
 	}
 
 	// 2 個の SWP30 は MELO/MELI のシリアルで相互に結ばれている。
@@ -817,5 +865,8 @@ bool mu2000::load_state(const u8 *p, size_t n, std::string &err)
 		err = s.error();
 		return false;
 	}
+	// MIDI OUT の途中の枠と溜めは保存していない。空から始める
+	m_tx_r = m_tx_w = 0;
+	m_tx_bit = -1;
 	return true;
 }

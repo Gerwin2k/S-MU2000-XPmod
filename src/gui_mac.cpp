@@ -212,6 +212,11 @@ public:
 
 	void draw(void *cg, int w, int h) override
 	{
+		// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む。
+		// The window's timer is where this has to happen: it touches the bridge,
+		// so it must not run on the audio thread (same as gui.cpp's WM_TIMER)
+		panel.tick(br);
+
 		ui::snapshot s;
 		br.read(s);
 		const u64 pressed = br.buttons();

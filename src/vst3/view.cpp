@@ -233,6 +233,11 @@ void plug_view::repaint(void *native, int w, int h)
 	if (!native || w <= 0 || h <= 0)
 		return;
 
+	// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む
+	// (this is the GUI thread -- the Win32 timer and the macOS one both arrive
+	//  here, so the polling happens once per frame on either platform)
+	m_impl->panel.tick(m_engine.panel());
+
 #if defined(_WIN32)
 	HDC dst = static_cast<HDC>(native);
 	if (!m_impl->mem_dc || m_impl->mem_w != w || m_impl->mem_h != h) {

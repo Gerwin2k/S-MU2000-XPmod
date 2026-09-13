@@ -12,7 +12,17 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <thread>
+
+// windows.h is needed for the performance counter below, and the sources that
+// use it all pulled it in anyway before the port, so nothing new is leaking in.
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#endif
 
 // The x86 pause intrinsic. Only pull the header on x86 so the ARM build does
 // not trip over <immintrin.h> (which errors out on non-x86 targets).
@@ -43,11 +53,43 @@ inline void cpu_pause() noexcept
 #endif
 }
 
+// A monotonic counter and its frequency, so that elapsed ticks can be turned
+// into seconds. This is the same idea as QueryPerformanceCounter() /
+// QueryPerformanceFrequency(), and on Windows it *is* those two calls, so a
+// measurement taken here means the same thing it always did on that side.
+// Only differences are meaningful; the absolute value is not a time.
+inline std::uint64_t perf_ticks() noexcept
+{
+#if defined(_WIN32)
+	LARGE_INTEGER t;
+	QueryPerformanceCounter(&t);
+	return std::uint64_t(t.QuadPart);
+#else
+	// CLOCK_MONOTONIC via steady_clock, which is what a stopwatch wants: it
+	// keeps counting across a sleep and is not moved by the clock being set
+	return std::uint64_t(std::chrono::steady_clock::now().time_since_epoch().count());
+#endif
+}
+
+inline std::uint64_t perf_freq() noexcept
+{
+#if defined(_WIN32)
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	return std::uint64_t(f.QuadPart);
+#else
+	// steady_clock counts its own periods, so the frequency is the reciprocal
+	// of one period in seconds. libc++ makes it nanoseconds (1e9)
+	using period = std::chrono::steady_clock::period;
+	return std::uint64_t(period::den) / std::uint64_t(period::num);
+#endif
+}
+
 // Sleep for a number of milliseconds.
 //
-// std::this_thread::sleep_for rather than Sleep() on purpose: it needs no
-// windows.h, and on Windows it waits on the same timer, so it rounds up to the
-// same granularity when timeBeginPeriod() has not been asked for.
+// std::this_thread::sleep_for rather than Sleep() on purpose: on Windows it
+// waits on the same timer, so it rounds up to the same granularity when
+// timeBeginPeriod() has not been asked for.
 inline void sleep_ms(int ms) noexcept
 {
 	std::this_thread::sleep_for(std::chrono::milliseconds(ms));

@@ -9,8 +9,9 @@
 // back out. Two copies of that is two things that can drift, and a drift there
 // would show up as the two platforms sounding different.
 //
-// Nothing in here touches a window or an OS API, so it is the same on both
-// platforms. See doc/porting-macos.md.
+// Nothing in here touches a window, so it is the same on both platforms. What
+// it does reach for is the OS clock and the settings file, both through
+// compat/ (see doc/porting-macos.md).
 
 #ifndef S_MU2000_UI_ENGINE_H
 #define S_MU2000_UI_ENGINE_H
@@ -20,14 +21,19 @@
 #include "audio_out.h"
 #include "bridge.h"
 #include "driver.h"
+#include "midi_guard.h"
 #include "midi_in.h"
 #include "midi_out.h"
 #include "mu2000.h"
+#include "nvram.h"
+
+#include "compat/platform.h"
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace ui {
 
@@ -36,10 +42,18 @@ struct engine {
 	bridge   &br;
 	midi_in  &midi;        // MIDI IN A（パート 1-16）
 	midi_in  *midi_b = nullptr;   // MIDI IN B（パート 17-32）
-	midi_out *mout = nullptr;     // MIDI OUT A（A で受けたものを外へ）
-	midi_out *mout_b = nullptr;   // MIDI OUT B（B で受けたものを外へ）
+	midi_out *mout = nullptr;     // MIDI THRU A（A で受けたものを外へ）
+	midi_out *mout_b = nullptr;   // MIDI THRU B（B で受けたものを外へ）
+	// MIDI OUT。MU2000 が自分で送り出すもの（XG のダンプ要求への返事など）。
+	// これを loopMIDI 越しに外のエディタへ返すと、外から読み書きできる
+	midi_out *mout_mu = nullptr;
 
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
+	// THRU A / B の流量の上限。MIDI の輪で溢れたものを実機へ流さない（midi_guard.h）
+	thru_guard guard_a, guard_b;
+	// fill() が機械に触っている最中か。起動し直すときはこれが落ちるのを待つ
+	std::atomic<bool> in_fill{false};
+	bool use_nvram = false;           // 覚えている設定で起動するか（窓を出すときだけ）
 	std::string      message = "起動中...";
 
 	driver drv;
@@ -62,6 +76,8 @@ struct engine {
 	bool boot()
 	{
 		mu.set_threaded(true);
+		if (use_nvram && smu2000::nvram::load(mu))
+			std::printf("設定: %s\n", smu2000::nvram::path(mu).c_str());
 		mu.reset();
 		const size_t limit = size_t(30.0 * AUDIO_RATE);
 		size_t i = 0;
@@ -76,6 +92,35 @@ struct engine {
 		return true;
 	}
 
+	// 工場出荷状態に戻す。覚えている設定を捨てて電源を入れ直す。
+	// 音声の糸が機械から手を離すのを待ってから触る
+	void factory_reset()
+	{
+		state.store(0);
+		message = "工場出荷状態に戻している...";
+		publish();
+		while (in_fill.load())
+			smu2000::sleep_ms(1);
+
+		const std::vector<u8> zero(mu.nvram().size(), 0);
+		mu.set_nvram(zero.data(), zero.size());
+		const bool keep = use_nvram;
+		use_nvram = false;
+		const bool ok = boot();
+		use_nvram = keep;
+		if (!ok) {
+			state.store(2);
+			publish();
+			return;
+		}
+		// すぐ残す。ここで落ちても前の設定に戻らないように
+		smu2000::nvram::save(mu);
+		std::printf("工場出荷状態に戻した\n");
+		std::fflush(stdout);
+		state.store(1);
+		publish();
+	}
+
 	void publish()
 	{
 		if (state.load() == 1)
@@ -87,20 +132,27 @@ struct engine {
 	// 音声デバイスに頼まれた分だけ進める
 	void fill(s16 *out, u32 n)
 	{
+		// 先に「触っている」を立ててから state を見る。逆にすると、見た直後に
+		// 起動し直しが始まって、両方が機械に触ってしまう
+		in_fill.store(true);
 		if (state.load() != 1) {
+			in_fill.store(false);
 			std::memset(out, 0, size_t(n) * 4);
 			return;
 		}
 
+		guard_a.refill(n, AUDIO_RATE);
+		guard_b.refill(n, AUDIO_RATE);
+
 		drv.apply_buttons(mu, br);
 		// 画面から出したものも、外の MIDI 出力へ流す（実機の THRU）
-		drv.pump_midi(mu, br, [this](u8 v) { if (mout) mout->send(v); });
+		drv.pump_midi(mu, br, [this](u8 v) { if (mout && guard_a.pass(v)) mout->send(v); });
 		drv.pump_wheel(mu, br);
 
 		u8 b;
 		while (midi.pop(b)) {
 			mu.midi_in(b, 0);
-			if (mout) mout->send(b);
+			if (mout && guard_a.pass(b)) mout->send(b);
 		}
 		// B は実機の 2 つめの DIN（内蔵 SCI ch1）。パート 17-32 に届く。
 		// THRU も口ごとに分ける。A で受けたものは MIDI OUT A、
@@ -109,7 +161,7 @@ struct engine {
 		if (midi_b)
 			while (midi_b->pop(b)) {
 				mu.midi_in(b, 1);
-				if (mout_b) mout_b->send(b);
+				if (mout_b && guard_b.pass(b)) mout_b->send(b);
 			}
 
 		const float g = br.gain();
@@ -123,7 +175,12 @@ struct engine {
 			out[i * 2 + 1] = s16(r < -32768 ? -32768 : r > 32767 ? 32767 : r);
 		}
 
+		// firmware が送り出したもの。画面（パラメータの層）と MIDI OUT の口へ。
+		// 出口が無くても取り出しておく（溜めを空ける）
+		drv.pump_out(mu, br, [this](u8 v) { if (mout_mu) mout_mu->send(v); });
+
 		drv.publish(mu, br, n, AUDIO_RATE, true, nullptr);
+		in_fill.store(false);
 	}
 };
 

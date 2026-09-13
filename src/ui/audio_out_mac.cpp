@@ -13,7 +13,9 @@
 #include <CoreAudio/CoreAudio.h>
 #include <mach/mach_time.h>
 
+#include <algorithm>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace ui {
@@ -43,6 +45,60 @@ AudioDeviceID default_output_device()
 	                               &size, &dev) != noErr)
 		return kAudioObjectUnknown;
 	return dev;
+}
+
+// Does this device have anything to play through? The device list also holds
+// input-only devices, and offering those as an output would be a lie
+bool has_output(AudioDeviceID dev)
+{
+	AudioObjectPropertyAddress addr = {
+		kAudioDevicePropertyStreams,
+		kAudioObjectPropertyScopeOutput,
+		kAudioObjectPropertyElementMain
+	};
+	UInt32 size = 0;
+	if (AudioObjectGetPropertyDataSize(dev, &addr, 0, nullptr, &size) != noErr)
+		return false;
+	return size >= sizeof(AudioStreamID);
+}
+
+// Named rather than called device_name(), which would collide with the member
+// function of the same name wherever one is in scope
+std::string name_of(AudioDeviceID dev)
+{
+	AudioObjectPropertyAddress addr = {
+		kAudioObjectPropertyName,
+		kAudioObjectPropertyScopeGlobal,
+		kAudioObjectPropertyElementMain
+	};
+	CFStringRef name = nullptr;
+	UInt32 size = sizeof(name);
+	if (AudioObjectGetPropertyData(dev, &addr, 0, nullptr, &size, &name) != noErr || !name)
+		return {};
+	char buf[256] = {};
+	const bool ok = CFStringGetCString(name, buf, sizeof(buf), kCFStringEncodingUTF8);
+	CFRelease(name);
+	return ok ? std::string(buf) : std::string();
+}
+
+std::vector<AudioDeviceID> output_devices()
+{
+	AudioObjectPropertyAddress addr = {
+		kAudioHardwarePropertyDevices,
+		kAudioObjectPropertyScopeGlobal,
+		kAudioObjectPropertyElementMain
+	};
+	UInt32 size = 0;
+	if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &addr, 0, nullptr, &size) != noErr)
+		return {};
+	std::vector<AudioDeviceID> devs(size / sizeof(AudioDeviceID));
+	if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, nullptr, &size,
+	                               devs.data()) != noErr)
+		return {};
+	devs.erase(std::remove_if(devs.begin(), devs.end(),
+	                          [](AudioDeviceID d) { return !has_output(d); }),
+	           devs.end());
+	return devs;
 }
 
 // Best effort: ask the device for a buffer matching the requested latency.
@@ -149,6 +205,17 @@ struct audio_out::impl
 			starved.fetch_add(1, std::memory_order_relaxed);
 	}
 };
+
+std::vector<std::string> audio_out::list()
+{
+	std::vector<std::string> names;
+	for (AudioDeviceID d : output_devices()) {
+		const std::string n = name_of(d);
+		if (!n.empty())
+			names.push_back(n);
+	}
+	return names;
+}
 
 audio_out::audio_out() = default;
 
