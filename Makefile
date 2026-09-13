@@ -3,14 +3,46 @@
 #   make          verify / boot / render / live を作る
 #                 render は MIDI ファイルを WAV に書き出す
 #                 live   は MIDI 入力を受けてその場で鳴らす
+#   make check    run the checks that need no ROMs (verify)
 #   make clean    消す
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
 # C++20 が要る（sh.cpp が std::rotl / std::rotr を使う）。
 
-CXX      ?= g++
 # 音を作るのは重いので最適化を上げる。-O2 より 6% 速い
 CXXFLAGS ?= -std=c++20 -O3 -Wall -Wno-unused-variable -Wno-unused-but-set-variable
+
+# ---- Platform ----------------------------------------------------------------
+#
+# The same file builds on Windows (MSYS2/MinGW-w64) and on macOS.
+#   Windows ... OS holds Windows_NT
+#   macOS   ... uname -s answers Darwin
+PLATFORM := unknown
+ifeq ($(OS),Windows_NT)
+PLATFORM := windows
+else ifeq ($(shell uname -s),Darwin)
+PLATFORM := macos
+endif
+
+ifeq ($(PLATFORM),windows)
+CXX      ?= g++
+# MSYS2 の DLL に依存させない。動的リンクのままだと、MSYS2 の環境の外
+# （素の PowerShell など）では起動に失敗して何も言わずに終わる
+LDFLAGS  ?= -static -static-libgcc -static-libstdc++
+EXE      := .exe
+else
+# `CXX ?= clang++` would not work: make already has CXX set (to c++), and `?=`
+# leaves a defined variable alone. So swap it only while it is still the default
+ifeq ($(origin CXX),default)
+CXX      := clang++
+endif
+LDFLAGS  ?=
+EXE      :=
+# Apple Clang is stricter than GCC. The imported MAME sources do not put override
+# on virtual functions, so turn off just this warning rather than edit them:
+# that keeps the diff small for sending the changes back upstream
+CXXFLAGS += -Wno-inconsistent-missing-override
+endif
 
 # 自分の CPU に合わせるとさらに 4% ほど速いが、他の機械では動かなくなる。
 #   make MARCH=native
@@ -20,10 +52,6 @@ endif
 CXXFLAGS += -I src -I src/compat
 # ヘッダを直したときに .o を作り直させる
 CXXFLAGS += -MMD -MP
-
-# MSYS2 の DLL に依存させない。動的リンクのままだと、MSYS2 の環境の外
-# （素の PowerShell など）では起動に失敗して何も言わずに終わる
-LDFLAGS ?= -static -static-libgcc -static-libstdc++
 
 BUILD := build
 
@@ -46,33 +74,47 @@ SRCS := \
 
 OBJS := $(SRCS:%.cpp=$(BUILD)/%.o)
 
+ifeq ($(PLATFORM),windows)
 # vst3 と vst3probe は下で定義している。変数はまだ空なので名前で書く
-all: $(BUILD)/verify.exe $(BUILD)/boot.exe $(BUILD)/render.exe \
-     $(BUILD)/live.exe $(BUILD)/midisend.exe $(BUILD)/panel.exe $(BUILD)/gui.exe \
-     $(BUILD)/statetest.exe $(BUILD)/rec.exe \
-     vst3 $(BUILD)/vst3probe.exe
+all: $(BUILD)/verify$(EXE) $(BUILD)/boot$(EXE) $(BUILD)/render$(EXE) \
+     $(BUILD)/live$(EXE) $(BUILD)/midisend$(EXE) $(BUILD)/panel$(EXE) $(BUILD)/gui$(EXE) \
+     $(BUILD)/statetest$(EXE) $(BUILD)/rec$(EXE) \
+     vst3 $(BUILD)/vst3probe$(EXE)
+else
+# macOS. vst3 and vst3probe are defined below
+all: $(BUILD)/verify$(EXE) $(BUILD)/boot$(EXE) $(BUILD)/render$(EXE) \
+     $(BUILD)/panel$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/live$(EXE) \
+     $(BUILD)/gui$(EXE) vst3 $(BUILD)/vst3probe$(EXE) \
+     au $(BUILD)/aubprobe$(EXE)
+endif
 
-$(BUILD)/verify.exe: $(OBJS) $(BUILD)/src/verify.o
+$(BUILD)/verify$(EXE): $(OBJS) $(BUILD)/src/verify.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/boot.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
+$(BUILD)/boot$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
+$(BUILD)/render$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 # statetest は状態の保存と復元が正しいかを確かめる
-$(BUILD)/statetest.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/statetest.o
+$(BUILD)/statetest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/statetest.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 # panel はフロントパネル（LCD とボタン）を文字だけで動かす
-$(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/panel.o
+$(BUILD)/panel$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/panel.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+# ---- Windows-side ports (audio, MIDI, display) and VST3 ----------------------
+#
+# These still call the Windows APIs directly. The macOS ones are added at each
+# step of the port as src/ui/*_mac.cpp and listed in the branch below
+ifeq ($(PLATFORM),windows)
 
 # gui は実機のフロントパネル風の画面を出す
 UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp \
@@ -80,23 +122,23 @@ UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp 
            src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 
-$(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(BUILD)/src/gui.o
+$(BUILD)/gui$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(BUILD)/src/gui.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32
 
 # midisend は MIDI ファイルを実時間で MIDI 出力へ流す（live の試験用）
-$(BUILD)/midisend.exe: $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o
+$(BUILD)/midisend$(EXE): $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lavrt
 
 # rec は音声入力を WAV に録る。実機の音（S/PDIF 入力）と突き合わせるため。
 # 録りながら MIDI を実機へ流せるので、同じ譜面の実機とこちらを 1 回で並べられる
-$(BUILD)/rec.exe: $(BUILD)/src/smf.o $(BUILD)/src/rec.o $(BUILD)/src/compat/compat.o
+$(BUILD)/rec$(EXE): $(BUILD)/src/smf.o $(BUILD)/src/rec.o $(BUILD)/src/compat/compat.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -luuid
 
 # live は Windows の MIDI 入力と音声出力を使う
-$(BUILD)/live.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/live.o
+$(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/ui/midi_in.o $(BUILD)/src/live.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lavrt
 
@@ -143,12 +185,190 @@ install-vst3: $(VST3_BIN)
 	@echo "入れた: $(VST3_INSTALL)/S-MU2000.vst3"
 
 # 工場が名乗るかどうかだけを確かめる小さな道具
-$(BUILD)/vst3probe.exe: $(BUILD)/vst3obj/src/vst3/probe.o $(BUILD)/vst3obj/src/vst3/iids.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/funknown.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/coreiids.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/conststringtable.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/ustring.o                         $(BUILD)/src/smf.o $(BUILD)/src/compat/compat.o
+$(BUILD)/vst3probe$(EXE): $(BUILD)/vst3obj/src/vst3/probe.o $(BUILD)/vst3obj/src/vst3/probe_host_win.o                         $(BUILD)/vst3obj/src/vst3/iids.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/funknown.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/coreiids.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/conststringtable.o                         $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/ustring.o                         $(BUILD)/src/smf.o $(BUILD)/src/compat/compat.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lole32
 
-probe: $(BUILD)/vst3probe.exe $(VST3_BIN)
-	$(BUILD)/vst3probe.exe $(VST3_BIN)
+probe: $(BUILD)/vst3probe$(EXE) $(VST3_BIN)
+	$(BUILD)/vst3probe$(EXE) $(VST3_BIN)
+
+# The Audio Unit is a macOS port; nothing to build here
+au install-au au-probe check-au:
+	@echo "Audio Unit は macOS の口です。doc/porting-macos.md を見よ"
+
+else # macOS
+
+# ---- macOS-side ports (CoreAudio output, CoreMIDI input and output)
+#
+# The Windows side calls WinMM / WASAPI directly; here the same ui:: interfaces
+# are filled in with CoreAudio and CoreMIDI. live and gui both go through them
+#
+# The GUI additionally needs a window, which is AppKit (Cocoa) plus CoreText
+# for the panel's labels.
+MAC_FRAMEWORKS := -framework CoreAudio -framework AudioToolbox \
+                  -framework CoreMIDI -framework AudioUnit \
+                  -framework CoreFoundation -framework CoreGraphics \
+                  -framework CoreText -framework Cocoa \
+                  -framework UniformTypeIdentifiers
+
+MAC_IO_OBJS := $(BUILD)/src/ui/audio_out_mac.o $(BUILD)/src/ui/midi_in_mac.o
+
+$(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(MAC_IO_OBJS) $(BUILD)/src/live.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
+
+# gui draws the front-panel look of the real machine.
+#
+# panel.cpp and its neighbours are the **same source** as the Windows build; only
+# what is underneath differs. compat/gdi_mac.cpp fills the GDI interface in with
+# CoreGraphics and window_mac.mm fills the window in with AppKit
+# (doc/porting-macos.md).
+#
+# window_mac.mm is the one file compiled as Objective-C++: Cocoa's headers and
+# compat/gdi.h both want to define BOOL and Polygon, so they cannot be in the
+# same translation unit.
+MAC_GUI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp \
+                src/ui/png.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp \
+                src/ui/audio_out_mac.cpp src/ui/midi_in_mac.cpp src/ui/midi_out_mac.cpp \
+                src/compat/gdi_mac.cpp src/ui/window_mac.mm src/gui_mac.cpp
+MAC_GUI_OBJS := $(MAC_GUI_SRCS:%.cpp=$(BUILD)/%.o)
+MAC_GUI_OBJS := $(MAC_GUI_OBJS:%.mm=$(BUILD)/%.o)
+
+$(BUILD)/%.o: %.mm
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -fobjc-arc -c -o $@ $<
+
+$(BUILD)/gui$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(MAC_GUI_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
+
+# ---- VST3 plug-in (macOS)
+#
+# The bundle layout differs from Windows: the binary goes in Contents/MacOS and
+# Contents/Info.plist declares what the package is. A host opens it with CFBundle
+# rather than dlopen and calls bundleEntry (end of plugin.cpp).
+
+VST3_DIR  := $(BUILD)/S-MU2000.vst3
+VST3_BIN  := $(VST3_DIR)/Contents/MacOS/S-MU2000
+VST3_INC  := -I third_party/vst3
+
+VST3_SDK_SRCS := \
+	third_party/vst3/pluginterfaces/base/funknown.cpp \
+	third_party/vst3/pluginterfaces/base/coreiids.cpp \
+	third_party/vst3/pluginterfaces/base/conststringtable.cpp \
+	third_party/vst3/pluginterfaces/base/ustring.cpp
+
+# Uses the **same** panel.cpp / layout.cpp / svg.cpp as the Windows build, with
+# compat/gdi_mac.cpp filling in CoreGraphics underneath. The window is view_mac.mm
+VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp \
+             src/vst3/view.cpp src/vst3/view_mac.mm src/compat/gdi_mac.cpp \
+             src/ui/panel.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/editor.cpp \
+             src/ui/effects.cpp $(VST3_SDK_SRCS)
+VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
+VST3_OBJS := $(VST3_OBJS:%.mm=$(BUILD)/vst3obj/%.o)
+
+$(BUILD)/vst3obj/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VST3_INC) -c -o $@ $<
+
+$(BUILD)/vst3obj/%.o: %.mm
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VST3_INC) -fobjc-arc -c -o $@ $<
+
+vst3: $(VST3_BIN)
+
+# -bundle, not -shared: a VST3 is read with CFBundle, not dlopen
+$(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -bundle -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
+	@mkdir -p $(VST3_DIR)/Contents/Resources
+	@cp -f doc/vst3-readme.txt $(VST3_DIR)/Contents/Resources/README.txt 2>/dev/null || true
+	# 取り込んだものの著作権表示。BSD-3 はバイナリで配るときも添えろと言っている
+	@cp -f LICENSE $(VST3_DIR)/Contents/Resources/LICENSE.txt
+	@cp -f NOTICE.txt $(VST3_DIR)/Contents/Resources/NOTICE.txt
+	@cp -f packaging/vst3-macos-Info.plist $(VST3_DIR)/Contents/Info.plist
+	@printf 'APPL????' > $(VST3_DIR)/Contents/PkgInfo
+
+# Install into the default location. No admin rights needed on macOS
+VST3_INSTALL ?= $(HOME)/Library/Audio/Plug-Ins/VST3
+
+install-vst3: $(VST3_BIN)
+	rm -rf "$(VST3_INSTALL)/S-MU2000.vst3"
+	mkdir -p "$(VST3_INSTALL)"
+	cp -r $(VST3_DIR) "$(VST3_INSTALL)/"
+	@echo "入れた: $(VST3_INSTALL)/S-MU2000.vst3"
+
+# Small tool that pretends to be a host. Same as the Windows one, except that the
+# module is opened with CFBundle and the parent window is probe_host_mac.mm
+$(BUILD)/vst3probe$(EXE): $(BUILD)/vst3obj/src/vst3/probe.o \
+                          $(BUILD)/vst3obj/src/vst3/probe_host_mac.o \
+                          $(BUILD)/vst3obj/src/vst3/iids.o \
+                          $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/funknown.o \
+                          $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/coreiids.o \
+                          $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/conststringtable.o \
+                          $(BUILD)/vst3obj/third_party/vst3/pluginterfaces/base/ustring.o \
+                          $(BUILD)/src/smf.o $(BUILD)/src/compat/compat.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -framework CoreFoundation -framework Cocoa
+
+# Where the ROMs live. The plug-in searches env var -> bundle -> well-known
+# locations in that order (doc/porting-macos.md), so pass one in from here
+ROMS ?= roms
+
+# Both probes open the bundle with CFBundle, so they want the bundle itself and
+# not the executable: given the executable they stop with "cannot open bundle"
+probe: $(BUILD)/vst3probe$(EXE) $(VST3_BIN)
+	S_MU2000_ROMS=$(ROMS) $(BUILD)/vst3probe$(EXE) $(VST3_DIR)
+
+# ---- Audio Unit v2 (macOS)
+#
+# Runs the same engine as the VST3 build (src/vst3/engine.h); only the host
+# interface differs. The bundle follows AU convention instead, and Info.plist's
+# AudioComponents declares what it is
+
+AU_DIR := $(BUILD)/S-MU2000.component
+AU_BIN := $(AU_DIR)/Contents/MacOS/S-MU2000
+
+AU_SRCS := src/au/plugin.cpp src/vst3/engine.cpp $(VST3_SDK_SRCS)
+AU_OBJS := $(AU_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
+
+au: $(AU_BIN)
+
+# -bundle like the VST3: an AU is also read with CFBundle
+$(AU_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(AU_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -bundle -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
+	@mkdir -p $(AU_DIR)/Contents/Resources
+	@cp -f doc/vst3-readme.txt $(AU_DIR)/Contents/Resources/README.txt 2>/dev/null || true
+	@cp -f LICENSE $(AU_DIR)/Contents/Resources/LICENSE.txt
+	@cp -f NOTICE.txt $(AU_DIR)/Contents/Resources/NOTICE.txt
+	@cp -f packaging/au-macos-Info.plist $(AU_DIR)/Contents/Info.plist
+	@printf 'BNDL????' > $(AU_DIR)/Contents/PkgInfo
+
+# Where the AU goes. auval looks here
+AU_INSTALL ?= $(HOME)/Library/Audio/Plug-Ins/Components
+
+install-au: $(AU_BIN)
+	rm -rf "$(AU_INSTALL)/S-MU2000.component"
+	mkdir -p "$(AU_INSTALL)"
+	cp -r $(AU_DIR) "$(AU_INSTALL)/"
+	@echo "入れた: $(AU_INSTALL)/S-MU2000.component"
+	@echo "auval -v aumu SMU2 Trbh で確かめられる"
+
+# Small host that runs the AU without a DAW
+$(BUILD)/aubprobe$(EXE): $(BUILD)/vst3obj/src/au/probe.o $(BUILD)/src/smf.o \
+                        $(BUILD)/src/compat/compat.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -framework AudioToolbox \
+		-framework CoreFoundation
+
+au-probe: $(BUILD)/aubprobe$(EXE) $(AU_BIN)
+	S_MU2000_ROMS=$(ROMS) $(BUILD)/aubprobe$(EXE) $(AU_DIR) --list
+
+check-au: $(BUILD)/aubprobe$(EXE) $(AU_BIN)
+	S_MU2000_ROMS=$(ROMS) $(BUILD)/aubprobe$(EXE) $(AU_DIR) --torture
+
+endif # windows / macOS
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -161,6 +381,10 @@ MAME_SH7042 ?= ../MU2000/mame-src/src/devices/cpu/sh/sh7042.cpp
 regen:
 	python tools/gen_sh7042_map.py $(MAME_SH7042)
 
+# Checks that need no ROMs; this is how the port is shown to hold together
+check: $(BUILD)/verify$(EXE)
+	$(BUILD)/verify$(EXE)
+
 clean:
 	rm -rf $(BUILD)
 
@@ -172,4 +396,4 @@ clean:
 # 別の場所を触りに行っていた）。だから build の下にある .d を全部拾う
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
-.PHONY: all clean regen vst3 install-vst3 probe
+.PHONY: all clean regen check vst3 install-vst3 probe au install-au au-probe check-au

@@ -17,12 +17,54 @@
 #include <atomic>
 #include <functional>
 #include <string>
+
+#if defined(__APPLE__)
+#include <memory>
+#else
 #include <thread>
+#endif
 
 namespace ui {
 
 constexpr u32 AUDIO_RATE = 44100;
 
+#if defined(__APPLE__)
+
+// macOS: a CoreAudio DefaultOutput AudioUnit calls the render callback on its
+// own real-time HAL thread, so unlike the Windows side there is no worker thread
+// here. The public shape is identical, so live and the GUI do not know which
+// implementation they are talking to.
+class audio_out
+{
+public:
+	// 16bit 2ch インタリーブで frames サンプルぶん書く
+	using fill_fn = std::function<void(s16 *out, u32 frames)>;
+
+	// Both of these are declared here and defined in the .cpp. With a pimpl that
+	// is not optional: the compiler otherwise generates them here, where impl is
+	// still incomplete, and unique_ptr refuses to delete an incomplete type
+	audio_out();
+	~audio_out();
+
+	bool start(int latency_ms, fill_fn fill, std::string &err);
+	void stop();
+
+	// Progress. Written on the audio thread, safe to read from anywhere.
+	u32 buffer_frames() const;
+	u64 produced() const;
+	u64 starved() const;
+	// The CoreAudio render callback already runs at real-time priority, so this
+	// is the counterpart of registering with MMCSS on Windows
+	bool mmcss() const;
+	double cpu_percent() const;
+	double worst_ms() const;
+
+private:
+	struct impl;
+	std::unique_ptr<impl> m_impl;
+};
+
+#else
 class audio_out
 {
 public:
@@ -58,6 +100,8 @@ private:
 	std::atomic<bool> m_mmcss{false};
 	s64 m_qpc_freq = 1;
 };
+
+#endif // __APPLE__
 
 } // namespace ui
 

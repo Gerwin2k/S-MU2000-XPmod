@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include <immintrin.h>
+#include "compat/platform.h"
 
 
 namespace {
@@ -102,8 +102,8 @@ void mu2000::slave_loop()
 		while (m_slave_go.load(std::memory_order_acquire) == seen) {
 			if (m_slave_quit.load(std::memory_order_relaxed))
 				return;
-			if (SLAVE_SPINS <= 0 || ++spins < SLAVE_SPINS)
-				_mm_pause();
+		if (SLAVE_SPINS <= 0 || ++spins < SLAVE_SPINS)
+			smu2000::cpu_pause();
 			else
 				m_slave_go.wait(seen, std::memory_order_acquire);
 		}
@@ -699,7 +699,7 @@ void mu2000::run_sample(s32 &left, s32 &right)
 		m_slave_go.notify_one();   // 眠っていたら起こす。起きていれば素通り
 		m_swpm.run_sample(lm, rm);
 		while (m_slave_done.load(std::memory_order_acquire) != tag)
-			_mm_pause();
+			smu2000::cpu_pause();
 		ls = m_slave_l;
 		rs = m_slave_r;
 	} else {

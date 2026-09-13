@@ -30,12 +30,17 @@
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 #include <vector>
 
-#include <windows.h>
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>      // CFBundleRef, the host's handle
+#include <mach/mach_time.h>                     // mach_absolute_time
+#endif
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
@@ -49,6 +54,43 @@ static const FUID kProcessorUID(0x5D2E4B70, 0xA1C34F92, 0x8B0E7A61, 0x4D553000);
 constexpr const char *kPlugName   = "S-MU2000";
 constexpr const char *kVendor     = "tarboh";
 constexpr const char *kVersion    = "0.1.0.0";
+
+// ---- A clock for measuring the load
+//
+// In the shape QueryPerformanceCounter has: a constant frequency and a tick
+// count, so "busy seconds" and "did this block miss its deadline" are the same
+// arithmetic on both platforms. Only ever used to report load -- nothing here
+// reaches the audio path, so the exact rate does not matter.
+//
+//   Windows … QueryPerformanceCounter
+//   macOS   … mach_absolute_time, scaled to nanoseconds by mach_timebase_info
+int64 perf_frequency()
+{
+#if defined(_WIN32)
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	return f.QuadPart;
+#else
+	return 1000000000;      // perf_ticks() below hands back nanoseconds
+#endif
+}
+
+uint64 perf_ticks()
+{
+#if defined(_WIN32)
+	LARGE_INTEGER t;
+	QueryPerformanceCounter(&t);
+	return uint64(t.QuadPart);
+#else
+	// The timebase is constant on a given machine, so resolve it once
+	static const double scale = [] {
+		mach_timebase_info_data_t tb{};
+		mach_timebase_info(&tb);
+		return double(tb.numer) / double(tb.denom);
+	}();
+	return uint64(double(mach_absolute_time()) * scale);
+#endif
+}
 
 // MIDI のコントロール番号は 0-127 のほか、
 //   128 チャンネルプレッシャ / 129 ピッチベンド / 130 プログラムチェンジ
@@ -102,9 +144,7 @@ public:
 		m_gain_now = 1.0f;
 		m_msgs.reserve(8192);
 		m_engine.set_output_rate(smu2000::vst3::NATIVE_RATE);
-		LARGE_INTEGER f;
-		QueryPerformanceFrequency(&f);
-		m_qpc_freq = f.QuadPart;
+		m_qpc_freq = perf_frequency();
 	}
 
 	virtual ~mu_plugin() = default;
@@ -266,7 +306,7 @@ public:
 
 		// 起動が終わっていないと戻せない。終わるまで待つ
 		for (int i = 0; i < 300 && m_engine.state() == smu2000::vst3::status::loading; i++)
-			Sleep(10);
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		m_engine.load_state(blob.data(), blob.size());
 		return kResultOk;
 	}
@@ -539,8 +579,7 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 	float *left  = (out && out->numChannels > 0) ? out->channelBuffers32[0] : nullptr;
 	float *right = (out && out->numChannels > 1) ? out->channelBuffers32[1] : left;
 
-	LARGE_INTEGER t0;
-	QueryPerformanceCounter(&t0);
+	const uint64 t0 = perf_ticks();
 
 	if (m_hush.exchange(false))
 		m_engine.all_notes_off();
@@ -673,9 +712,7 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 	}
 
 	// 間に合っているかの目安。setActive(false) のときに記録へ書く
-	LARGE_INTEGER t1;
-	QueryPerformanceCounter(&t1);
-	const uint64 took = uint64(t1.QuadPart - t0.QuadPart);
+	const uint64 took = perf_ticks() - t0;
 	m_busy_ticks += took;
 	m_produced   += uint64(n);
 	if (took > m_worst_ticks) m_worst_ticks = took;
@@ -805,16 +842,38 @@ factory g_factory;
 
 
 // ---- DLL の出口
+//
+// The entry points differ by platform: a Windows DLL is opened with
+// LoadLibrary and announces InitDll/ExitDll, while macOS loads the bundle with
+// CFBundle and looks for bundleEntry/bundleExit. Both still have to hand back
+// the same factory.
 
 extern "C" {
 
-__declspec(dllexport) IPluginFactory *PLUGIN_API GetPluginFactory()
+SMTG_EXPORT_SYMBOL IPluginFactory *PLUGIN_API GetPluginFactory()
 {
 	g_factory.addRef();
 	return &g_factory;
 }
 
+#if defined(_WIN32)
+
 __declspec(dllexport) bool InitDll() { return true; }
 __declspec(dllexport) bool ExitDll() { return true; }
+
+#elif defined(__APPLE__)
+
+SMTG_EXPORT_SYMBOL bool bundleEntry(CFBundleRef bundle);
+SMTG_EXPORT_SYMBOL bool bundleExit(void);
+
+SMTG_EXPORT_SYMBOL bool bundleEntry(CFBundleRef bundle)
+{
+	(void)bundle;
+	return true;
+}
+
+SMTG_EXPORT_SYMBOL bool bundleExit(void) { return true; }
+
+#endif
 
 }

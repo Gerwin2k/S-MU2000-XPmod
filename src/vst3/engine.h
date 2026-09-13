@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -81,11 +82,14 @@ public:
 	// 音声スレッドを待たせない（doc/design.md）
 	void set_processing(bool on) { m_processing.store(on, std::memory_order_release); }
 	std::vector<uint8_t> save_state();
+	// Accepts a restore before the machine has come up: it is parked, and
+	// boot() applies it at the end of boot (see load_state below)
 	bool load_state(const uint8_t *p, size_t n);
 
 private:
 	void boot();
 	void serve_state();          // 音声スレッドで頼み事を片づける
+	void apply_parked();         // apply a restore parked before boot finished
 	void one_sample(float &l, float &r);
 	void build_table();
 
@@ -94,6 +98,11 @@ private:
 	std::atomic<int>  m_save_req{0};        // 0 なし / 1 頼んだ / 2 できた
 	std::atomic<int>  m_load_req{0};
 	std::vector<uint8_t> m_save_buf, m_load_buf;
+
+	// A restore that arrived before boot finished. Written by the host's
+	// thread, taken by boot()
+	std::mutex           m_park_mutex;
+	std::vector<uint8_t> m_parked;
 	std::atomic<uint64_t> m_fill_tick{0};   // fill() が回っているかを見る
 	std::thread         m_thread;
 	std::atomic<bool>   m_abort{false};
