@@ -115,19 +115,28 @@ void select_voice(int part, int msb, int lsb, int prog, xg::model &m, bridge &br
 	br.send(m.set(P("part.program"), part, prog));
 }
 
-// あるプログラムで選べる音色（MSB/LSB の組）。同じ記録に落ちるものは最初の 1 つだけ。
-// 開くたびに 1 万回ほど引くので、引き方とプログラムが同じなら覚えておく
+// あるプログラム番号で選べる音色（MSB/LSB の組）。同じ記録に落ちるものは最初の 1 つだけで、
+// 先頭が MSB 0 / LSB 0（その番号の基本の音色）。1 つの番号で 1 万回ほど引くので、
+// 引き方が同じ間は番号ごとに覚えておく
 struct bank_choice { int msb, lsb; std::string name; };
 
 const std::vector<bank_choice> &bank_choices(const xg::voice_rom &vr, int mode, int set, int prog)
 {
 	static int key = -1;
-	static std::vector<bank_choice> list;
-	const int k = (mode << 16) | (set << 8) | prog;
-	if (k == key)
-		return list;
-	key = k;
-	list.clear();
+	static std::vector<bank_choice> cache[128];
+	static bool done[128] = {};
+	const int k = (mode << 8) | set;
+	if (k != key) {
+		key = k;
+		for (int i = 0; i < 128; i++) {
+			cache[i].clear();
+			done[i] = false;
+		}
+	}
+	prog &= 0x7f;
+	if (done[prog])
+		return cache[prog];
+	done[prog] = true;
 	std::vector<u32> seen;
 	for (int msb = 0; msb < 126; msb++) {
 		for (int lsb = 0; lsb < 128; lsb++) {
@@ -143,10 +152,10 @@ const std::vector<bank_choice> &bank_choices(const xg::voice_rom &vr, int mode, 
 			if (name.empty() || name == "Silence")
 				continue;
 			seen.push_back(rec);
-			list.push_back({ msb, lsb, name });
+			cache[prog].push_back({ msb, lsb, name });
 		}
 	}
-	return list;
+	return cache[prog];
 }
 
 } // namespace
@@ -164,82 +173,68 @@ void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 	ImGui::TextDisabled("パート %s", part_name(part).c_str());
 	ImGui::Separator();
 
-	// ---- プログラム。いまのバンクのまま番号を替える
-	if (ImGui::BeginMenu("プログラム")) {
-		if (drum && vr) {
-			// ドラムキット。あるものだけ並べる
-			for (int i = 0; i < 128; i++) {
-				const std::string kit = vr->kit_name(msb, i);
-				if (kit.empty())
+	// ---- 分類 → 基本の音色（プログラム番号）→ その音色のバンク違い
+	for (int g = 0; g < 16; g++) {
+		const bool here = known && !drum && prog / 8 == g;
+		if (ImGui::BeginMenu(GM_GROUPS[g])) {
+			for (int i = g * 8; i < g * 8 + 8; i++) {
+				const bool current = known && !drum && i == prog;
+				std::string base = GM_NAMES[i];
+				if (vr) {
+					const std::string real = vr->record_name(vr->lookup(mode, set, 0, 0, i));
+					if (!real.empty())
+						base = real;
+				}
+				char label[64];
+				std::snprintf(label, sizeof(label), "%3d  %s", i + 1, base.c_str());
+				const std::vector<bank_choice> *list = vr ? &bank_choices(*vr, mode, set, i) : nullptr;
+				if (!list || list->size() <= 1) {
+					// バンク違いが無い。そのまま選ぶ
+					if (ImGui::MenuItem(label, nullptr, current))
+						select_voice(part, 0, 0, i, m, br);
 					continue;
-				char label[48];
-				std::snprintf(label, sizeof(label), "%3d  %s", i + 1, kit.c_str());
-				if (ImGui::MenuItem(label, nullptr, known && i == prog))
-					br.send(m.set(P("part.program"), part, i));
-			}
-		} else {
-			for (int g = 0; g < 16; g++) {
-				if (ImGui::BeginMenu(GM_GROUPS[g])) {
-					for (int i = g * 8; i < g * 8 + 8; i++) {
-						std::string name = GM_NAMES[i];
-						if (vr) {
-							const std::string real = vr->record_name(vr->lookup(mode, set, msb, lsb, i));
-							if (!real.empty())
-								name = real;
-						}
-						char label[64];
-						std::snprintf(label, sizeof(label), "%3d  %s", i + 1, name.c_str());
-						if (ImGui::MenuItem(label, nullptr, known && i == prog))
-							br.send(m.set(P("part.program"), part, i));
+				}
+				char with_count[80];
+				std::snprintf(with_count, sizeof(with_count), "%s（%d）", label, int(list->size()));
+				if (ImGui::BeginMenu(with_count)) {
+					for (const bank_choice &c : *list) {
+						char item[64];
+						std::snprintf(item, sizeof(item), "%-10s  MSB %d / LSB %d", c.name.c_str(), c.msb, c.lsb);
+						if (ImGui::MenuItem(item, nullptr, current && c.msb == msb && c.lsb == lsb))
+							select_voice(part, c.msb, c.lsb, i, m, br);
 					}
 					ImGui::EndMenu();
 				}
-				if (known && prog / 8 == g) {             // いまの組に印
+				if (current) {
 					ImGui::SameLine();
 					ImGui::TextDisabled("●");
 				}
 			}
+			ImGui::EndMenu();
 		}
-		ImGui::EndMenu();
+		if (here) {                                   // いまの分類に印
+			ImGui::SameLine();
+			ImGui::TextDisabled("●");
+		}
 	}
 
-	// ---- バンク。いまのプログラム番号で選べる音色を、MSB ごとに並べる
-	if (ImGui::BeginMenu("バンク（このプログラムの音色）")) {
-		if (vr && known && !drum) {
-			const std::vector<bank_choice> &list = bank_choices(*vr, mode, set, prog);
-			int open_msb = -1;
-			bool open = false;
-			for (const bank_choice &c : list) {
-				if (c.msb != open_msb) {
-					if (open)
-						ImGui::EndMenu();
-					open_msb = c.msb;
-					char head[24];
-					std::snprintf(head, sizeof(head), "MSB %d", c.msb);
-					open = ImGui::BeginMenu(head);
-					if (c.msb == msb && !open) {
-						ImGui::SameLine();
-						ImGui::TextDisabled("●");
-					}
-				}
-				if (!open)
-					continue;
-				char label[48];
-				std::snprintf(label, sizeof(label), "LSB %3d  %s", c.lsb, c.name.c_str());
-				if (ImGui::MenuItem(label, nullptr, c.msb == msb && c.lsb == lsb))
-					select_voice(part, c.msb, c.lsb, prog, m, br);
-			}
-			if (open)
-				ImGui::EndMenu();
-			ImGui::Separator();
+	// ---- ドラムキットと効果音キット
+	ImGui::Separator();
+	for (int kit_msb : { 127, 126 }) {
+		const char *title = kit_msb == 127 ? "ドラムキット（MSB 127）" : "効果音キット（MSB 126）";
+		if (!ImGui::BeginMenu(title))
+			continue;
+		for (int i = 0; i < 128; i++) {
+			std::string kit = vr ? vr->kit_name(kit_msb, i) : std::string();
+			if (vr && kit.empty())
+				continue;
+			if (!vr && i)
+				break;                                // 名前が読めないときは 1 番だけ
+			char label[48];
+			std::snprintf(label, sizeof(label), "%3d  %s", i + 1, vr ? kit.c_str() : "Kit");
+			if (ImGui::MenuItem(label, nullptr, known && msb == kit_msb && i == prog))
+				select_voice(part, kit_msb, 0, i, m, br);
 		}
-		// ドラムの組へ（プログラムは 1 番から）
-		if (ImGui::MenuItem("MSB 127  ドラムキット", nullptr, msb == 127))
-			select_voice(part, 127, 0, 0, m, br);
-		if (ImGui::MenuItem("MSB 126  効果音キット", nullptr, msb == 126))
-			select_voice(part, 126, 0, 0, m, br);
-		if (drum && ImGui::MenuItem("MSB 0  普通の音色に戻す"))
-			select_voice(part, 0, 0, 0, m, br);
 		ImGui::EndMenu();
 	}
 	if (!vr) {
@@ -276,6 +271,39 @@ const help_text HELP[] = {
 		"The MU2000 plays 32 parts at once. A1-A16 receive MIDI IN A channels 1-16,\n"
 		"B1-B16 receive MIDI IN B channels 1-16 (the receive channel can be changed).\n"
 		"Right-click to choose the voice (program and bank)." } },
+	{ "マスター", {
+		"全体に効く値。移調（Transpose）とマスターチューンもここに出る",
+		"Settings for the whole mix, including transpose and master tune." } },
+	{ "M.VOL", {
+		"マスターボリューム。全体の音量",
+		"Master volume. The overall output level." } },
+	{ "REVERB", {
+		"システムのリバーブ。全パートで 1 台を共有する残響のエフェクト。\n"
+		"上の行が種類（右クリックで HALL 1 などを選ぶ）、下が戻り量（エフェクトの音をどれだけ全体に戻すか）。\n"
+		"各パートがどれだけ送るかは、パートの表の REV",
+		"The system reverb, one unit shared by all parts.\n"
+		"Top line: type (right-click to choose, e.g. HALL 1). Bottom: return level.\n"
+		"How much each part sends is the REV column in the part table." } },
+	{ "CHORUS", {
+		"システムのコーラス。全パートで 1 台を共有する揺れと広がりのエフェクト。\n"
+		"上の行が種類（右クリックで選ぶ）、下が戻り量。各パートの送り量はパートの表の CHO",
+		"The system chorus, one unit shared by all parts.\n"
+		"Top line: type (right-click to choose). Bottom: return level. Per-part sends are the CHO column." } },
+	{ "VARIATION", {
+		"バリエーションエフェクト。種類はディレイやアンプシミュレータなど、インサーションと同じ 27 種類。\n"
+		"右クリックで種類と接続を選ぶ。SYSTEM ならリバーブと同じく全パートから送り（パートの VAR）、\n"
+		"INSERTION なら 1 つのパートの通り道に直に入る（→ の先のパート）",
+		"The variation effect, with the same 27 types as the insertion effects.\n"
+		"Right-click to choose the type and connection. SYSTEM: parts send to it like reverb (the VAR column).\n"
+		"INSERTION: it is placed directly in one part's signal path (the part after the arrow)." } },
+	{ "INS 1", {
+		"インサーションエフェクト 1。1 つのパートにだけ掛かる。\n"
+		"右クリックで種類と掛けるパート。つかんでパートの表の INS 欄に落としても掛けられる",
+		"Insertion effect 1, applied to a single part.\n"
+		"Right-click to choose the type and the part, or drag it onto a part's INS cell." } },
+	{ "INS 2", { "インサーションエフェクト 2。使い方は INS 1 と同じ", "Insertion effect 2. Works like INS 1." } },
+	{ "INS 3", { "インサーションエフェクト 3。使い方は INS 1 と同じ", "Insertion effect 3. Works like INS 1." } },
+	{ "INS 4", { "インサーションエフェクト 4。使い方は INS 1 と同じ", "Insertion effect 4. Works like INS 1." } },
 	{ "MASTER", {
 		"全体に効く値。VOL はマスターボリューム、REV・CHO・VAR はそれぞれのエフェクトの\n"
 		"戻り量（エフェクトを通った音を、どれだけ全体に戻すか）",
