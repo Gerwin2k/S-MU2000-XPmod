@@ -65,8 +65,8 @@ bool pc_window::create(HINSTANCE inst, std::string &err)
 	// 高 DPI の画面では Windows が窓ごと拡大する
 	const float scale = 1.0f;
 
-	m_hwnd = CreateWindowExW(0, CLASS_NAME, L"S-MU2000 エディタ", WS_OVERLAPPEDWINDOW,
-	                         CW_USEDEFAULT, CW_USEDEFAULT, int(1280 * scale), int(800 * scale),
+	m_hwnd = CreateWindowExW(0, CLASS_NAME, m_view->title(), WS_OVERLAPPEDWINDOW,
+	                         CW_USEDEFAULT, CW_USEDEFAULT, int(m_view->default_width() * scale), int(m_view->default_height() * scale),
 	                         nullptr, nullptr, inst, this);
 	if (!m_hwnd) {
 		err = "エディタの窓を出せない";
@@ -80,7 +80,9 @@ bool pc_window::create(HINSTANCE inst, std::string &err)
 	}
 
 	IMGUI_CHECKVERSION();
-	ImGui::CreateContext();
+	// 窓ごとに文脈を持つ（ImGui の口は今の文脈に付く）
+	m_imgui = ImGui::CreateContext();
+	ImGui::SetCurrentContext(m_imgui);
 	ImGuiIO &io = ImGui::GetIO();
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	io.IniFilename = nullptr;       // 作業フォルダに imgui.ini を撒かない
@@ -98,7 +100,6 @@ bool pc_window::create(HINSTANCE inst, std::string &err)
 
 	ImGui_ImplWin32_Init(m_hwnd);
 	ImGui_ImplDX11_Init(m_dev, m_ctx);
-	m_imgui = true;
 	return true;
 }
 
@@ -147,10 +148,11 @@ void pc_window::drop_target()
 void pc_window::destroy()
 {
 	if (m_imgui) {
+		ImGui::SetCurrentContext(m_imgui);
 		ImGui_ImplDX11_Shutdown();
 		ImGui_ImplWin32_Shutdown();
-		ImGui::DestroyContext();
-		m_imgui = false;
+		ImGui::DestroyContext(m_imgui);
+		m_imgui = nullptr;
 	}
 	drop_target();
 	if (m_swap) { m_swap->Release(); m_swap = nullptr; }
@@ -163,10 +165,11 @@ void pc_window::destroy()
 	}
 }
 
-void pc_window::frame(xg::model &m, bridge &br)
+void pc_window::frame(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
 	if (!m_imgui || !visible() || IsIconic(m_hwnd))
 		return;
+	ImGui::SetCurrentContext(m_imgui);
 	if (m_resize_w) {
 		drop_target();
 		m_swap->ResizeBuffers(0, m_resize_w, m_resize_h, DXGI_FORMAT_UNKNOWN, 0);
@@ -177,7 +180,7 @@ void pc_window::frame(xg::model &m, bridge &br)
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();
-	m_editor.draw(m, br);
+	m_view->draw(m, ram, br);
 	ImGui::Render();
 
 	const float clear[4] = { 0.10f, 0.10f, 0.11f, 1.0f };
@@ -191,8 +194,11 @@ void pc_window::frame(xg::model &m, bridge &br)
 LRESULT CALLBACK pc_window::proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
 	auto *self = reinterpret_cast<pc_window *>(GetWindowLongPtrW(h, GWLP_USERDATA));
-	if (self && self->m_imgui && ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp))
-		return 1;
+	if (self && self->m_imgui) {
+		ImGui::SetCurrentContext(self->m_imgui);
+		if (ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp))
+			return 1;
+	}
 
 	switch (msg) {
 	case WM_SIZE:

@@ -31,6 +31,8 @@
 #include "ui/midi_out.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
+#include "ui/overview.h"
+#include "ui/pc_editor.h"
 #include "ui/pc_window.h"
 #include "ui/player.h"
 #include "ui/text.h"
@@ -206,7 +208,8 @@ struct engine {
 
 struct window_state {
 	ui::panel   panel;
-	ui::pc_window pc;                  // PC エディタの窓（F2 か右クリックで出す）
+	ui::pc_window pc{ std::make_unique<ui::pc_editor>() };    // PC エディタ（F2 か右クリック）
+	ui::pc_window list{ std::make_unique<ui::overview>() };   // 一覧（F3 か右クリック）
 	ui::bridge *br = nullptr;
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
@@ -353,6 +356,7 @@ enum : UINT {
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
 	ID_FACTORY = 3000,
 	ID_PC_EDITOR = 3001,
+	ID_OVERVIEW = 3002,
 };
 
 // 品書きは **W 版**で作る。ソースは UTF-8 なので、A 版に渡すと
@@ -401,6 +405,7 @@ void show_port_menu(HWND hwnd, POINT screen)
 	add_item(top, MF_POPUP, UINT_PTR(mo),  "MIDI THRU A（A で受けたものを外へ）");
 	add_item(top, MF_POPUP, UINT_PTR(mob), "MIDI THRU B（B で受けたものを外へ）");
 	AppendMenuW(top, MF_SEPARATOR, 0, nullptr);
+	add_item(top, MF_STRING, ID_OVERVIEW, "一覧を開く	F3");
 	add_item(top, MF_STRING, ID_PC_EDITOR, "エディタを開く	F2");
 	const bool ready = g_win.eng && g_win.eng->state.load() == 1;
 	add_item(top, MF_STRING | (ready ? 0 : MF_GRAYED), ID_FACTORY, "工場出荷状態に戻す...");
@@ -614,10 +619,10 @@ mu2000::button key_to_button(WPARAM vk, bool &ok)
 	return mu2000::button::count;
 }
 
-void open_pc_editor(HWND hwnd)
+void open_window(HWND hwnd, ui::pc_window &w)
 {
 	std::string err;
-	if (!g_win.pc.show(GetModuleHandleA(nullptr), err))
+	if (!w.show(GetModuleHandleA(nullptr), err))
 		MessageBoxW(hwnd, ui::to_wide(err).c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
 }
 
@@ -632,7 +637,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む
 		if (g_win.br) {
 			g_win.panel.tick(*g_win.br);
-			g_win.pc.frame(g_win.panel.xg(), *g_win.br);
+			g_win.pc.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			g_win.list.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 		}
 		InvalidateRect(hwnd, nullptr, FALSE);
 		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
@@ -742,7 +748,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		else if (id == ID_FACTORY) choose_factory_reset(hwnd);
-		else if (id == ID_PC_EDITOR) open_pc_editor(hwnd);
+		else if (id == ID_PC_EDITOR) open_window(hwnd, g_win.pc);
+		else if (id == ID_OVERVIEW) open_window(hwnd, g_win.list);
 		if (!g_win.last_error.empty()) {
 			const std::wstring w = ui::to_wide(g_win.last_error);
 			MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
@@ -790,7 +797,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		if (lp & (1 << 30))                     // 押しっぱなしの繰り返しは無視
 			return 0;
 		if (wp == VK_F2) {                      // PC エディタ
-			open_pc_editor(hwnd);
+			open_window(hwnd, g_win.pc);
+			return 0;
+		}
+		if (wp == VK_F3) {                      // 一覧
+			open_window(hwnd, g_win.list);
 			return 0;
 		}
 		if (wp == VK_F5) {                      // 配置を読み直す
@@ -885,6 +896,7 @@ int main(int argc, char **argv)
 	const char *audio_dev = nullptr;
 	bool factory = false;
 	bool open_editor = false;          // 起動したら PC エディタも出す
+	bool open_list = false;            // 起動したら一覧も出す
 	int win_w = 1000, win_h = 400;   // パネルの論理寸法（1000 × 400）と同じ比
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
@@ -923,6 +935,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--factory")) factory = true;
 		else if (!std::strcmp(argv[i], "--editor")) open_editor = true;
+		else if (!std::strcmp(argv[i], "--list-window")) open_list = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -977,6 +990,7 @@ int main(int argc, char **argv)
 			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid]\n"
 			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
 			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
+			"        [--list-window] 一覧の窓も開く（窓では F3 か右クリック）\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1000x400]\n");
@@ -1079,7 +1093,9 @@ int main(int argc, char **argv)
 	eng.publish();
 	ShowWindow(hwnd, SW_SHOW);
 	if (open_editor)
-		open_pc_editor(hwnd);
+		open_window(hwnd, g_win.pc);
+	if (open_list)
+		open_window(hwnd, g_win.list);
 	UpdateWindow(hwnd);
 
 	// 起動は別スレッド。終わったら音を出し始める

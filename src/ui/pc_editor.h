@@ -12,20 +12,22 @@
 
 #pragma once
 
-#include "bridge.h"
-#include "xg/model.h"
+#include "xg_ui.h"
 
 namespace ui {
 
-class pc_editor
+class pc_editor : public imgui_view
 {
 public:
+	const wchar_t *title() const override { return L"S-MU2000 エディタ"; }
+	int default_width() const override  { return 1280; }
+	int default_height() const override { return 800; }
+
 	// 窓いっぱいに描く。値は panel::tick が RAM の写しから層に入れている
-	void draw(xg::model &m, bridge &br);
+	void draw(xg::model &m, const xg_snapshot &ram, bridge &br) override;
 
 private:
 	void part_list(xg::model &m, bridge &br);
-	void program_menu(int part, xg::model &m, bridge &br);
 	void mixer(xg::model &m, bridge &br);
 	void part_page(xg::model &m, bridge &br);
 

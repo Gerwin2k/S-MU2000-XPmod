@@ -16,7 +16,7 @@ build/gui.exe <rom> --layout panel.txt   その配置で動かす（F5 で読み
 build/gui.exe <rom> --play 曲.mid         MIDI ファイルを流しながら動かす
 ```
 
-**PC で触るエディタは別の窓**（F2、右クリック、`--editor`）。[doc/pc-editor.md](pc-editor.md)。
+**PC で触る窓は別**。一覧（F3、右クリック、`--list-window`）とエディタ（F2、右クリック、`--editor`）。[doc/pc-editor.md](pc-editor.md)。
 
 **パネルの絵は作り直さずに直せる**。位置も色も `panel.txt` という文字
 ファイルに追い出してある。手順は [doc/panel-editing.md](panel-editing.md)。
