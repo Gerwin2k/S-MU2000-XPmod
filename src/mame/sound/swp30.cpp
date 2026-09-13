@@ -669,7 +669,18 @@ void swp30_device::streaming_block::read_8c(memory_access<25, 2, -2, ENDIANNESS_
 {
 	offs_t base_address = m_address & 0x1ffffff;
 	if(m_loop & 0x80000000) {
-		abort();
+		// S-MU2000: MAME はここで abort() して落ちる（MU100 でも同じ。doc/upstream.md の 7）。
+		//
+		// 圧縮したサンプルを逆向きに鳴らす声は ROM に無い。ここに来るのは、発音数がいっぱいのときに
+		// firmware が鳴っている声を取り上げて、次の音のレジスタを 1 つずつ書いている途中の 1 サンプル。
+		// スタンダードキットのタム（逆向きの 16bit サンプル）の start と loop を書いたあと、
+		// address をまだ書いていないと、前の音（圧縮）の address と逆向きの印が混ざる。
+		// 次の書き込みとキーオンで正しい状態に戻るので、その 1 サンプルは直前の値を保つ
+		val0 = m_dpcm_s0;
+		val1 = m_dpcm_s1;
+		val2 = m_dpcm_s2;
+		val3 = m_dpcm_s3;
+		return;
 	} else {
 		s32 spos =  m_dpcm_pos;
 		base_address += spos >> 2;
