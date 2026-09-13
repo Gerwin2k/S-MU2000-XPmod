@@ -1175,7 +1175,24 @@ int main(int argc, char **argv)
 		DispatchMessageA(&msg);
 	}
 
+	// **先に MIDI ファイルを止める。** 止めたときのオールノートオフは音声の糸が THRU から
+	// 外へ流すので、音を先に止めると外の機器（実機）に届かず鳴りっぱなしになる。
+	// 止めてから、音声の糸が流し終えるのを少し待つ
+	if (g_win.play_file.playing()) {
+		g_win.play_file.stop();
+		Sleep(150);
+	}
 	out.stop();
+	// 念のため、THRU の先へ直にもオールサウンドオフ・オールノートオフを送る。
+	// 音声の糸はもう止まっているので、ここから送っても取り合いにならない
+	for (ui::midi_out *thru : { &mout, &mout_b }) {
+		if (!thru->is_open())
+			continue;
+		for (int ch = 0; ch < 16; ch++) {
+			for (u8 v : { u8(0xb0 | ch), u8(120), u8(0), u8(0xb0 | ch), u8(123), u8(0) })
+				thru->send(v);
+		}
+	}
 	if (boot_thread.joinable())
 		boot_thread.join();
 	if (g_win.reboot.joinable())
@@ -1188,6 +1205,8 @@ int main(int argc, char **argv)
 	midi.close();
 	mout.close();
 	mout_mu.close();
+	midi_b.close();
+	mout_b.close();
 
 	if (out.produced())
 		std::printf("CPU %.1f%%、1 回の最悪 %.2f ms、間に合わなかった %llu 回\n",
