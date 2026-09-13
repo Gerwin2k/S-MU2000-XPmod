@@ -13,7 +13,7 @@ constexpr const char *const MONO_POLY[]  = { "MONO", "POLY" };
 constexpr const char *const KEY_ASSIGN[] = { "SINGLE", "MULTI" };
 constexpr const char *const PART_MODE[]  = { "NORMAL", "DRUM", "DRUMS1", "DRUMS2", "DRUMS3", "DRUMS4" };
 constexpr const char *const CONNECT[]    = { "INSERTION", "SYSTEM" };
-constexpr const char *const EQ_TYPE[]    = { "FLAT", "JAZZ", "POPS", "ROCK", "CLASSIC" };
+constexpr const char *const EQ_TYPE[]    = { "FLAT", "JAZZ", "POPS", "ROCK", "CONCERT" };
 constexpr const char *const EQ_SHAPE[]   = { "SHELF", "PEAK" };
 
 // 番地は XG の決まりから。**マルチパートの 41 バイトは、firmware が返した一括ダンプと

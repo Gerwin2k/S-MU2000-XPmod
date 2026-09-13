@@ -424,10 +424,10 @@ const help_text HELP[] = {
 	{ "MASTER EQ", {
 		"マスター EQ。全部の音の最後に掛かる 5 つの帯のイコライザ。左が低い音、右が高い音。\n"
 		"点をつまんで、横で周波数、縦でゲイン（±12dB）。点の近くでホイールを回すと幅（Q）。\n"
-		"右クリックで種類（FLAT / JAZZ / POPS / ROCK / CLASSIC）と、両端の帯をシェルフにするかピークにするか",
+		"右クリックで種類（FLAT / JAZZ / POPS / ROCK / CONCERT）と、両端の帯をシェルフにするかピークにするか",
 		"Master EQ: a 5-band equaliser applied last, to everything. Low frequencies on the left, high on the right.\n"
 		"Drag a point sideways for frequency and up/down for gain (+/-12 dB). Use the wheel near a point for its width (Q).\n"
-		"Right-click for the preset type (FLAT / JAZZ / POPS / ROCK / CLASSIC) and the shape of the outer bands." } },
+		"Right-click for the preset type (FLAT / JAZZ / POPS / ROCK / CONCERT) and the shape of the outer bands." } },
 	{ "MASTER", {
 		"全体に効く値。VOL はマスターボリューム、REV・CHO・VAR はそれぞれのエフェクトの\n"
 		"戻り量（エフェクトを通った音を、どれだけ全体に戻すか）",
