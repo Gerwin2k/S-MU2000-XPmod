@@ -308,6 +308,25 @@ private:
 		std::array<decoded, 0x180> m_decoded = {};
 		void decode_program();
 
+		// S-MU2000: decoded からさらに、命令ごとの判定を済ませた形。
+		// run_program() が使う。**状態の保存には入れない**（meg_state の並びを
+		// 変えると保存済みの状態が読めなくなる）ので、swp30_device が持つ
+		struct op {
+			u8  alu;                  // mmode != 0
+			u8  mmode;
+			u8  m1_from_t, m1_expand, m2_from_m;
+			u8  asel;                 // 0 p / 1 r<<15 / 2 m<<15 / 3 p>>15 / 4 0
+			u8  rop, shift, clamp;
+			u8  sm, sr, dm, dr, t;
+			u8  dm_src, no_noise, dr_from_r;
+			u8  memw, index, t_write, t_from_p;
+			u8  memop, mem_use_index;
+			u8  lfo, offset_index;
+			u32 addr_mask, addr_base;   // resolve_address() を解いたもの
+		};
+		void build_ops(op *ops) const;
+		void run_program(const op *ops);
+
 		swp30_device          *m_swp;
 		std::array<u64, 0x180> m_program = {};
 		std::array<s16, 0x180> m_const = {};
@@ -403,6 +422,9 @@ private:
 	std::unique_ptr<meg_state> m_meg_storage;
 	meg_state *m_meg;
 	bool m_meg_program_changed = false;
+	// S-MU2000: 判定を済ませた命令表。保存しないので、読み戻したら作り直す
+	std::array<meg_state::op, 0x180> m_meg_ops = {};
+	bool m_meg_ops_stale = true;
 
 	u32 m_sample_counter = 0;
 	u32 m_wave_adr = 0, m_wave_size = 0, m_wave_val = 0, m_revram_adr = 0, m_revram_data = 0;
