@@ -445,6 +445,21 @@ std::string open_midi_file_panel()
 	return path ? std::string(path) : std::string();
 }
 
+bool confirm_modal(const char *title, const char *message, const char *ok_label)
+{
+	@autoreleasepool {
+		NSAlert *alert = [[NSAlert alloc] init];
+		[alert setAlertStyle:NSAlertStyleWarning];
+		[alert setMessageText:[NSString stringWithUTF8String:title]];
+		[alert setInformativeText:[NSString stringWithUTF8String:message]];
+		// The accepting button is added second so it is not the default one:
+		// Return picks Cancel, and the machine only reboots on a deliberate click
+		[alert addButtonWithTitle:@"キャンセル"];
+		[alert addButtonWithTitle:[NSString stringWithUTF8String:ok_label]];
+		return [alert runModal] == NSAlertSecondButtonReturn;
+	}
+}
+
 void run_window(mac_app &app, const char *title, int w, int h)
 {
 	@autoreleasepool {

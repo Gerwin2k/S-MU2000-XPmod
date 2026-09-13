@@ -15,7 +15,7 @@ Target: **Apple silicon (arm64) only.** Build with the system clang++.
 | 2 | Real-time audio (CoreAudio) + MIDI in/out (CoreMIDI) for `live` | **done** |
 | 3 | GUI window (`gui`) — CoreGraphics drawing + Cocoa window | **done** |
 | 4 | VST3 bundle for `Contents/MacOS` + `probe` | **done** |
-| 5 | Audio Unit wrapper (AUv2, `aumu`) + `au-probe` | **done** |
+| 5 | Audio Unit wrapper (AUv2, `aumu`), its editor + `au-probe` | **done** |
 
 ```
 make          build every tool and both plug-in bundles
@@ -34,21 +34,26 @@ rewrite). Most of it is shared code and arrived working; `make test` passes here
 with upstream's fingerprints unchanged, which is the strongest statement that
 both platforms compute the same audio.
 
-Three macOS gaps are deliberate — they were left out to keep the merge a merge,
-and are the first things to pick up afterwards:
+Four macOS gaps were left out deliberately, so that the merge stayed a merge.
+All four are closed now:
 
-* `live --exclusive`, `--audio <name>` and `--dump-dev` are parsed but only the
-  Windows side acts on them. CoreAudio can do all three (hog mode, device
-  selection, a capture WAV); `ui::audio_out` on macOS does not implement them yet.
-* The GUI cannot pick the machine's own **MIDI OUT** (upstream's `mout_mu`), so an
-  external editor cannot read or write the settings over a virtual port. The
-  engine already routes it; only the menu entry is missing.
-* `src/blocktime.cpp` is Windows-only (it calls `QueryPerformanceCounter`
-  directly) and is therefore not in the macOS `all` target. Its measurement
-  would port in a few lines through `smu2000::perf_ticks()`.
+* **`live --exclusive`, `--audio <name>` and `--dump-dev`.** They were parsed but
+  only the Windows side acted on them; `src/ui/audio_out_mac.cpp` now implements
+  all three — hog mode (`kAudioDevicePropertyHogMode`), a device chosen by name,
+  and a WAV of what was handed to the unit.
+* **The GUI could not pick the machine's own MIDI OUT** (`mout_mu`), so an
+  external editor could not read or write the settings over a virtual port. The
+  engine already routed it; `gui_mac.cpp` now has the menu entry.
+* **`src/blocktime.cpp` was Windows-only** — it called `QueryPerformanceCounter`
+  directly and was therefore not in the macOS `all` target. It measures through
+  `smu2000::perf_ticks()` now, and builds on both platforms.
+* **The GUI did not take part in the settings file.** It does: `use_nvram` is set
+  from `--factory`, the machine's NVRAM is written on exit, and `gui.ini` now
+  remembers the audio device and the VOLUME knob as well as the MIDI ports.
 
-`live` does now take part in the settings file (upstream saves NVRAM on exit),
-and the GUI does not yet: `ui::engine::use_nvram` is left false there.
+The Audio Unit was also missing its editor — a host could open it but had only
+Apple's generic two-slider panel. It has one now; see
+[The editor](#the-editor) below.
 
 ## The core needed one change
 
@@ -125,6 +130,13 @@ User-facing strings are a separate question and were left alone: the panel, the
 console messages and the error texts are still Japanese, so both platforms show
 and print exactly the same thing. `--list`, the status line and the port menus on
 macOS read identically to their Windows counterparts.
+
+The split is checkable rather than a matter of taste. Searching this tree for
+comment lines containing Japanese and looking each one up in `tarboh/S-MU2000`
+leaves six that the other tree does not carry: four in `src/ui/engine.h` and two
+in `src/vst3/view_win.cpp`. Those came across with the code when a file was split
+— the engine struct left `gui.cpp`, the window procedure left `view.cpp` — and
+they are Japanese for that reason and not because they were written here.
 
 ## How the audio port works
 
@@ -235,7 +247,33 @@ repaints, in common run loop modes so it keeps ticking while a menu is open.
 
 The port picker is an `NSMenu` built from a plain description the app returns,
 and choosing a MIDI file is an `NSOpenPanel`; the app asks for the latter by
-name (`ui::open_midi_file_panel()`), so it never needs AppKit itself.
+name (`ui::open_midi_file_panel()`), so it never needs AppKit itself. The same
+seam carries the one confirmation there is — `ui::confirm_modal()` — which is
+used before the machine's settings are thrown away.
+
+### Ports, settings and factory reset
+
+The picker offers the same five choices as the Windows one: MIDI IN A and B, the
+machine's own **MIDI OUT**, and the two THRU ports. The first two and the THRU
+pairs were there from the start; the machine's MIDI OUT is what makes the
+settings reachable from a librarian or editor over a virtual port. The titles
+are word for word what `gui.cpp` shows, so the two platforms cannot drift: `OUT`
+is what the firmware sends by itself, `THRU` what was received and echoed.
+
+Every choice is remembered **by name**, not by index, because replugging a USB
+device shifts the numbers. A port that would not open keeps the name it was
+asked for, so a virtual port that is not running yet is not forgotten by the
+next start; picking from the menu clears that, so a deliberate "unused" sticks.
+The file is `gui.ini` in the per-user settings directory `compat/paths.h`
+provides, and it carries the same keys the Windows build uses — including the
+audio device and the VOLUME knob, which is analogue on the real machine and so
+is not in the firmware's RAM.
+
+`--factory` skips the whole file and boots blank; the equivalent menu entry
+("工場出荷状態に戻す...") asks first and then calls
+`ui::engine::factory_reset()`, which waits for the audio thread to let go of the
+machine and reboots it. That takes tens of seconds, so it runs on its own thread
+and the previous one is joined rather than left to overlap.
 
 ### Sharing the engine rather than copying it
 
@@ -379,10 +417,40 @@ The pieces worth knowing about:
 `make au` writes `build/S-MU2000.component`; `make install-au` copies it to
 `~/Library/Audio/Plug-Ins/Components`, which is where `auval` and every DAW look.
 
+### The editor
+
+A host asks for an AU's own interface with `kAudioUnitProperty_CocoaUI` (Global),
+which answers with a bundle URL and the name of a class inside implementing
+`AUCocoaUIBase`; the host then calls that class's
+`uiViewForAudioUnit:withSize:`. `src/au/editor.h` is the seam between the two
+halves — plugin.cpp is plain C++ and answers the property, `editor_mac.mm` is
+Objective-C++ and holds the class. That is the same split, for the same reason,
+as `src/ui/window_mac.mm`: Cocoa's `BOOL` and Quickdraw's `Polygon` cannot share
+a translation unit with `compat/gdi.h`.
+
+The view built there is an `SMUAUEditorView` holding a
+`smu2000::vst3::plug_view` — the panel the VST3 build already shows, not a second
+one. What is shared is the panel, not the host interface around it: the AU needs
+an `NSView` and the VST3 wants an `IPlugView`, so each format keeps its own
+wrapper and both draw the same thing.
+
+One detail is worth knowing before touching this. The `AudioUnit` a host passes
+to the view factory is **not** the pointer the plug-in was given as `self` — the
+wrapper is a small dispatch table and the two are different objects (measured,
+not assumed), so the factory cannot cast one to the other. The engine is reached
+through a private read-only property (`kEngineProperty`, 64000, in the range
+Apple leaves to everyone else) instead, which travels the ordinary property
+dispatch in plugin.cpp and so arrives with the instance already resolved.
+
+`aubprobe --torture` walks the host's path from C++ through the Objective-C
+runtime and checks that a view comes back with a live subview in it, and `auval`
+reports `VERIFYING CUSTOM UI / Cocoa Views Available: 1 / SMU2000AUViewFactory /
+PASS` without being told where to look.
+
 ## Building
 
 ```
-make   verify / boot / render / panel / statetest / live / gui
+make   verify / boot / render / panel / statetest / blocktime / live / gui
        and both bundles: S-MU2000.vst3 and S-MU2000.component
 ```
 
@@ -451,7 +519,7 @@ Verified on arm64 against the working tree:
 
 | Check | Result |
 |---|---|
-| `make` from clean | 9 executables + both bundles, no warnings |
+| `make` from clean | every tool + both bundles, no warnings |
 | `make check` | random sequence `574a3af2 de214fbe 610c06da`, as before |
 | `statetest` | packed state **332767** bytes, restore exact |
 | `render` (Bhangra, XG) | **634.921** cycles/sample, 8583140 word writes, 0 byte writes — identical to before this step |
@@ -476,6 +544,27 @@ The plug-in view is in the same position: `vst3probe --view 6` reports
 animating, the AU's probe drives the same window path, but neither plug-in's
 window was looked at on screen.
 
+### After closing the gaps
+
+Run again from a clean build on arm64, with the ROMs in `roms/`:
+
+| Check | Result |
+|---|---|
+| `make clean && make` | 0 errors, 0 warnings; every executable (blocktime now among them) + both bundles |
+| `make check` | `574a3af2 de214fbe 610c06da`, unchanged |
+| `make test` | verify + statetest (packs to **471918** bytes, restore exact) + **all 7 audio fingerprints** + the threaded check + `xg` 424 round-trips, 0 mismatches |
+| `blocktime roms <xg midi> 512 3 1` | mean **4.677 ms** per 512-frame block (**40.3%** of real time), worst 5.81 ms, **0** of 259 blocks over |
+| `live roms --nomidi --seconds 2 --dump-dev cap.wav --exclusive --audio Haut-parleurs` | hog mode taken, device matched by name, 2.1 s capture written (369564 bytes) |
+| the same run | 2.1 s of audio in 0.77 s of CPU time (37.2%) |
+| `gui` with `midi_out_mu=NoSuchVirtualPort` in `gui.ini` | reports `MIDI OUT: なし（「NoSuchVirtualPort」が見つからない…）` — the remembered name survived |
+| the same run, after the settings write | `audio_out=` and `volume=` written back; `--factory` skipped the NVRAM load |
+| `gui --shot` | does not touch `gui.ini` at all |
+| `--shot` regression | face `#c4bdaa` and the art-only `#404040` still where they were |
+| `make probe` | factory found, 1 class, 4194 parameters |
+| `make au-probe` | opens, 2 parameters, latency 0 |
+| `make check-au` | `OK: エディタ SMUAUEditorView が画面を作った（下位ビュー 1 枚）`, **0 problems** |
+| `auval -v aumu SMU2 Trbh` | `VERIFYING CUSTOM UI / Cocoa Views Available: 1` … **AU VALIDATION SUCCEEDED** |
+
 ## Plug-ins
 
 ### VST3
@@ -498,10 +587,10 @@ Checked on arm64:
 
 | Check | Result |
 |---|---|
-| `vst3probe` | factory found, 1 class, `aumu`-equivalent audio module, 2098 parameters, 2096 MIDI mappings |
+| `vst3probe` | factory found, 1 class, `aumu`-equivalent audio module, 4194 parameters, 4192 MIDI mappings |
 | `--torture` | initialize/terminate cycles, 22050–192000 Hz, zero-length buffers, 4 simultaneous instances — **0 problems** |
-| state save/restore | **330109** bytes, round-trips |
-| 4 instances at once | 2.13 s of audio in 4.24 s wall (50% CPU each) |
+| state save/restore | **333273** bytes, round-trips |
+| 4 instances at once | 2.13 s of audio in 3.19 s wall (37% CPU each) |
 | render vs `render` | 0 of 2194 windows where the reference plays and the plug-in does not (100% agreement) |
 
 ### Audio Unit
@@ -534,9 +623,9 @@ Checked on arm64:
 | Check | Result |
 |---|---|
 | `aubprobe --list` | opens; `Output Level` 0–1 and `Status` 0–2; instrument name; latency 0 |
-| `--torture` | 8 create/dispose without initialize, 3 initialize cycles, 22050–192000 Hz, zero-length render, property table, state round-trip, 4 instances — **0 problems** |
-| state save/restore | **329051** bytes (packed), round-trips |
-| 4 instances at once | 2.13 s of audio in 4.20 s wall (49% CPU each) |
+| `--torture` | 8 create/dispose without initialize, 3 initialize cycles, 22050–192000 Hz, zero-length render, property table, state round-trip, 4 instances, the editor — **0 problems** |
+| state save/restore | **333333** bytes (packed), round-trips |
+| 4 instances at once | 2.13 s of audio in 3.17 s wall (37% CPU each) |
 | render vs `render` | 0 of 2194 windows missing; envelope within ±10%, the same scatter the VST3 side shows |
 | AU render vs VST3 render | aligned at shift 0.00 s, 0 windows missing |
 

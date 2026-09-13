@@ -88,7 +88,7 @@ else
 # macOS. vst3 and vst3probe are defined below
 all: $(BUILD)/verify$(EXE) $(BUILD)/boot$(EXE) $(BUILD)/render$(EXE) \
      $(BUILD)/panel$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/live$(EXE) \
-     $(BUILD)/gui$(EXE) vst3 $(BUILD)/vst3probe$(EXE) \
+     $(BUILD)/gui$(EXE) $(BUILD)/blocktime$(EXE) vst3 $(BUILD)/vst3probe$(EXE) \
      au $(BUILD)/aubprobe$(EXE)
 endif
 
@@ -103,13 +103,11 @@ $(BUILD)/boot$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/boot.o
 # 1 ブロックを作るのに何 ms かかるかを測る。音声デバイスは使わない。
 # 待ち時間の下限はこの最悪値で決まる（doc/todo.md 2 番）
 #
-# Windows only for now: it measures with QueryPerformanceCounter directly.
-# Nothing in the macOS build needs it, so it is not in the macOS all target
-ifeq ($(PLATFORM),windows)
+# It takes its clock from smu2000::perf_ticks(), which is QueryPerformanceCounter
+# on Windows and a monotonic clock on macOS, so both platforms build it now
 $(BUILD)/blocktime$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/blocktime.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
-endif
 
 # パラメータの層の定義表を firmware に確かめさせる（doc/params.md）
 $(BUILD)/xgtest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/xg/model.o $(BUILD)/src/xgtest.o
@@ -282,10 +280,18 @@ VST3_SDK_SRCS := \
 
 # Uses the **same** panel.cpp / layout.cpp / svg.cpp as the Windows build, with
 # compat/gdi_mac.cpp filling in CoreGraphics underneath. The window is view_mac.mm
+#
+# Both plug-in formats show this one panel, so the view and the drawing layer are
+# named once and the VST3 bundle and the AU both build them. (The Windows side of
+# this Makefile names the same drawing layer in its own VST3_SRCS, with
+# view_win.cpp in place of view_mac.mm)
+PANEL_VIEW_SRCS := src/vst3/view.cpp src/vst3/view_mac.mm
+PANEL_SRCS := src/compat/gdi_mac.cpp \
+              src/ui/panel.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/editor.cpp \
+              src/ui/effects.cpp src/xg/model.cpp
+
 VST3_SRCS := src/vst3/plugin.cpp src/vst3/engine.cpp src/vst3/iids.cpp \
-             src/vst3/view.cpp src/vst3/view_mac.mm src/compat/gdi_mac.cpp \
-             src/ui/panel.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/editor.cpp \
-             src/ui/effects.cpp src/xg/model.cpp $(VST3_SDK_SRCS)
+             $(PANEL_VIEW_SRCS) $(PANEL_SRCS) $(VST3_SDK_SRCS)
 VST3_OBJS := $(VST3_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
 VST3_OBJS := $(VST3_OBJS:%.mm=$(BUILD)/vst3obj/%.o)
 
@@ -351,8 +357,15 @@ probe: $(BUILD)/vst3probe$(EXE) $(VST3_BIN)
 AU_DIR := $(BUILD)/S-MU2000.component
 AU_BIN := $(AU_DIR)/Contents/MacOS/S-MU2000
 
-AU_SRCS := src/au/plugin.cpp src/vst3/engine.cpp $(VST3_SDK_SRCS)
+# The editor is the VST3 view, so the AU carries that too: editor_mac.mm makes a
+# smu2000::vst3::plug_view and hands it to the host inside an NSView. Its own
+# files are plugin.cpp and editor_mac.mm; everything below them is the same panel
+# iids.cpp is view.cpp's: it answers IPlugView's interface id, and view.cpp
+# refers to it even when the host on the other side is an AU rather than a VST3
+AU_SRCS := src/au/plugin.cpp src/au/editor_mac.mm src/vst3/engine.cpp src/vst3/iids.cpp \
+           $(PANEL_VIEW_SRCS) $(PANEL_SRCS) $(VST3_SDK_SRCS)
 AU_OBJS := $(AU_SRCS:%.cpp=$(BUILD)/vst3obj/%.o)
+AU_OBJS := $(AU_OBJS:%.mm=$(BUILD)/vst3obj/%.o)
 
 au: $(AU_BIN)
 
@@ -377,12 +390,13 @@ install-au: $(AU_BIN)
 	@echo "入れた: $(AU_INSTALL)/S-MU2000.component"
 	@echo "auval -v aumu SMU2 Trbh で確かめられる"
 
-# Small host that runs the AU without a DAW
+# Small host that runs the AU without a DAW. -lobjc is for the editor check:
+# it makes the view class the way a host does, with NSClassFromString
 $(BUILD)/aubprobe$(EXE): $(BUILD)/vst3obj/src/au/probe.o $(BUILD)/src/smf.o \
                         $(BUILD)/src/compat/compat.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -framework AudioToolbox \
-		-framework CoreFoundation
+		-framework CoreFoundation -lobjc
 
 au-probe: $(BUILD)/aubprobe$(EXE) $(AU_BIN)
 	S_MU2000_ROMS=$(ROMS) $(BUILD)/aubprobe$(EXE) $(AU_DIR) --list

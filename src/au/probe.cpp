@@ -25,6 +25,11 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreFoundation/CoreFoundation.h>
 
+// The editor check below is written against the Objective-C runtime rather than
+// AppKit: it has to make a view, and aubprobe is plain C++
+#include <objc/message.h>
+#include <objc/runtime.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -41,6 +46,12 @@ namespace {
 constexpr OSType kType         = 'aumu';
 constexpr OSType kSubtype      = 'SMU2';
 constexpr OSType kManufacturer = 'Trbh';
+
+// These two are in libobjc but not declared in the SDK's headers. The view a
+// host is handed is autoreleased, so without a pool every editor it makes
+// complains on the way out
+extern "C" void *objc_autoreleasePoolPush(void);
+extern "C" void  objc_autoreleasePoolPop(void *pool);
 
 long long now_ms()
 {
@@ -351,7 +362,104 @@ int run_render(AudioUnit unit, double rate, int block, double extra,
 
 namespace {
 
-int run_torture(AudioComponent comp)
+// The editor, walked the way a host walks it: read kAudioUnitProperty_CocoaUI,
+// resolve the class it names, and ask that class for a view. The parts a DAW
+// would notice first are exactly these -- the property naming a class that
+// exists, the name matching, and the class building a panel.
+//
+// There is no window in here, so what ends up on screen is still a DAW's word;
+// that the panel is painted correctly is checked in doc/porting-macos.md
+int check_editor(AudioUnit u, const std::string &bundle_path)
+{
+	UInt32 size = 0;
+	Boolean writable = true;
+	if (AudioUnitGetPropertyInfo(u, kAudioUnitProperty_CocoaUI, kAudioUnitScope_Global, 0,
+	                             &size, &writable) != noErr) {
+		std::printf("NG: CocoaUI に答えない\n");
+		return 1;
+	}
+	int bad = 0;
+	if (size != sizeof(AudioUnitCocoaViewInfo) || writable) {
+		std::printf("NG: CocoaUI の大きさが %u（%zu のはず）、読み取り専用は %d\n",
+		            unsigned(size), sizeof(AudioUnitCocoaViewInfo), int(writable));
+		bad++;
+	}
+
+	AudioUnitCocoaViewInfo info{};
+	UInt32 got = sizeof(info);
+	if (AudioUnitGetProperty(u, kAudioUnitProperty_CocoaUI, kAudioUnitScope_Global, 0,
+	                         &info, &got) != noErr) {
+		std::printf("NG: CocoaUI を読めない\n");
+		return bad + 1;
+	}
+
+	char url_path[4096] = {};
+	char class_name[256] = {};
+	const bool have_url = info.mCocoaAUViewBundleLocation &&
+	    CFURLGetFileSystemRepresentation(info.mCocoaAUViewBundleLocation, true,
+	                                     reinterpret_cast<UInt8 *>(url_path), sizeof(url_path));
+	if (info.mCocoaAUViewClass[0])
+		CFStringGetCString(info.mCocoaAUViewClass[0], class_name, sizeof(class_name),
+		                   kCFStringEncodingUTF8);
+
+	if (!have_url || !class_name[0]) {
+		std::printf("NG: CocoaUI がバンドルとクラス名を返さない\n");
+		return bad + 1;
+	}
+	// The AU publishes an absolute URL, which is what a host needs; the bundle
+	// this probe was handed may be a relative path
+	char resolved[4096] = {};
+	const char *want_path = realpath(bundle_path.c_str(), resolved) ? resolved
+	                                                                : bundle_path.c_str();
+	if (std::string(url_path) != want_path) {
+		std::printf("NG: CocoaUI のバンドルが違う: %s（%s のはず）\n", url_path, want_path);
+		bad++;
+	}
+
+	Class cls = objc_getClass(class_name);
+	if (!cls) {
+		std::printf("NG: クラス %s が無い（CocoaUI の綴りと @interface を合わせる）\n", class_name);
+		return bad + 1;
+	}
+
+	void *pool = objc_autoreleasePoolPush();
+
+	id factory = ((id (*)(id, SEL))objc_msgSend)((id)cls, sel_registerName("alloc"));
+	factory = ((id (*)(id, SEL))objc_msgSend)(factory, sel_registerName("init"));
+	const unsigned version = ((unsigned (*)(id, SEL))objc_msgSend)(
+	    factory, sel_registerName("interfaceVersion"));
+	if (version != 0) {
+		std::printf("NG: interfaceVersion が %u（0 のはず）\n", version);
+		bad++;
+	}
+
+	// NSSize is two doubles
+	struct ns_size { double width, height; };
+	const ns_size want{ 1400.0, 360.0 };
+	id view = ((id (*)(id, SEL, AudioUnit, ns_size))objc_msgSend)(
+	    factory, sel_registerName("uiViewForAudioUnit:withSize:"), u, want);
+	if (!view) {
+		std::printf("NG: エディタが画面を作れない\n");
+		objc_autoreleasePoolPop(pool);
+		return bad + 1;
+	}
+
+	id subs = ((id (*)(id, SEL))objc_msgSend)(view, sel_registerName("subviews"));
+	const unsigned long panels = subs ? ((unsigned long (*)(id, SEL))objc_msgSend)(
+	    subs, sel_registerName("count")) : 0;
+	if (panels < 1) {
+		std::printf("NG: エディタの中にパネルが無い\n");
+		bad++;
+	}
+	std::printf("OK: エディタ %s が画面を作った（下位ビュー %lu 枚）\n",
+	            object_getClassName(view), panels);
+
+	objc_autoreleasePoolPop(pool);
+	return bad;
+}
+
+
+int run_torture(AudioComponent comp, const std::string &bundle_path)
 {
 	std::printf("\n---- 乱暴に扱ってみる ----\n");
 	int bad = 0;
@@ -585,6 +693,14 @@ int run_torture(AudioComponent comp)
 		std::printf("OK: 4 枚同時に作って捨てた\n");
 	}
 
+	// 7. the editor a host would put in its window
+	{
+		AudioUnit u = nullptr;
+		AudioComponentInstanceNew(comp, &u);
+		bad += check_editor(u, bundle_path);
+		AudioComponentInstanceDispose(u);
+	}
+
 	std::printf("---- 悪いところ %d 件 ----\n", bad);
 	return bad ? 1 : 0;
 }
@@ -668,7 +784,7 @@ int main(int argc, char **argv)
 		std::printf("音は出していない（MIDI と出力先を渡すと鳴らす）\n");
 	}
 
-	if (torture && run_torture(comp))
+	if (torture && run_torture(comp, bundle))
 		rc = 1;
 	return rc;
 }

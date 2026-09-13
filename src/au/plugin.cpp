@@ -27,6 +27,7 @@
 //   build/aubprobe build/S-MU2000.component song.mid out.wav   (own host)
 //   auval -v aumu SMU2 Trbh                                    (Apple's validator)
 
+#include "editor.h"
 #include "state.h"
 #include "vst3/engine.h"
 
@@ -579,6 +580,24 @@ OSStatus prop_info(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope
 		out.writable = false;
 		return noErr;
 
+	// What the host reads to find the editor: a bundle and a class name in it.
+	// One view class, so the size is one AudioUnitCocoaViewInfo
+	case kAudioUnitProperty_CocoaUI:
+		if (!want_global(scope, element, err))
+			return err;
+		out.size = sizeof(AudioUnitCocoaViewInfo);
+		out.writable = false;
+		return noErr;
+
+	// Private, and read-only: the editor's way of reaching the engine it has to
+	// draw (editor.h). Not something a host has any use for
+	case smu2000::au::kEngineProperty:
+		if (!want_global(scope, element, err))
+			return err;
+		out.size = sizeof(void *);
+		out.writable = false;
+		return noErr;
+
 	default:
 		break;
 	}
@@ -655,6 +674,30 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		*size = sizeof(Float64);
 		return noErr;
 	}
+
+	// Where the editor is. Both references are made fresh here and belong to the
+	// host afterwards; the view itself is built by editor_mac.mm
+	case kAudioUnitProperty_CocoaUI: {
+		if (*size < sizeof(AudioUnitCocoaViewInfo))
+			return kAudioUnitErr_InvalidPropertyValue;
+		CFURLRef url = nullptr;
+		CFStringRef name = nullptr;
+		if (!smu2000::au::view_info(&url, &name))
+			return kAudioUnitErr_InvalidPropertyValue;
+		auto *info = static_cast<AudioUnitCocoaViewInfo *>(data);
+		info->mCocoaAUViewBundleLocation = url;
+		info->mCocoaAUViewClass[0] = name;
+		*size = sizeof(AudioUnitCocoaViewInfo);
+		return noErr;
+	}
+
+	// Private: the engine this instance is running, for the editor
+	case smu2000::au::kEngineProperty:
+		if (*size < sizeof(void *))
+			return kAudioUnitErr_InvalidPropertyValue;
+		*static_cast<void **>(data) = &au->eng;
+		*size = sizeof(void *);
+		return noErr;
 
 	case kAudioUnitProperty_ElementCount:
 		// aumu's rule: Global is 1 and there is one audio output bus. The input

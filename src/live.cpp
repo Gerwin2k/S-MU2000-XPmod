@@ -325,10 +325,13 @@ int run_waveout(generator &gen, double seconds, int frames, int buffers)
 // CoreAudio AudioUnit) calls into this for exactly what the device asked for.
 // The "keep no clock of your own" design applies here unchanged.
 int run_coreaudio(mu2000 &mu, double seconds, int latency_ms, std::vector<s16> *rec,
-                  u64 &produced, double &busy_sec)
+                  u64 &produced, double &busy_sec, bool exclusive, const char *dump_dev,
+                  const char *audio_dev)
 {
 	ui::audio_out out;
 	std::string err;
+	if (dump_dev)
+		out.set_capture(dump_dev);
 
 	const bool ok = out.start(latency_ms, [&](s16 *dst, u32 frames) {
 		// 溜まっている MIDI を音源へ。実機と同じく 31250bps の直列で流れる
@@ -347,13 +350,18 @@ int run_coreaudio(mu2000 &mu, double seconds, int latency_ms, std::vector<s16> *
 		// Only for --wav. It is a research aid, so allocating here does not matter
 		if (rec)
 			rec->insert(rec->end(), dst, dst + size_t(frames) * 2);
-	}, err);
+	}, err, exclusive, audio_dev ? audio_dev : "");
 
 	if (!ok) {
 		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
 	}
 
+	std::printf("音声の出口: %s\n", out.device_name().c_str());
+	// A refused claim still plays: hog mode is a request, and another application
+	// may be holding the device
+	if (exclusive)
+		std::printf("独り占め: %s\n", out.exclusive() ? "取れた" : "取れなかった");
 	std::printf("CoreAudio  待ち時間 %.1f ms（%u サンプル）\n",
 	            1000.0 * out.buffer_frames() / RATE, out.buffer_frames());
 	if (seconds > 0.0)
@@ -379,6 +387,17 @@ int run_coreaudio(mu2000 &mu, double seconds, int latency_ms, std::vector<s16> *
 	produced = out.produced();
 	busy_sec = out.cpu_percent() / 100.0 * (double(produced) / RATE);
 	out.stop();
+
+	// The capture is complete only after stop(), so it is written here rather
+	// than by the audio_out itself
+	if (dump_dev) {
+		std::string cerr;
+		if (out.write_capture(cerr))
+			std::printf("デバイスへ渡したものを書き出した: %s（%.1f 秒）\n", dump_dev,
+			            double(out.capture_frames()) / RATE);
+		else
+			std::fprintf(stderr, "%s\n", cerr.c_str());
+	}
 	return 0;
 }
 
@@ -529,10 +548,13 @@ int main(int argc, char **argv)
 	// Windows-only options: say so rather than silently doing something else
 	if (use_waveout)
 		std::fprintf(stderr, "注意: --waveout は Windows 専用。macOS では CoreAudio を使う\n");
-	// --exclusive, --audio and --dump-dev are taken by the Windows side only for
-	// now: the CoreAudio port opens the default device and does not yet take a
-	// name or hog mode (doc/porting-macos.md)
-	rc = run_coreaudio(mu, seconds, latency_ms, wav ? &rec : nullptr, produced, busy_sec);
+	// --raw is the one that stays Windows-only: on macOS the format conversion
+	// happens inside the system rather than through a driver mixer, so there is
+	// no engine in the path to bypass (doc/porting-macos.md)
+	if (raw)
+		std::fprintf(stderr, "注意: --raw は Windows 専用。macOS では意味がない\n");
+	rc = run_coreaudio(mu, seconds, latency_ms, wav ? &rec : nullptr, produced, busy_sec,
+	                   exclusive, dump_dev, audio_dev);
 #endif
 
 	if (wav && !rec.empty())

@@ -88,6 +88,11 @@ public:
 // rather than reaching for AppKit itself
 std::string open_midi_file_panel();
 
+// Asks a yes/no question and returns true only when the user accepts. Used
+// before the settings are thrown away, so the buttons are ordered for the
+// answer that changes nothing: Cancel is the default, and Return picks it
+bool confirm_modal(const char *title, const char *message, const char *ok_label);
+
 // Makes the window and pumps events until it closes. Blocks
 void run_window(mac_app &app, const char *title, int w, int h);
 

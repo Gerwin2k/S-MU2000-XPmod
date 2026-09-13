@@ -35,6 +35,7 @@
 
 #if defined(__APPLE__)
 #include <memory>
+#include <vector>
 #else
 #include <thread>
 #include <vector>
@@ -53,7 +54,7 @@ constexpr u32 AUDIO_RATE = 44100;
 class audio_out
 {
 public:
-	// 16bit 2ch インタリーブで frames サンプルぶん書く
+	// 16bit 2ch インタリーブで frames サンプルぶん書く（44100Hz）
 	using fill_fn = std::function<void(s16 *out, u32 frames)>;
 
 	// Both of these are declared here and defined in the .cpp. With a pimpl that
@@ -66,7 +67,33 @@ public:
 	// (live --list prints this on both platforms, so macOS needs the same answer)
 	static std::vector<std::string> list();
 
-	bool start(int latency_ms, fill_fn fill, std::string &err);
+	// latency_ms is the target amount to keep queued (0 or less leaves the
+	// device's own buffer size alone). exclusive asks for hog mode, which is this
+	// platform's counterpart of WASAPI's exclusive mode: while we hold the device
+	// nothing else can play through it. device is part of a name, empty is the
+	// system default.
+	//
+	// raw has no meaning here -- on this side the system does the format
+	// conversion rather than a driver mixer, so there is nothing to bypass. It is
+	// in the signature only so both platforms take the same call
+	bool start(int latency_ms, fill_fn fill, std::string &err, bool exclusive = false,
+	           const std::string &device = std::string(), bool raw = false);
+
+	// The port that was actually opened, by name
+	std::string device_name() const;
+
+	// Whether the device was really taken for ourselves: false if hog mode was
+	// not asked for, or if the device refused (something else holds it)
+	bool exclusive() const;
+
+	// Keep what is handed to the audio unit, so it can be compared against a real
+	// machine. Call before start(); write_capture() writes it as a WAV. Note that
+	// on this platform CoreAudio converts to the device's own format *after* us,
+	// so this is what we send rather than what the driver receives
+	void set_capture(const std::string &path);
+	u64 capture_frames() const;
+	bool write_capture(std::string &err);
+
 	void stop();
 
 	// Progress. Written on the audio thread, safe to read from anywhere.
@@ -82,6 +109,13 @@ public:
 private:
 	struct impl;
 	std::unique_ptr<impl> m_impl;
+
+	// Outside impl on purpose: stop() throws impl away, and what was captured
+	// has to outlive it to be written out afterwards. The render callback appends
+	// through a pointer held in impl, so it stays the only writer
+	std::vector<s16> m_cap;
+	bool             m_capturing = false;
+	std::string      m_cap_path;
 };
 
 #else
