@@ -874,10 +874,6 @@ int main(int argc, char **argv)
 			eng.publish();
 			return;
 		}
-		g_win.audio_name = out.device_name();
-		std::printf("音声の出口: %s\n%s\n", out.device_name().c_str(),
-		            out.format_line().c_str());
-		save_settings();
 		eng.state.store(1);
 		eng.publish();
 
@@ -914,6 +910,13 @@ int main(int argc, char **argv)
 			eng.publish();
 			return;
 		}
+		// 開けた出口を覚える。**設定を読んで MIDI の口を開いた後でないと
+		// いけない**。前はこれを起動直後にやっていて、まだ空の MIDI の名前で
+		// gui.ini を上書きしていた（毎回 MIDI が「なし」に戻っていた）
+		g_win.audio_name = out.device_name();
+		std::printf("音声の出口: %s\n%s\n", out.device_name().c_str(),
+		            out.format_line().c_str());
+		save_settings();
 		// --play が付いていれば、鳴り始めたところで流し出す
 		if (!play_path.empty()) {
 			std::string perr;
