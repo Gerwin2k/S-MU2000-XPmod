@@ -1099,9 +1099,15 @@ void swp30_device::filter_block::keyon()
 s32 swp30_device::filter_block::step(s16 input)
 {
 	s32 y0 = 0;
+	// S-MU2000: レゾナンス（b）は、その段の種類がレゾナンス付き（bit 12）のときだけ効く。
+	// MAME は 1 段目の種類で決めた値を 2 段目にも使っていたので、Q 固定のはずの 2 段目
+	// （ギターの 160Hz のハイパスなど）に山ができていた。b を書いた後に種類が変わった
+	// ときも古い値のままだった（doc/upstream.md の 6 番）
+	const s32 p2_1 = BIT(m_filter_1_a, 12) ? m_filter_p2 : 0x80;
+	const s32 p2_2 = BIT(m_filter_2_a, 12) ? m_filter_p2 : 0x80;
 	if(m_filter_1_a & 0x7fff) {
 		if(!BIT(m_filter_1_a, 13)) {
-			m_filter_1_h = (input << 6) - m_filter_1_l - ((s64(m_filter_p2) * m_filter_1_b) >> 7);
+			m_filter_1_h = (input << 6) - m_filter_1_l - ((s64(p2_1) * m_filter_1_b) >> 7);
 			m_filter_1_b = m_filter_1_b + ((s64(m_filter_1_p1) * m_filter_1_h) >> 16);
 			m_filter_1_n = m_filter_1_h + m_filter_1_l;
 			m_filter_1_l = m_filter_1_l + ((s64(m_filter_1_p1) * m_filter_1_b) >> 16);
@@ -1115,13 +1121,13 @@ s32 swp30_device::filter_block::step(s16 input)
 		} else {
 			switch(m_filter_1_a >> 12) {
 			case 0x2: y0 = m_filter_1_y0 + ((s64(m_filter_1_p1) * ((input << 6) - m_filter_1_y0)) >> 16); break;
-			case 0x3: y0 = 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * ((input << 6) - m_filter_1_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
+			case 0x3: y0 = 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * ((input << 6) - m_filter_1_y0)) >> 16) + ((s64(p2_1) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
 			case 0x6: y0 = ((input - m_filter_1_x1) << 6) + m_filter_1_y0 + ((s64(m_filter_1_p1) * (0 - m_filter_1_y0)) >> 16); break;
-			case 0x7: y0 = ((input - m_filter_1_x1) << 6) + 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * (0 - m_filter_1_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
+			case 0x7: y0 = ((input - m_filter_1_x1) << 6) + 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * (0 - m_filter_1_y0)) >> 16) + ((s64(p2_1) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
 			case 0xa: y0 = ((input - 2*m_filter_1_x1 + m_filter_1_x2) << 6) + m_filter_1_y0 + ((s64(m_filter_1_p1) * (0 - m_filter_1_y0)) >> 16); break;
-			case 0xb: y0 = ((input - 2*m_filter_1_x1 + m_filter_1_x2) << 6) + 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * (0 - m_filter_1_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
+			case 0xb: y0 = ((input - 2*m_filter_1_x1 + m_filter_1_x2) << 6) + 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * (0 - m_filter_1_y0)) >> 16) + ((s64(p2_1) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
 			case 0xe: y0 = ((input - 2*m_filter_1_x1 + m_filter_1_x2) << 6) + m_filter_1_y0 + ((s64(m_filter_1_p1) * ((m_filter_1_x1 << 6) - m_filter_1_y0)) >> 16); break;
-			case 0xf: y0 = ((input - 2*m_filter_1_x1 + m_filter_1_x2) << 6) + 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * ((m_filter_1_x1 << 6) - m_filter_1_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
+			case 0xf: y0 = ((input - 2*m_filter_1_x1 + m_filter_1_x2) << 6) + 2*m_filter_1_y0 - m_filter_1_y1 + ((s64(m_filter_1_p1) * ((m_filter_1_x1 << 6) - m_filter_1_y0)) >> 16) + ((s64(p2_1) * (m_filter_1_y1 - m_filter_1_y0)) >> 7); break;
 			}
 
 			m_filter_1_x2 = m_filter_1_x1;
@@ -1132,7 +1138,7 @@ s32 swp30_device::filter_block::step(s16 input)
 
 		if(m_filter_2_a & 0x7fff) {
 			if(!BIT(m_filter_2_a, 13)) {
-				m_filter_2_h = y0 - m_filter_2_l - ((s64(m_filter_p2) * m_filter_2_b) >> 7);
+				m_filter_2_h = y0 - m_filter_2_l - ((s64(p2_2) * m_filter_2_b) >> 7);
 				m_filter_2_b = m_filter_2_b + ((s64(m_filter_2_p1) * m_filter_2_h) >> 16);
 				m_filter_2_n = m_filter_2_h + m_filter_2_l;
 				m_filter_2_l = m_filter_2_l + ((s64(m_filter_2_p1) * m_filter_2_b) >> 16);
@@ -1147,13 +1153,13 @@ s32 swp30_device::filter_block::step(s16 input)
 				s32 y0_1 = y0;
 				switch(m_filter_2_a >> 12) {
 				case 0x2: y0 = m_filter_2_y0 + ((s64(m_filter_2_p1) * (y0 - m_filter_2_y0)) >> 16); break;
-				case 0x3: y0 = 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * (y0 - m_filter_2_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
+				case 0x3: y0 = 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * (y0 - m_filter_2_y0)) >> 16) + ((s64(p2_2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
 				case 0x6: y0 = (y0 - m_filter_2_x1) + m_filter_2_y0 + ((s64(m_filter_2_p1) * (0 - m_filter_2_y0)) >> 16); break;
-				case 0x7: y0 = (y0 - m_filter_2_x1) + 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * (0 - m_filter_2_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
+				case 0x7: y0 = (y0 - m_filter_2_x1) + 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * (0 - m_filter_2_y0)) >> 16) + ((s64(p2_2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
 				case 0xa: y0 = (y0 - 2*m_filter_2_x1 + m_filter_2_x2) + m_filter_2_y0 + ((s64(m_filter_2_p1) * (0 - m_filter_2_y0)) >> 16); break;
-				case 0xb: y0 = (y0 - 2*m_filter_2_x1 + m_filter_2_x2) + 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * (0 - m_filter_2_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
+				case 0xb: y0 = (y0 - 2*m_filter_2_x1 + m_filter_2_x2) + 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * (0 - m_filter_2_y0)) >> 16) + ((s64(p2_2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
 				case 0xe: y0 = (y0 - 2*m_filter_2_x1 + m_filter_2_x2) + m_filter_2_y0 + ((s64(m_filter_2_p1) * ((m_filter_2_x1 << 6) - m_filter_2_y0)) >> 16); break;
-				case 0xf: y0 = (y0 - 2*m_filter_2_x1 + m_filter_2_x2) + 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * ((m_filter_2_x1 << 6) - m_filter_2_y0)) >> 16) + ((s64(m_filter_p2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
+				case 0xf: y0 = (y0 - 2*m_filter_2_x1 + m_filter_2_x2) + 2*m_filter_2_y0 - m_filter_2_y1 + ((s64(m_filter_2_p1) * ((m_filter_2_x1 << 6) - m_filter_2_y0)) >> 16) + ((s64(p2_2) * (m_filter_2_y1 - m_filter_2_y0)) >> 7); break;
 				}
 
 				m_filter_2_x2 = m_filter_2_x1;
@@ -1222,13 +1228,9 @@ void swp30_device::filter_block::level_2_w(u16 data)
 void swp30_device::filter_block::filter_b_w(u16 data)
 {
 	m_filter_b = data;
-	if(!BIT(m_filter_1_a, 12))
-		m_filter_p2 = 0x80;
-
-	else {
-		u32 p2 = (m_filter_b >> 11) + 4;
-		m_filter_p2 = (0x10 - (p2 & 7)) << (4 - (p2 >> 3));
-	}
+	// S-MU2000: 種類に関係なく b から計算しておき、使うかは step() が段ごとに決める
+	u32 p2 = (m_filter_b >> 11) + 4;
+	m_filter_p2 = (0x10 - (p2 & 7)) << (4 - (p2 >> 3));
 }
 
 
