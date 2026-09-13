@@ -9,6 +9,7 @@
 
 #include "bridge.h"
 #include "snapshot.h"
+#include "xg/fx_types.h"
 #include "xg/model.h"
 #include "xg/voices.h"
 
@@ -46,6 +47,12 @@ const xg::voice_rom *voices();
 // 右クリックで出す品書き（プログラムとバンク）。ROM から読めれば MU2000 の音色の名前で並べる。
 // ram は音色の引き方を知るため（無ければ XG の既定）
 void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br);
+
+// エフェクトの種類の品書き（開いている品書きの中に並べる）。音色と同じく
+// 分類 → 系統（MSB）→ LSB 違い の 3 段。LSB 違いの無い系統は 2 段目でそのまま選ぶ。
+// 表の中身が 1 つの分類にしか無ければ（リバーブの表など）分類の段は省く。
+// current は今の種類（MSB << 7 | LSB。分からなければ -1）。選ばれたら chosen に入れて true
+bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chosen);
 
 // ---- インサーションの設定の窓を開く頼み。一覧が出して、gui がタイマーで拾って窓を出す
 void request_fx(int slot);              // slot は 1-4

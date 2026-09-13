@@ -34,11 +34,6 @@ namespace ui {
 namespace {
 
 using xg::fx_type;
-using xg::REV_TYPES;
-using xg::CHO_TYPES;
-using xg::INS_TYPES;
-
-template <size_t N> constexpr int count_of(const fx_type (&)[N]) { return int(N); }
 
 // 面の欄とパラメータの層の名前
 const char *fx_key(int ctl)
@@ -77,11 +72,11 @@ int type_index(const fx_type *t, int n, int value)
 const fx_type *type_table(int ctl, int &n)
 {
 	switch (ctl) {
-	case CTL_REV_TYPE: n = count_of(REV_TYPES); return REV_TYPES;
-	case CTL_CHO_TYPE: n = count_of(CHO_TYPES); return CHO_TYPES;
+	case CTL_REV_TYPE: n = int(xg::rev_types().size()); return xg::rev_types().data();
+	case CTL_CHO_TYPE: n = int(xg::cho_types().size()); return xg::cho_types().data();
 	case CTL_VAR_TYPE:
 	case CTL_INS1_TYPE:
-	case CTL_INS2_TYPE: n = count_of(INS_TYPES); return INS_TYPES;
+	case CTL_INS2_TYPE: n = int(xg::ins_types().size()); return xg::ins_types().data();
 	default: n = 0; return nullptr;
 	}
 }

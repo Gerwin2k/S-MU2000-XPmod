@@ -179,10 +179,11 @@ void fx_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(fs * 11);
 	if (ImGui::BeginCombo("##type", has_type ? xg::fx_name(type).c_str() : "--", ImGuiComboFlags_HeightLarge)) {
-		for (const xg::fx_type &t : xg::INS_TYPES) {
-			const int value = t.msb << 7 | t.lsb;
-			if (ImGui::Selectable(t.name, value == type))
-				br.send(m.set(ptype, 0, value));
+		// 品書きの形（分類 → 系統 → LSB 違い）で選ぶ
+		int chosen = 0;
+		if (fx_type_menu(xg::ins_types(), has_type ? type : -1, chosen)) {
+			br.send(m.set(ptype, 0, chosen));
+			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndCombo();
 	}

@@ -57,12 +57,105 @@ std::unique_ptr<xg::voice_rom> g_voices;
 
 void set_voice_rom(std::shared_ptr<const std::vector<u8>> rom)
 {
+	if (rom)
+		xg::set_fx_type_rom(*rom);                // エフェクトの種類の表も同じ ROM から
 	g_voices = std::make_unique<xg::voice_rom>(std::move(rom));
 	if (!g_voices->ok())
 		g_voices.reset();                  // 版が違う。GM の名前で出す
 }
 
 const xg::voice_rom *voices() { return g_voices.get(); }
+
+bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chosen)
+{
+	bool picked = false;
+	auto item = [&](const xg::fx_type &t, bool with_code) {
+		const int value = t.msb << 7 | t.lsb;
+		char label[64];
+		if (with_code) std::snprintf(label, sizeof(label), "%-10s  MSB %d / LSB %d", t.name, t.msb, t.lsb);
+		else           std::snprintf(label, sizeof(label), "%s", t.name);
+		if (ImGui::MenuItem(label, nullptr, value == current)) {
+			chosen = value;
+			picked = true;
+		}
+	};
+	auto category_of = [](u8 msb) -> int {
+		const auto &cats = xg::fx_categories();
+		for (size_t c = 0; c < cats.size(); c++)
+			for (u8 m : cats[c].msbs)
+				if (m == msb)
+					return int(c);
+		return -1;
+	};
+	// 系統（MSB）ごとに、表の順で
+	auto family = [&](u8 msb) {
+		std::vector<const xg::fx_type *> list;
+		for (const xg::fx_type &t : types)
+			if (t.msb == msb)
+				list.push_back(&t);
+		if (list.size() == 1) {
+			item(*list[0], false);
+			return;
+		}
+		const bool here = current >= 0 && (current >> 7) == msb;
+		char label[64];
+		std::snprintf(label, sizeof(label), "%s（%d）", list[0]->name, int(list.size()));
+		if (ImGui::BeginMenu(label)) {
+			for (const xg::fx_type *t : list)
+				item(*t, true);
+			ImGui::EndMenu();
+		}
+		if (here) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("●");
+		}
+	};
+	auto families_in = [&](int cat) {
+		std::vector<u8> seen;
+		for (const xg::fx_type &t : types) {
+			if (t.msb == 0 || t.msb == 0x40 || category_of(t.msb) != cat)
+				continue;
+			if (std::find(seen.begin(), seen.end(), t.msb) != seen.end())
+				continue;
+			seen.push_back(t.msb);
+			family(t.msb);
+		}
+		return !seen.empty();
+	};
+
+	// NO EFFECT と THRU は分類の外
+	for (const xg::fx_type &t : types)
+		if (t.msb == 0 || t.msb == 0x40)
+			item(t, false);
+	ImGui::Separator();
+
+	std::vector<int> used;
+	for (const xg::fx_type &t : types) {
+		if (t.msb == 0 || t.msb == 0x40)
+			continue;
+		const int c = category_of(t.msb);
+		if (std::find(used.begin(), used.end(), c) == used.end())
+			used.push_back(c);
+	}
+	if (used.size() <= 1) {
+		for (int c : used)
+			families_in(c);
+		return picked;
+	}
+	const auto &cats = xg::fx_categories();
+	for (int c : used) {
+		const bool here = current > 0 && (current >> 7) != 0x40 && category_of(u8(current >> 7)) == c;
+		if (ImGui::BeginMenu(c >= 0 ? cats[c].name : "その他")) {
+			families_in(c);
+			ImGui::EndMenu();
+		}
+		if (here) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("●");
+		}
+	}
+	return picked;
+}
 
 namespace {
 int  g_fx_slot = 1;
@@ -278,10 +371,14 @@ const help_text HELP[] = {
 	{ "パート（右クリックで音色）", {
 		"MU2000 は 32 のパートを同時に鳴らせる。A1-A16 は MIDI IN A の 1-16ch、\n"
 		"B1-B16 は MIDI IN B の 1-16ch で受ける（受信チャンネルは変えられる）。\n"
-		"右クリックで音色（プログラムとバンク）を選ぶ",
+		"右クリックで音色（プログラムとバンク）を選ぶ。\n"
+		"右端の M でミュート、S でソロ（S を入れたパートだけが鳴る。いくつでも入れられる）。\n"
+		"ミュートはパートの受信チャンネルを OFF にして行う（外すと元のチャンネルに戻す）",
 		"The MU2000 plays 32 parts at once. A1-A16 receive MIDI IN A channels 1-16,\n"
 		"B1-B16 receive MIDI IN B channels 1-16 (the receive channel can be changed).\n"
-		"Right-click to choose the voice (program and bank)." } },
+		"Right-click to choose the voice (program and bank).\n"
+		"M on the right mutes the part, S solos it (only soloed parts play; any number can be soloed).\n"
+		"Muting sets the part's receive channel to OFF and restores it afterwards." } },
 	{ "マスター", {
 		"全体に効く値。移調（Transpose）とマスターチューンもここに出る",
 		"Settings for the whole mix, including transpose and master tune." } },
