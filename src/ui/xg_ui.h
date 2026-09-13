@@ -26,6 +26,8 @@ public:
 	virtual int default_height() const = 0;
 	// ram は音声の糸が写した RAM と MIDI の見張り。m は同じものを読んだパラメータの層
 	virtual void draw(xg::model &m, const xg_snapshot &ram, bridge &br) = 0;
+	// 窓を閉じた（隠した）とき。マウスで鳴らしている音を止めるなど
+	virtual void hidden(bridge &) {}
 };
 
 namespace xgui {

@@ -55,6 +55,7 @@ private:
 	ID3D11RenderTargetView *m_rtv = nullptr;
 	ImGuiContext           *m_imgui = nullptr;
 	UINT m_resize_w = 0, m_resize_h = 0;     // WM_SIZE で受けて、次に描く前に直す
+	bool m_was_visible = false;              // 前のコマで見えていたか（隠れた瞬間を知る）
 };
 
 } // namespace ui

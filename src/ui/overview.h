@@ -24,10 +24,12 @@ public:
 	int default_width() const override  { return 1400; }
 	int default_height() const override { return 760; }
 	void draw(xg::model &m, const xg_snapshot &ram, bridge &br) override;
+	void hidden(bridge &br) override { release_keys(br); }
 
 	struct column;                   // 列の中身（overview.cpp）
 
 private:
+	void release_keys(bridge &br);          // マウスで鳴らしている鍵を全部離す
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
 	// INS 列の 1 マス。右クリックで掛ける・外す・種類、印のドラッグで別のパートへ
 	void ins_cell(int part, xg::model &m, bridge &br, float h);

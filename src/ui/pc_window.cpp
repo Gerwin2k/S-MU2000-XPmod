@@ -167,7 +167,13 @@ void pc_window::destroy()
 
 void pc_window::frame(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
-	if (!m_imgui || !visible() || IsIconic(m_hwnd))
+	const bool shown = m_imgui && visible() && !IsIconic(m_hwnd);
+	if (m_was_visible && !shown && m_imgui) {
+		ImGui::SetCurrentContext(m_imgui);
+		m_view->hidden(br);                  // 閉じた・しまった。押しっぱなしを離す
+	}
+	m_was_visible = shown;
+	if (!shown)
 		return;
 	ImGui::SetCurrentContext(m_imgui);
 	if (m_resize_w) {

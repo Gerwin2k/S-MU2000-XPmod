@@ -13,6 +13,7 @@
 #include "xg/ram.h"
 
 #include <cstdio>
+#include <initializer_list>
 
 namespace ui {
 
@@ -89,10 +90,26 @@ public:
 		port = port ? 1 : 0;
 		if (b >= 0xf8)
 			return;                           // リアルタイム
-		if (b == 0xf0) { m_sysex[port] = true; return; }
+		if (b == 0xf0) {
+			m_sysex[port] = true;
+			m_sx_len[port] = 0;
+			m_status[port] = 0;                   // SysEx はランニングステータスを打ち切る
+			return;
+		}
 		if (m_sysex[port]) {
-			if (b & 0x80) m_sysex[port] = false;   // F7 か、途中で別のものが来た
-			if (b == 0xf7) return;
+			if (!(b & 0x80)) {
+				if (m_sx_len[port] < sizeof(m_sx[port]))
+					m_sx[port][m_sx_len[port]] = b;
+				m_sx_len[port]++;
+				return;
+			}
+			m_sysex[port] = false;                // F7 か、途中で別のものが来た
+			if (b == 0xf7) {
+				if (is_reset(m_sx[port], m_sx_len[port]))
+					for (int ch = 0; ch < 16; ch++)
+						m_xg.notes[port * 16 + ch][0] = m_xg.notes[port * 16 + ch][1] = 0;
+				return;
+			}
 		}
 		if (b & 0x80) {
 			m_status[port] = b < 0xf0 ? b : 0;    // F1-F7 は無視して、ランニングステータスも捨てる
@@ -118,9 +135,31 @@ public:
 			m_xg.note_ons[slot]++;
 		} else if (kind == 0x80 || kind == 0x90) {
 			bits &= ~bit;
-		} else if (kind == 0xb0 && (d0 == 120 || d0 == 123)) {
-			m_xg.notes[slot][0] = m_xg.notes[slot][1] = 0;   // オールサウンドオフ・オールノートオフ
+		} else if (kind == 0xb0 && (d0 == 120 || d0 >= 123)) {
+			// オールサウンドオフ・オールノートオフ、オムニ／モノ／ポリの切り替え（どれも全部離す）
+			m_xg.notes[slot][0] = m_xg.notes[slot][1] = 0;
 		}
+	}
+
+	// 音源を初期状態に戻す SysEx か（鳴っている音が全部止まる）。F0 と F7 を除いた中身
+	static bool is_reset(const u8 *p, size_t n)
+	{
+		auto is = [&](std::initializer_list<int> want, int any_low_nibble_at = -1) {
+			if (n != want.size())
+				return false;
+			int i = 0;
+			for (int w : want) {
+				const u8 v = i == any_low_nibble_at ? u8(p[i] & 0xf0) : p[i];
+				if (v != w)
+					return false;
+				i++;
+			}
+			return true;
+		};
+		return is({ 0x7e, 0x7f, 0x09, 0x01 }) || is({ 0x7e, 0x7f, 0x09, 0x03 }) ||          // GM / GM2 On
+		       is({ 0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00 }, 1) ||                     // XG System On
+		       is({ 0x43, 0x10, 0x4c, 0x00, 0x00, 0x7f, 0x00 }, 1) ||                     // XG All Parameter Reset
+		       is({ 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41 });              // GS Reset
 	}
 
 	// ブロックの終わりで。25ms ごとに LCD と LED を画面へ渡す
@@ -185,6 +224,8 @@ private:
 	u8   m_status[2] = {}, m_data[2][2] = {};
 	int  m_have[2] = {};
 	bool m_sysex[2] = {};
+	u8   m_sx[2][16] = {};                    // SysEx の頭（リセットかを見るだけ）
+	size_t m_sx_len[2] = {};
 };
 
 } // namespace ui

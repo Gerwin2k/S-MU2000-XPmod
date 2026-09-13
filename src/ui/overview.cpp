@@ -814,6 +814,19 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 }
 
 
+void overview::release_keys(bridge &br)
+{
+	for (int part = 0; part < PARTS; part++) {
+		if (m_playing[part] < 0)
+			continue;
+		const u8 off[3] = { u8(0x80 | (m_playing_slot[part] & 15)), u8(m_playing[part]), 64 };
+		if (m_playing_slot[part] >= 16) br.send_b(off, 3);
+		else                            br.send(off, 3);
+		m_playing[part] = -1;
+	}
+}
+
+
 void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
 	m_wheel_taken = false;
