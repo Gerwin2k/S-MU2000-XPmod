@@ -2710,7 +2710,10 @@ s32 swp30_device::mixer_att(s32 sample, s32 att)
 {
 	if(att >= 0xff)
 		return 0;
-	return (sample - ((sample * (att & 0xf)) >> 4)) >> (att >> 4);
+	// S-MU2000: 下 4 ビットは 32 分の 1 刻み（1 から 17/32 まで）。MAME は 16 分の 1 と
+	// していたので、0x18 と 0x20 が同じ大きさになり、パンで音量が行き来していた。
+	// 実機で 17 段のパンを測って ±0.1dB で合う（doc/upstream.md の 5 番）
+	return (sample - ((sample * (att & 0xf)) >> 5)) >> (att >> 4);
 }
 
 void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
