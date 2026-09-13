@@ -354,6 +354,13 @@ const help_text HELP[] = {
 		"クセのある音にする",
 		"Filter resonance (CC71, harmonic content).\n"
 		"Emphasises the area around the cutoff for a more peaky sound." } },
+	{ "EG", {
+		"音量の変わり方（エンベロープ）。左から、鍵盤を押して立ち上がる（アタック）、\n"
+		"伸ばしている音量へ落ち着く（ディケイ）、伸ばしている間、離して消える（リリース）。\n"
+		"3 つの点を横につまんで動かすと、それぞれの長さが変わる（音色の元の長さに対する増減）",
+		"How the volume changes over a note (the envelope). From the left: rise after the key is pressed (attack),\n"
+		"settle to the held level (decay), the held part, and fade after release (release).\n"
+		"Drag the three points sideways to change each time, relative to the voice's own settings." } },
 	{ "REV", {
 		"リバーブへの送り量（CC91）。部屋やホールの響き（残響）をどれだけ足すか",
 		"Reverb send (CC91). How much room or hall ambience is added." } },

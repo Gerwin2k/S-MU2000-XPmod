@@ -33,6 +33,8 @@ private:
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
 	// INS 列の 1 マス。右クリックで掛ける・外す・種類、印のドラッグで別のパートへ
 	void ins_cell(int part, xg::model &m, bridge &br, float h);
+	// EG の 1 マス。アタック・ディケイ・リリースの形を描き、点をつまんで動かす
+	void eg_cell(int part, xg::model &m, bridge &br, float w, float h);
 	// 上のマスターの表。マスターボリューム、移調、リバーブ・コーラス・バリエーションの種類と戻り、
 	// インサーション 1-4 の種類と掛け先、全パートの鍵盤
 	void master_pane(xg::model &m, const xg_snapshot &ram, bridge &br);

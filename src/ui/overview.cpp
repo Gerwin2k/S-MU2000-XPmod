@@ -22,7 +22,7 @@ namespace {
 
 constexpr int PARTS = 32;
 
-enum class src { param, exp, mod, bend, hold };
+enum class src { param, exp, mod, bend, hold, eg };
 
 ImU32 col(ImGuiCol c, float a = 1.0f) { return ImGui::GetColorU32(c, a); }
 
@@ -113,6 +113,7 @@ static const overview::column COLUMNS[] = {
 	{ "HOLD",   src::hold,  nullptr },
 	{ "CUT",    src::param, "part.cutoff" },
 	{ "RESO",   src::param, "part.resonance" },
+	{ "EG",     src::eg,    nullptr },          // アタック・ディケイ・リリースを 1 マスで
 	{ "REV",    src::param, "part.reverb_send" },
 	{ "CHO",    src::param, "part.chorus_send" },
 	{ "VAR",    src::param, "part.variation_send" },
@@ -135,6 +136,14 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 {
 	ImGuiIO &io = ImGui::GetIO();
 	const float fs = ImGui::GetFontSize();
+
+	if (c.from == src::eg) {
+		if (part < 0)
+			ImGui::Dummy(ImVec2(w, h));
+		else
+			eg_cell(part, m, br, w, h);
+		return;
+	}
 
 	// part が -1 ならマスターの行。列ごとに、システムやエフェクトの戻りの値を出す
 	const bool master = part < 0;
@@ -416,6 +425,94 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
 	dl->PopClipRect();
 	ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h));
 	ImGui::Dummy(ImVec2(0, 0));
+}
+
+
+// EG の 1 マス。音量の形（立ち上がり → 落ち着き → 伸ばし → 離して消える）を折れ線で描き、
+// 3 つの点をつまんで横に動かすと、アタック・ディケイ・リリースが変わる。
+// XG の値は音色の元の値に対する増減（64 が音色のまま）。形の長さは 2 の (値 - 64) / 24 乗で伸び縮みさせ、
+// 真ん中の値で各区間が同じくらいの長さになるようにした（見た目だけ。実際の秒数ではない）
+void overview::eg_cell(int part, xg::model &m, bridge &br, float w, float h)
+{
+	ImGuiIO &io = ImGui::GetIO();
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const xg::param &pa = P("part.attack"), &pd = P("part.decay"), &pr = P("part.release");
+	int va = 64, vd = 64, vr = 64;
+	const bool known = m.get(pa, part, va) && m.get(pd, part, vd) && m.get(pr, part, vr);
+
+	ImGui::PushID("eg");
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##eg", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
+	const ImGuiID id = ImGui::GetItemID();
+	const bool hovered = ImGui::IsItemHovered();
+	const bool active = ImGui::IsItemActive();
+
+	const float pad = fs * 0.25f;
+	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
+	const float top = pos.y + pad, bottom = pos.y + h - pad;
+	const float sustain_y = top + (bottom - top) * 0.45f;
+	const float unit = (x1 - x0) / 4.0f;                    // 真ん中の値のときの 1 区間
+	auto len = [&](int v) { return unit * 0.5f * std::pow(2.0f, float(v - 64) / 24.0f); };
+	const float hold = unit * 0.5f;                          // 伸ばしている間（固定）
+
+	// 3 つの点の位置。はみ出すときは全体を縮める
+	float la = len(va), ld = len(vd), lr = len(vr);
+	const float total = la + ld + hold + lr;
+	const float squeeze = total > (x1 - x0) ? (x1 - x0) / total : 1.0f;
+	const float xa = x0 + la * squeeze;
+	const float xd = xa + ld * squeeze;
+	const float xs = xd + hold * squeeze;
+	const float xr = xs + lr * squeeze;
+
+	// つかむ点。押した瞬間に一番近い点を選び、離すまで同じ点を動かす
+	int &grab = *ImGui::GetStateStorage()->GetIntRef(id, -1);
+	if (ImGui::IsItemActivated() && known) {
+		const float mx = io.MousePos.x;
+		const float dists[3] = { std::fabs(mx - xa), std::fabs(mx - xd), std::fabs(mx - xr) };
+		grab = int(std::min_element(dists, dists + 3) - dists);
+	}
+	if (!active)
+		grab = -1;
+	if (active && known && grab >= 0 && io.MouseDelta.x != 0.0f) {
+		// 動かした幅を値に直す。2 倍の長さが 24 目盛り
+		auto apply = [&](const xg::param &p, int v, float from, float to_len) {
+			const float cur = std::max(1.0f, from);
+			const float want = std::max(1.0f, to_len);
+			int nv = std::clamp(int(std::lround(64 + 24 * std::log2(want / (unit * 0.5f)))), p.min, p.max);
+			(void)cur;
+			if (nv != v)
+				br.send(m.set(p, part, nv));
+		};
+		const float mx = io.MousePos.x;
+		if (grab == 0) apply(pa, va, la, (mx - x0) / squeeze);
+		if (grab == 1) apply(pd, vd, ld, (mx - xa) / squeeze);
+		if (grab == 2) apply(pr, vr, lr, (mx - xs) / squeeze);
+	}
+
+	// 描く
+	dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), col(hovered || active ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), 3.0f);
+	if (known) {
+		const ImU32 line = col(ImGuiCol_SliderGrabActive);
+		const ImVec2 pts[] = { { x0, bottom }, { xa, top }, { xd, sustain_y }, { xs, sustain_y }, { xr, bottom } };
+		// 面を薄く塗ってから線
+		dl->PathClear();
+		for (const ImVec2 &p : pts) dl->PathLineTo(p);
+		dl->PathFillConcave(col(ImGuiCol_SliderGrab, 0.25f));
+		dl->AddPolyline(pts, 5, line, 0, std::max(1.5f, fs * 0.1f));
+		const float r = std::max(2.5f, fs * 0.22f);
+		const ImVec2 handles[] = { pts[1], pts[2], pts[4] };
+		for (int i = 0; i < 3; i++)
+			dl->AddCircleFilled(handles[i], i == grab ? r * 1.4f : r, i == grab ? col(ImGuiCol_Text) : line);
+	} else {
+		const ImVec2 ts = ImGui::CalcTextSize("--");
+		dl->AddText(ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(ImGuiCol_TextDisabled), "--");
+	}
+
+	if ((hovered || active) && known)
+		ImGui::SetItemTooltip("Attack %s   Decay %s   Release %s\n点を横につまんで動かす（右へ長く、左へ短く）",
+		                      xg::format(pa, va).c_str(), xg::format(pd, vd).c_str(), xg::format(pr, vr).c_str());
+	ImGui::PopID();
 }
 
 void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h)
@@ -857,7 +954,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 		ImGui::TableSetupColumn("INS", ImGuiTableColumnFlags_WidthFixed, fs * 8.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
-			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed, fs * 3.4f);
+			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed, c.from == src::eg ? fs * 8.0f : fs * 3.4f);
 		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
 		headers_with_help(NCOLS + 4);
 
