@@ -616,6 +616,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		return 0;
 
 	case WM_TIMER: {
+		// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む
+		if (g_win.br)
+			g_win.panel.tick(*g_win.br);
 		InvalidateRect(hwnd, nullptr, FALSE);
 		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
 		static DWORD last = 0;
