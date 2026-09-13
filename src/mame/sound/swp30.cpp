@@ -1659,11 +1659,14 @@ u16 swp30_device::lfo_block::get_amplitude() const
 
 s16 swp30_device::lfo_block::get_pitch() const
 {
-	s32 v = (m_state - 0x400) * m_pitch_depth;
+	// S-MU2000: the 12-bit state is centred on 0x800, not 0x400.  With 0x400
+	// the vibrato sat about half a swing sharp and swung twice as far as the
+	// real MU2000 (measured on hardware: vib rate sweep, doc/upstream.md).
+	s32 v = (m_state - 0x800) * m_pitch_depth;
 	if(m_pitch_mode)
-		return v >> 8;
+		return v >> 9;
 	else
-		return v >> 11;
+		return v >> 12;
 
 }
 
@@ -1671,7 +1674,9 @@ void swp30_device::lfo_block::type_step_pitch_w(u16 data)
 {
 	m_r_type_step_pitch = data;
 	m_type = data >> 14;
-	m_step = (data >> 8) & 0x1f;
+	// S-MU2000: the step is 6 bits.  The firmware sets bit 13 for vibrato rates
+	// above ~72; dropping it turned a fast vibrato into a ~1Hz wobble.
+	m_step = (data >> 8) & 0x3f;
 	m_pitch_mode = data & 0x80;
 	m_pitch_depth = data & 0x7f;
 }
