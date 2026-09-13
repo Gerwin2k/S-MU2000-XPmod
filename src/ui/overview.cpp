@@ -22,7 +22,7 @@ namespace {
 
 constexpr int PARTS = 32;
 
-enum class src { param, exp, mod, bend, hold, eg };
+enum class src { param, exp, mod, bend, hold, filter, eg };
 
 ImU32 col(ImGuiCol c, float a = 1.0f) { return ImGui::GetColorU32(c, a); }
 
@@ -111,8 +111,7 @@ static const overview::column COLUMNS[] = {
 	{ "P.BEND", src::bend,  nullptr },
 	{ "MOD",    src::mod,   nullptr },
 	{ "HOLD",   src::hold,  nullptr },
-	{ "CUT",    src::param, "part.cutoff" },
-	{ "RESO",   src::param, "part.resonance" },
+	{ "FILTER", src::filter, nullptr },         // カットオフとレゾナンスを 1 マスで（Domino の CUT RESO）
 	{ "EG",     src::eg,    nullptr },          // アタック・ディケイ・リリースを 1 マスで
 	{ "REV",    src::param, "part.reverb_send" },
 	{ "CHO",    src::param, "part.chorus_send" },
@@ -137,11 +136,13 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 	ImGuiIO &io = ImGui::GetIO();
 	const float fs = ImGui::GetFontSize();
 
-	if (c.from == src::eg) {
+	if (c.from == src::eg || c.from == src::filter) {
 		if (part < 0)
 			ImGui::Dummy(ImVec2(w, h));
-		else
+		else if (c.from == src::eg)
 			eg_cell(part, m, br, w, h);
+		else
+			filter_cell(part, m, br, w, h);
 		return;
 	}
 
@@ -512,6 +513,97 @@ void overview::eg_cell(int part, xg::model &m, bridge &br, float w, float h)
 	if ((hovered || active) && known)
 		ImGui::SetItemTooltip("Attack %s   Decay %s   Release %s\n点を横につまんで動かす（右へ長く、左へ短く）",
 		                      xg::format(pa, va).c_str(), xg::format(pd, vd).c_str(), xg::format(pr, vr).c_str());
+	ImGui::PopID();
+}
+
+// フィルタの 1 マス。低い音から高い音への通り方（2 次のローパス）を描き、カットオフの位置の点を
+// つまむ。横に動かすとカットオフ、縦に動かすとレゾナンス（山の高さ）が変わる。
+// 横軸は値に比例（64 が真ん中 = 音色のまま）で、1 マスの幅が 8 オクターブ。
+// 点の高さは、カットオフでの持ち上がり 20log10(Q) dB。Q = 2 の (値 - 64) / 16 乗なので、
+// 高さも値に比例する。どちらも見た目だけで、実際の周波数や Q ではない
+void overview::filter_cell(int part, xg::model &m, bridge &br, float w, float h)
+{
+	ImGuiIO &io = ImGui::GetIO();
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const xg::param &pc = P("part.cutoff"), &pq = P("part.resonance");
+	int vc = 64, vq = 64;
+	const bool known = m.get(pc, part, vc) && m.get(pq, part, vq);
+
+	ImGui::PushID("filter");
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##filter", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
+	const ImGuiID id = ImGui::GetItemID();
+	const bool hovered = ImGui::IsItemHovered();
+	const bool active = ImGui::IsItemActive();
+
+	const float pad = fs * 0.25f;
+	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
+	const float top = pos.y + pad, bottom = pos.y + h - pad;
+	const float DB_TOP = 26.0f, DB_BOTTOM = -30.0f;
+	auto y_of = [&](float db) { return top + (bottom - top) * (DB_TOP - std::clamp(db, DB_BOTTOM, DB_TOP)) / (DB_TOP - DB_BOTTOM); };
+	auto db_of_value = [](int v) { return 6.0206f * float(v - 64) / 16.0f; };
+	const float y0db = y_of(0.0f);
+	const float xc = x0 + (x1 - x0) * float(vc) / 127.0f;
+	const float yq = y_of(db_of_value(vq));
+
+	// つかんだときの、点とマウスのずれを覚えておき、点が指に飛ばないようにする
+	float &gx = *ImGui::GetStateStorage()->GetFloatRef(id, 0.0f);
+	float &gy = *ImGui::GetStateStorage()->GetFloatRef(id + 1, 0.0f);
+	if (ImGui::IsItemActivated() && known) {
+		gx = xc - io.MousePos.x;
+		gy = yq - io.MousePos.y;
+	}
+	if (active && known && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+		const float fx = io.MousePos.x + gx, fy = io.MousePos.y + gy;
+		const int nc = std::clamp(int(std::lround((fx - x0) / (x1 - x0) * 127.0f)), pc.min, pc.max);
+		const float db = DB_TOP - (fy - top) / (bottom - top) * (DB_TOP - DB_BOTTOM);
+		const int nq = std::clamp(int(std::lround(64 + db * 16.0f / 6.0206f)), pq.min, pq.max);
+		if (nc != vc)
+			br.send(m.set(pc, part, nc));
+		if (nq != vq)
+			br.send(m.set(pq, part, nq));
+	}
+
+	// 描く
+	dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), col(hovered || active ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), 3.0f);
+	if (known) {
+		// 目安の線。0 dB と、音色のままのカットオフ
+		const ImU32 guide = col(ImGuiCol_TextDisabled, 0.35f);
+		dl->AddLine(ImVec2(x0, y0db), ImVec2(x1, y0db), guide);
+		const float xmid = x0 + (x1 - x0) * 64.0f / 127.0f;
+		dl->AddLine(ImVec2(xmid, top), ImVec2(xmid, bottom), guide);
+
+		const float q = std::pow(2.0f, float(vq - 64) / 16.0f);
+		const int n = std::max(8, int(x1 - x0) / 2);
+		std::vector<ImVec2> pts;
+		pts.reserve(n + 1);
+		for (int i = 0; i <= n; i++) {
+			const float x = x0 + (x1 - x0) * float(i) / float(n);
+			const float r = std::pow(2.0f, (x - xc) / (x1 - x0) * 8.0f);          // 周波数 / カットオフ
+			const float r2 = r * r;
+			const float mag = 1.0f / std::sqrt((1 - r2) * (1 - r2) + r2 / (q * q));
+			pts.push_back(ImVec2(x, y_of(20.0f * std::log10(std::max(mag, 1e-4f)))));
+		}
+		const ImU32 line = col(ImGuiCol_SliderGrabActive);
+		dl->PathClear();
+		dl->PathLineTo(ImVec2(x0, bottom));
+		for (const ImVec2 &p : pts) dl->PathLineTo(p);
+		dl->PathLineTo(ImVec2(x1, bottom));
+		dl->PathFillConcave(col(ImGuiCol_SliderGrab, 0.25f));
+		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+		dl->AddPolyline(pts.data(), int(pts.size()), line, 0, std::max(1.5f, fs * 0.1f));
+		dl->PopClipRect();
+		const float r = std::max(2.5f, fs * 0.22f);
+		dl->AddCircleFilled(ImVec2(xc, yq), active ? r * 1.4f : r, active ? col(ImGuiCol_Text) : line);
+	} else {
+		const ImVec2 ts = ImGui::CalcTextSize("--");
+		dl->AddText(ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(ImGuiCol_TextDisabled), "--");
+	}
+
+	if ((hovered || active) && known)
+		ImGui::SetItemTooltip("Cutoff %s   Resonance %s\n点をつまんで、横でカットオフ（右へ明るく）、縦でレゾナンス（上へ強く）",
+		                      xg::format(pc, vc).c_str(), xg::format(pq, vq).c_str());
 	ImGui::PopID();
 }
 
@@ -954,7 +1046,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 		ImGui::TableSetupColumn("INS", ImGuiTableColumnFlags_WidthFixed, fs * 8.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
-			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed, c.from == src::eg ? fs * 8.0f : fs * 3.4f);
+			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed, c.from == src::eg || c.from == src::filter ? fs * 8.0f : fs * 3.4f);
 		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
 		headers_with_help(NCOLS + 4);
 

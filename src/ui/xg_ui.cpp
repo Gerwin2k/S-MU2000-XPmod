@@ -344,16 +344,15 @@ const help_text HELP[] = {
 	{ "HOLD", {
 		"ダンパーペダル（CC64）。ON の間は、鍵盤を離しても音が伸びる。表示だけ",
 		"Damper pedal (CC64). While ON, notes keep sounding after the keys are released. Display only." } },
-	{ "CUT", {
-		"フィルタのカットオフ（CC74 / Brightness）。音の明るさ。\n"
-		"＋で明るく（高い音が出る）、−でこもった音になる",
-		"Filter cutoff (CC74, brightness).\n"
-		"+ makes the sound brighter, - makes it duller." } },
-	{ "RESO", {
-		"フィルタのレゾナンス（CC71 / Harmonic Content）。カットオフのあたりを強調して、\n"
-		"クセのある音にする",
-		"Filter resonance (CC71, harmonic content).\n"
-		"Emphasises the area around the cutoff for a more peaky sound." } },
+	{ "FILTER", {
+		"フィルタ。左が低い音、右が高い音で、どこまで通すかの形。\n"
+		"点を横に動かすとカットオフ（CC74 / Brightness）。右へ明るく、左へこもった音になる。\n"
+		"縦に動かすとレゾナンス（CC71 / Harmonic Content）。上へ、カットオフのあたりが強調されてクセのある音になる。\n"
+		"どちらも音色の元の値に対する増減。形は目安で、実際の周波数ではない",
+		"Filter. Shows how much of the sound passes, from low (left) to high (right).\n"
+		"Drag the point sideways for cutoff (CC74, brightness): right is brighter, left is duller.\n"
+		"Drag it up and down for resonance (CC71, harmonic content): up emphasises the area around the cutoff.\n"
+		"Both are relative to the voice's own settings. The curve is a guide, not the real frequency response." } },
 	{ "EG", {
 		"音量の変わり方（エンベロープ）。左から、鍵盤を押して立ち上がる（アタック）、\n"
 		"伸ばしている音量へ落ち着く（ディケイ）、伸ばしている間、離して消える（リリース）。\n"
