@@ -95,8 +95,20 @@ public:
 	// これを待たずに流すと、曲頭のリセットや音色指定が全部捨てられる
 	bool midi_ready(int port = 0) const { return m_cpu->sci(port)->rx_enabled(); }
 
-	// 1 バイト送る。実機と同じく 31250bps の直列で流れる
-	void midi_in(u8 byte, int port = 0) { m_midi[port].queue.push_back(byte); }
+	// 1 バイト送る。実機と同じく 31250bps の直列で流れる。
+	// 線は 1 秒に 3125 バイトしか流れないので、それより速く積まれると溜まる一方になる。
+	// 仮想の口で MIDI の輪ができると際限なく積まれる（実際に起きた）ので、
+	// 溜まっている量が上限（線の 20 秒ぶん）を超えたら捨てる。実機の受信溢れと同じ
+	static constexpr size_t MIDI_QUEUE_LIMIT = 65536;
+	void midi_in(u8 byte, int port = 0)
+	{
+		if (m_midi[port].queue.size() < MIDI_QUEUE_LIMIT)
+			m_midi[port].queue.push_back(byte);
+		else
+			m_midi_dropped.fetch_add(1, std::memory_order_relaxed);
+	}
+	// 溢れて捨てたバイト数（どの糸から読んでもよい）
+	u64 midi_dropped() const { return m_midi_dropped.load(std::memory_order_relaxed); }
 	bool midi_idle(int port) const
 	{
 		return m_midi[port].bit < 0 && m_midi[port].queue.empty();
@@ -269,6 +281,7 @@ private:
 	};
 	void midi_step(u64 now);
 	std::array<midi_line, MIDI_PORTS> m_midi;
+	std::atomic<u64> m_midi_dropped{0};
 
 	// MIDI OUT の線から枠を組み立てる。SCI は 1 ビットにつき 1 回だけ線の値を
 	// 知らせてくるので、時刻を見なくても「0 で開始、8 ビット、1 で終わり」で読める

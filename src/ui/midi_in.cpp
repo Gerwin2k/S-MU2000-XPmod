@@ -1,7 +1,10 @@
 // license:BSD-3-Clause
 
 #include "midi_in.h"
+#include "mm_open.h"
 #include "text.h"
+
+#include <cstdio>
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -70,9 +73,22 @@ bool midi_in::open(int device, std::string &err)
 		return false;
 	}
 
+	// 口の持ち主が固まっていると返ってこないので、時間を区切る（mm_open.h）。
+	// 開いただけでは MIM_DATA は来ない（midiInStart の前）ので、遅れて開けた口を
+	// 別の糸が閉じても、コールバックが this に触ることは無い
 	HMIDIIN h = nullptr;
-	if (midiInOpen(&h, UINT(device), DWORD_PTR(cb), DWORD_PTR(this),
-	               CALLBACK_FUNCTION) != MMSYSERR_NOERROR) {
+	const int r = open_with_timeout<HMIDIIN>(
+		[device, this](HMIDIIN &out) {
+			return unsigned(midiInOpen(&out, UINT(device), DWORD_PTR(cb), DWORD_PTR(this),
+			                           CALLBACK_FUNCTION));
+		},
+		[](HMIDIIN late) { midiInClose(late); }, h);
+	if (r == 2) {
+		err = "MIDI 入力が応答しない（loopMIDI やドライバが固まっているかもしれない。"
+		      "loopMIDI を起動し直すか、機器を挿し直す）";
+		return false;
+	}
+	if (r != 0) {
 		err = "MIDI 入力を開けない";
 		return false;
 	}
@@ -120,19 +136,35 @@ void midi_in::close()
 	// 先に印を立てる。midiInReset は入れ物を全部コールバックへ戻すので、
 	// そこで返し直すと閉じられなくなる
 	m_closing.store(true, std::memory_order_release);
-	midiInStop(h);
-	midiInReset(h);
+
+	// 閉じる呼び出しも、相手が固まっていると戻らない。別の糸でやらせる。
+	// 入れ物はその糸に渡し、最後まで走ったところで捨てる（mm_open.h）
+	void *hdrs[SYSEX_BUFFERS];
+	u8   *bufs[SYSEX_BUFFERS];
 	for (int i = 0; i < SYSEX_BUFFERS; i++) {
-		if (m_hdr[i]) {
-			MIDIHDR *hdr = reinterpret_cast<MIDIHDR *>(m_hdr[i]);
-			midiInUnprepareHeader(h, hdr, sizeof(MIDIHDR));
-			delete hdr;
-			m_hdr[i] = nullptr;
-		}
-		delete[] m_sysex[i];
+		hdrs[i] = m_hdr[i];
+		bufs[i] = m_sysex[i];
+		m_hdr[i] = nullptr;
 		m_sysex[i] = nullptr;
 	}
-	midiInClose(h);
+	std::vector<void *> hv(hdrs, hdrs + SYSEX_BUFFERS);
+	std::vector<u8 *>   bv(bufs, bufs + SYSEX_BUFFERS);
+	const bool in_time = run_with_timeout([h, hv, bv] {
+		midiInStop(h);
+		midiInReset(h);
+		for (size_t i = 0; i < hv.size(); i++) {
+			if (hv[i]) {
+				MIDIHDR *hdr = reinterpret_cast<MIDIHDR *>(hv[i]);
+				midiInUnprepareHeader(h, hdr, sizeof(MIDIHDR));
+				delete hdr;
+			}
+			delete[] bv[i];
+		}
+		midiInClose(h);
+	});
+	if (!in_time)
+		std::fprintf(stderr, "MIDI 入力「%s」が閉じる呼び出しに応答しない。置いていく\n",
+		             m_name.c_str());
 	m_handle = nullptr;
 	m_name.clear();
 }

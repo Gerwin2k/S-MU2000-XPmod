@@ -27,6 +27,7 @@
 #include "ui/bridge.h"
 #include "ui/driver.h"
 #include "ui/midi_in.h"
+#include "ui/midi_guard.h"
 #include "ui/midi_out.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
@@ -62,6 +63,8 @@ struct engine {
 	ui::midi_out *mout_mu = nullptr;
 
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
+	// THRU A / B の流量の上限。MIDI の輪で溢れたものを実機へ流さない（midi_guard.h）
+	ui::thru_guard guard_a, guard_b;
 	// fill() が機械に触っている最中か。起動し直すときはこれが落ちるのを待つ
 	std::atomic<bool> in_fill{false};
 	bool use_nvram = false;           // 覚えている設定で起動するか（窓を出すときだけ）
@@ -152,15 +155,18 @@ struct engine {
 			return;
 		}
 
+		guard_a.refill(n, RATE);
+		guard_b.refill(n, RATE);
+
 		drv.apply_buttons(mu, br);
 		// 画面から出したものも、外の MIDI 出力へ流す（実機の THRU）
-		drv.pump_midi(mu, br, [this](u8 v) { if (mout) mout->send(v); });
+		drv.pump_midi(mu, br, [this](u8 v) { if (mout && guard_a.pass(v)) mout->send(v); });
 		drv.pump_wheel(mu, br);
 
 		u8 b;
 		while (midi.pop(b)) {
 			mu.midi_in(b, 0);
-			if (mout) mout->send(b);
+			if (mout && guard_a.pass(b)) mout->send(b);
 		}
 		// B は実機の 2 つめの DIN（内蔵 SCI ch1）。パート 17-32 に届く。
 		// THRU も口ごとに分ける。A で受けたものは MIDI OUT A、
@@ -169,7 +175,7 @@ struct engine {
 		if (midi_b)
 			while (midi_b->pop(b)) {
 				mu.midi_in(b, 1);
-				if (mout_b) mout_b->send(b);
+				if (mout_b && guard_b.pass(b)) mout_b->send(b);
 			}
 
 		const float g = br.gain();
@@ -216,6 +222,12 @@ struct window_state {
 	int  out_dev_b = -1;
 	int  out_dev_mu = -1;
 	std::string in_name, in_name_b, out_name, out_name_b, out_name_mu;
+	// 起動したときに開けなかった口の名前。**選び直すまで gui.ini に残す**。
+	// 残さないと、loopMIDI を起動し忘れた・機器を挿していなかっただけで、
+	// 選んでおいた口を忘れてしまう
+	std::string in_keep, in_keep_b, out_keep, out_keep_b, out_keep_mu;
+	std::string last_error;            // 品書きから選んで開けなかったときの理由
+	u64 reported_drops = 0;            // 画面の糸が最後に知らせた、捨てた MIDI の量
 
 
 	// 二重書き用
@@ -299,11 +311,14 @@ void save_settings()
 	FILE *f = std::fopen(path.c_str(), "wb");
 	if (!f)
 		return;
-	std::fprintf(f, "midi_in=%s\n",   g_win.in_name.c_str());
-	std::fprintf(f, "midi_in_b=%s\n", g_win.in_name_b.c_str());
-	std::fprintf(f, "midi_out=%s\n",   g_win.out_name.c_str());
-	std::fprintf(f, "midi_out_b=%s\n", g_win.out_name_b.c_str());
-	std::fprintf(f, "midi_out_mu=%s\n", g_win.out_name_mu.c_str());
+	auto pick = [](const std::string &now, const std::string &keep) {
+		return (now.empty() ? keep : now).c_str();
+	};
+	std::fprintf(f, "midi_in=%s\n",    pick(g_win.in_name,     g_win.in_keep));
+	std::fprintf(f, "midi_in_b=%s\n",  pick(g_win.in_name_b,   g_win.in_keep_b));
+	std::fprintf(f, "midi_out=%s\n",   pick(g_win.out_name,    g_win.out_keep));
+	std::fprintf(f, "midi_out_b=%s\n", pick(g_win.out_name_b,  g_win.out_keep_b));
+	std::fprintf(f, "midi_out_mu=%s\n", pick(g_win.out_name_mu, g_win.out_keep_mu));
 	std::fprintf(f, "audio_out=%s\n", g_win.audio_name.c_str());
 	// パネルの VOLUME のつまみ。実機でも DAC の後ろのアナログのつまみで、
 	// firmware の RAM には入らないので、こちらで覚える
@@ -447,12 +462,17 @@ void choose_factory_reset(HWND hwnd)
 }
 
 // 品書きで選ばれたものを開く。開けなかったら「使わない」に戻す
-void choose_in(int dev)
+// keep が true なのは起動したとき。開けなくても、覚えていた名前を残す
+bool choose_in(int dev, bool keep = false)
 {
 	if (!g_win.midi)
-		return;
+		return false;
+	if (!keep)
+		g_win.in_keep.clear();
 	std::string err;
+	g_win.last_error.clear();
 	if (!g_win.midi->open(dev, err)) {
+		g_win.last_error = err;
 		std::fprintf(stderr, "MIDI 入力: %s\n", err.c_str());
 		g_win.midi->open(-1, err);
 		dev = -1;
@@ -460,14 +480,20 @@ void choose_in(int dev)
 	g_win.in_dev  = g_win.midi->is_open() ? dev : -1;
 	g_win.in_name = g_win.midi->device_name();
 	save_settings();
+	return g_win.last_error.empty();
 }
 
-void choose_in_b(int dev)
+// keep が true なのは起動したとき。開けなくても、覚えていた名前を残す
+bool choose_in_b(int dev, bool keep = false)
 {
 	if (!g_win.midi_b)
-		return;
+		return false;
+	if (!keep)
+		g_win.in_keep_b.clear();
 	std::string err;
+	g_win.last_error.clear();
 	if (!g_win.midi_b->open(dev, err)) {
+		g_win.last_error = err;
 		std::fprintf(stderr, "MIDI 入力 B: %s\n", err.c_str());
 		g_win.midi_b->open(-1, err);
 		dev = -1;
@@ -475,14 +501,20 @@ void choose_in_b(int dev)
 	g_win.in_dev_b  = g_win.midi_b->is_open() ? dev : -1;
 	g_win.in_name_b = g_win.midi_b->device_name();
 	save_settings();
+	return g_win.last_error.empty();
 }
 
-void choose_out(int dev)
+// keep が true なのは起動したとき。開けなくても、覚えていた名前を残す
+bool choose_out(int dev, bool keep = false)
 {
 	if (!g_win.mout)
-		return;
+		return false;
+	if (!keep)
+		g_win.out_keep.clear();
 	std::string err;
+	g_win.last_error.clear();
 	if (!g_win.mout->open(dev, err)) {
+		g_win.last_error = err;
 		std::fprintf(stderr, "MIDI 出力: %s\n", err.c_str());
 		g_win.mout->open(-1, err);
 		dev = -1;
@@ -490,14 +522,20 @@ void choose_out(int dev)
 	g_win.out_dev  = g_win.mout->is_open() ? dev : -1;
 	g_win.out_name = g_win.mout->device_name();
 	save_settings();
+	return g_win.last_error.empty();
 }
 
-void choose_out_mu(int dev)
+// keep が true なのは起動したとき。開けなくても、覚えていた名前を残す
+bool choose_out_mu(int dev, bool keep = false)
 {
 	if (!g_win.mout_mu)
-		return;
+		return false;
+	if (!keep)
+		g_win.out_keep_mu.clear();
 	std::string err;
+	g_win.last_error.clear();
 	if (!g_win.mout_mu->open(dev, err)) {
+		g_win.last_error = err;
 		std::fprintf(stderr, "MIDI 出力（本体の OUT）: %s\n", err.c_str());
 		g_win.mout_mu->open(-1, err);
 		dev = -1;
@@ -505,14 +543,20 @@ void choose_out_mu(int dev)
 	g_win.out_dev_mu  = g_win.mout_mu->is_open() ? dev : -1;
 	g_win.out_name_mu = g_win.mout_mu->device_name();
 	save_settings();
+	return g_win.last_error.empty();
 }
 
-void choose_out_b(int dev)
+// keep が true なのは起動したとき。開けなくても、覚えていた名前を残す
+bool choose_out_b(int dev, bool keep = false)
 {
 	if (!g_win.mout_b)
-		return;
+		return false;
+	if (!keep)
+		g_win.out_keep_b.clear();
 	std::string err;
+	g_win.last_error.clear();
 	if (!g_win.mout_b->open(dev, err)) {
+		g_win.last_error = err;
 		std::fprintf(stderr, "MIDI 出力 B: %s\n", err.c_str());
 		g_win.mout_b->open(-1, err);
 		dev = -1;
@@ -520,6 +564,7 @@ void choose_out_b(int dev)
 	g_win.out_dev_b  = g_win.mout_b->is_open() ? dev : -1;
 	g_win.out_name_b = g_win.mout_b->device_name();
 	save_settings();
+	return g_win.last_error.empty();
 }
 
 void ensure_backing(HDC dc, int w, int h)
@@ -570,9 +615,26 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		SetTimer(hwnd, 1, 33, nullptr);        // 30 コマ／秒で描き直す
 		return 0;
 
-	case WM_TIMER:
+	case WM_TIMER: {
 		InvalidateRect(hwnd, nullptr, FALSE);
+		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
+		static DWORD last = 0;
+		if (g_win.eng && GetTickCount() - last > 1000) {
+			last = GetTickCount();
+			const u64 drops = g_win.eng->guard_a.dropped() + g_win.eng->guard_b.dropped() +
+			                  g_win.eng->mu.midi_dropped();
+			if (drops != g_win.reported_drops) {
+				std::fprintf(stderr,
+				             "MIDI が多すぎるので捨てた: THRU A %llu / THRU B %llu / 受信 %llu バイト"
+				             "（MIDI の輪ができていないか確かめる）\n",
+				             (unsigned long long)g_win.eng->guard_a.dropped(),
+				             (unsigned long long)g_win.eng->guard_b.dropped(),
+				             (unsigned long long)g_win.eng->mu.midi_dropped());
+				g_win.reported_drops = drops;
+			}
+		}
 		return 0;
+	}
 
 	case WM_SIZE:
 		g_win.panel.resize(LOWORD(lp), HIWORD(lp));
@@ -648,6 +710,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 	case WM_COMMAND: {
 		const UINT id = LOWORD(wp);
+		g_win.last_error.clear();
 		if (id == ID_IN_NONE)            choose_in(-1);
 		else if (id >= ID_IN_BASE  && id < ID_IN_BASE + 256)  choose_in(int(id - ID_IN_BASE));
 		else if (id == ID_INB_NONE)      choose_in_b(-1);
@@ -661,6 +724,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		else if (id == ID_FACTORY) choose_factory_reset(hwnd);
+		if (!g_win.last_error.empty()) {
+			const std::wstring w = ui::to_wide(g_win.last_error);
+			MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+			g_win.last_error.clear();
+		}
 		InvalidateRect(hwnd, nullptr, FALSE);
 		return 0;
 	}
@@ -1014,16 +1082,32 @@ int main(int argc, char **argv)
 		if (moutmu_dev == -2)
 			moutmu_dev = find_device(ui::midi_out::list(), want_out_mu);
 
-		choose_in(midi_dev);
-		choose_in_b(midib_dev);
-		choose_out(mout_dev);
-		choose_out_b(moutb_dev);
-		choose_out_mu(moutmu_dev);
-		std::printf("MIDI IN A: %s\n",  g_win.in_name.empty()  ? "なし" : g_win.in_name.c_str());
-		std::printf("MIDI IN B: %s\n",  g_win.in_name_b.empty() ? "なし" : g_win.in_name_b.c_str());
-		std::printf("MIDI OUT: %s\n",    g_win.out_name_mu.empty() ? "なし" : g_win.out_name_mu.c_str());
-		std::printf("MIDI THRU A: %s\n", g_win.out_name.empty()    ? "なし" : g_win.out_name.c_str());
-		std::printf("MIDI THRU B: %s\n", g_win.out_name_b.empty()  ? "なし" : g_win.out_name_b.c_str());
+		g_win.in_keep     = want_in;
+		g_win.in_keep_b   = want_in_b;
+		g_win.out_keep    = want_out;
+		g_win.out_keep_b  = want_out_b;
+		g_win.out_keep_mu = want_out_mu;
+		choose_in(midi_dev, true);
+		choose_in_b(midib_dev, true);
+		choose_out(mout_dev, true);
+		choose_out_b(moutb_dev, true);
+		choose_out_mu(moutmu_dev, true);
+		// 開けなかった口は、覚えていた名前も出す（選び直すまで覚えている）
+		auto show = [](const char *label, const std::string &now, const std::string &keep) {
+			if (!now.empty())
+				std::printf("%s: %s\n", label, now.c_str());
+			else if (!keep.empty())
+				std::printf("%s: なし（「%s」が見つからないか開けない。覚えたままにしてある）\n",
+				            label, keep.c_str());
+			else
+				std::printf("%s: なし\n", label);
+		};
+		show("MIDI IN A",   g_win.in_name,     g_win.in_keep);
+		show("MIDI IN B",   g_win.in_name_b,   g_win.in_keep_b);
+		show("MIDI OUT",    g_win.out_name_mu, g_win.out_keep_mu);
+		show("MIDI THRU A", g_win.out_name,    g_win.out_keep);
+		show("MIDI THRU B", g_win.out_name_b,  g_win.out_keep_b);
+		std::fflush(stdout);
 
 		std::string err;
 
