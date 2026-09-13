@@ -26,16 +26,23 @@ public:
 
 private:
 	void request(xg::model &m, u64 now);
-	void part_list(xg::model &m);
+	void part_list(xg::model &m, bridge &br);
+	void program_menu(int part, xg::model &m, bridge &br);
 	void mixer(xg::model &m, bridge &br);
 	void part_page(xg::model &m, bridge &br);
-	// 1 つの値を触る部品。戻り値は「書いたか」
-	bool edit(const xg::param &p, int part, xg::model &m, bridge &br, float width);
+
+	// 1 つの値を触る部品。数を並べる形（普段）と、つまみの形（開いたとき）がある。
+	// 選ぶ種類の値（MONO/POLY など）は品書きになる。width は数の形の幅
+	void value(const xg::param &p, int part, xg::model &m, bridge &br, float width);
+	bool knob(const xg::param &p, int part, int &v, bool known, float width);
+	void write(const xg::param &p, int part, int v, xg::model &m, bridge &br);
 
 	int  m_part = 0;
-	int  m_tab = 0;             // 0 ミキサー、1 パート
+	bool m_knobs = false;       // つまみで出すか。普段は数だけ
 	u64  m_part_at = 0;         // 次に選んでいるパートを読み返す時刻（音源の時計）
 	u64  m_all_at = 0;          // 次に 32 パート全部を読み返す時刻
+	double m_scrolled_at = -1;  // 最後にホイールで表をスクロールした時刻（ImGui の時計）
+	bool m_wheel_taken = false; // このコマでつまみがホイールを取ったか
 };
 
 } // namespace ui
