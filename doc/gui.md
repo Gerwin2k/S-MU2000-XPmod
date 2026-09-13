@@ -7,7 +7,7 @@
 make            gui.exe も一緒に作る
 build/gui.exe <rom ディレクトリ> [--midi 番号] [--midi-b 番号]
               [--midiout 番号] [--midiout-b 番号]
-              [--latency ミリ秒] [--size 1400x360]
+              [--latency ミリ秒] [--size 1000x400]
 build/gui.exe --list                      MIDI の入口と出口の一覧
 build/gui.exe <rom> --boot --shot 絵.png   窓を出さずに絵だけ書き出す
 build/gui.exe --shot 絵.png --grid        ROM 無しで絵だけ。方眼を重ねる
@@ -306,5 +306,5 @@ ui::driver    音声スレッド側。ボタンを音源へ、MIDI を音源へ�
 `--shot` で PNG に書き出せる。窓を開けない場所（自動での確認、不具合の報告）で使う。
 
 ```
-build/gui.exe roms --boot --shot panel.png --size 1400x360
+build/gui.exe roms --boot --shot panel.png --size 1000x400
 ```

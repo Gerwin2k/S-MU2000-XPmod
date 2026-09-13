@@ -883,7 +883,7 @@ int main(int argc, char **argv)
 	const char *audio_dev = nullptr;
 	bool factory = false;
 	bool open_editor = false;          // 起動したら PC エディタも出す
-	int win_w = 1400, win_h = 360;
+	int win_w = 1000, win_h = 400;   // パネルの論理寸法（1000 × 400）と同じ比
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
 	bool boot_for_shot = false;
@@ -933,7 +933,7 @@ int main(int argc, char **argv)
 			boot_for_shot = true;
 		}
 		else if (!std::strcmp(argv[i], "--size") && i + 1 < argc) {
-			if (std::sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) { win_w = 1400; win_h = 360; }
+			if (std::sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) { win_w = 1000; win_h = 400; }
 		}
 		else if (dir.empty()) dir = argv[i];
 	}
@@ -977,7 +977,7 @@ int main(int argc, char **argv)
 			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
-			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
+			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1000x400]\n");
 		return 1;
 	}
 
