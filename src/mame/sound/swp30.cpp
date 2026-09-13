@@ -7,6 +7,7 @@
 #include "swp30.h"
 
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 
 /*
@@ -3460,8 +3461,15 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 	}
 
 	sample_step();
-	for(int i = 0; i != 384; i++)
-		m_meg->step();
+	if(m_profile) {
+		// S-MU2000: MEG だけの時間を測る（blocktime が使う）
+		const auto t0 = std::chrono::steady_clock::now();
+		for(int i = 0; i != 384; i++)
+			m_meg->step();
+		m_t_meg += u64(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+	} else
+		for(int i = 0; i != 384; i++)
+			m_meg->step();
 
 	// sound_stream_update() がやっていたことをここで行う。
 	// DAC は出力 0-3 の先頭 2 本。scale は 1<<17。

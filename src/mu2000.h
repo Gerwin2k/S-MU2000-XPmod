@@ -223,7 +223,13 @@ public:
 	// **set_profile(true) のときだけ測る**（1 サンプルにつき 3 回読むので、
 	// 常に測ると 0.3% ほど食う）
 	u64 m_t_cpu = 0, m_t_swpm = 0, m_t_swps = 0, m_t_n = 0;
-	void set_profile(bool on) { m_profile = on; }
+	// SWP30 の中の MEG の時間は m_swpm / m_swps の m_t_meg（ns）に入る
+	void set_profile(bool on) { m_profile = on; m_swpm.m_profile = on; m_swps.m_profile = on; }
+	void clear_profile()
+	{
+		m_t_cpu = m_t_swpm = m_t_swps = m_t_n = m_loops = 0;
+		m_swpm.m_t_meg = m_swps.m_t_meg = 0;
+	}
 private:
 
 	// MIDI IN A / B。バイトを 31250bps の直列に崩して RX 線に流す。

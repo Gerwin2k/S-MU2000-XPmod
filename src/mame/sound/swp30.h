@@ -75,6 +75,7 @@ public:
 	// S-MU2000: 音が出ないときの手掛かり
 	s32 m_dbg_adc_max = 0, m_dbg_meg_max = 0, m_dbg_awm_max = 0;
 	u64 m_t_sample = 0, m_t_meg = 0;   // 区間ごとの所要時間
+	bool m_profile = false;            // true のときだけ m_t_meg を測る
 
 	// 発音ごとに、その声が実際にどれだけ音を出したか。
 	// 「発音指示は出ているのに鳴っていない」を数えるため
