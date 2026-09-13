@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <mutex>
 
 namespace ui {
 
@@ -40,17 +41,29 @@ public:
 	// ダイヤルを回した分。音源側が 1 つずつ VALUE を叩いて消化する
 	void turn(int steps) { m_wheel.fetch_add(steps, std::memory_order_relaxed); }
 
-	// 画面から音源へ MIDI を送る（エディタのつまみ）。輪に積むだけ
-	void send(const u8 *bytes, size_t n)
+	// 画面から音源へ MIDI を送る（エディタのつまみ、MIDI ファイルの再生）。輪に積むだけ。
+	//
+	// **1 回に 1 通以上の完成したメッセージを渡すこと。** 書き終えてから 1 回で
+	// 書き込み位置を進めるので、音源側からは途中までのメッセージが見えない。
+	// 前は 1 バイトずつ進めていたので、音声の糸がブロックの境目で前半だけ読み、
+	// 次のブロックで別の口のメッセージがその途中に挟まることがあった。
+	//
+	// 書き手は 2 本ある（画面の糸と、MIDI ファイルを流す糸）。輪は書き手 1 本が
+	// 前提なので、**書き手どうしは錠で順番にする**。どちらも音声の糸ではないので
+	// 待ってよい。読み手（音声の糸）は錠に触らない。
+	// 入りきらなければ丸ごと捨てて false
+	bool send(const u8 *bytes, size_t n)
 	{
-		for (size_t i = 0; i < n; i++) {
-			const size_t w = m_mw.load(std::memory_order_relaxed);
-			const size_t next = (w + 1) & MIDI_MASK;
-			if (next == m_mr.load(std::memory_order_acquire))
-				return;                       // 溢れ
-			m_midi[w] = bytes[i];
-			m_mw.store(next, std::memory_order_release);
-		}
+		std::lock_guard<std::mutex> lock(m_send_lock);
+		const size_t w = m_mw.load(std::memory_order_relaxed);
+		const size_t r = m_mr.load(std::memory_order_acquire);
+		const size_t room = (r - w - 1) & MIDI_MASK;
+		if (n > room)
+			return false;
+		for (size_t i = 0; i < n; i++)
+			m_midi[(w + i) & MIDI_MASK] = bytes[i];
+		m_mw.store((w + n) & MIDI_MASK, std::memory_order_release);
+		return true;
 	}
 
 	void set_gain(float g) { m_gain.store(g, std::memory_order_relaxed); }
@@ -104,6 +117,7 @@ private:
 	static constexpr size_t MIDI_SIZE = 4096, MIDI_MASK = MIDI_SIZE - 1;
 	u8 m_midi[MIDI_SIZE] = {};
 	std::atomic<size_t>   m_mr{0}, m_mw{0};
+	std::mutex            m_send_lock;    // 書き手どうしだけが使う
 	std::atomic<u64>      m_buttons{0};
 	std::atomic<int>      m_wheel{0};
 	std::atomic<float>    m_gain{1.0f};
