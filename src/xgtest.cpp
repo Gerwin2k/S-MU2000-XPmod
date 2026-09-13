@@ -172,7 +172,8 @@ int main(int argc, char **argv)
 				}
 			}
 			for (const xg::param &p : xg::params()) {
-				if (p.where != xg::area::part)
+				// パートの一括ダンプは 00-28 の 41 バイトだけ。EQ（72-77）は入らない
+				if (p.where != xg::area::part || p.lo >= xg::ram::PART_XG_SIZE)
 					continue;
 				int a = 0, b = 0;
 				const bool in_dump = dumped.get(p, part, a);

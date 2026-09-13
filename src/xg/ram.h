@@ -24,7 +24,7 @@ constexpr u32 SYSTEM   = 0x226c1;   // 00 00 00-06
 constexpr u32 VOICE_MODE = 0x226bc; // 音色の引き方（1 が XG）。xg/voices.h の lookup に渡す
 constexpr u32 VOICE_SET  = 0x226de; // 音色の組の選び方（MU2000 の音色なら 1）
 constexpr u32 EFFECT   = 0x0cad8;   // 02 01 00 から。下の EFFECTS の並び
-constexpr u32 EFFECT_SIZE = 0x156;  // 02 01 00 からインサーション 4 の終わりまで
+constexpr u32 EFFECT_SIZE = 0x16b;  // 02 01 00 からマスター EQ の終わりまで
 // パートの塊は PART_STRIDE ずつ並ぶが、**並びは XG のパート番号の順ではない**。
 // 口ごとに「10 番目のパート（ch10）が先頭、残りが 1-9, 11-16」の固定の順（ドラムかどうかに
 // よらない。パートを DRUM にしても並びは変わらなかった）
@@ -39,6 +39,10 @@ constexpr u32 part_base(int part)
 	return PARTS + u32(port * 16 + slot) * PART_STRIDE;
 }
 constexpr u32 PART_XG_SIZE = 0x29;  // 08 pp 00-28
+// パートの EQ（08 pp 72-77）は塊の +0x6A から。XG の番地から 8 引いた所
+constexpr u32 PART_EQ_XG   = 0x72;
+constexpr u32 PART_EQ_RAM  = 0x6a;
+constexpr u32 PART_EQ_SIZE = 6;
 
 // パートの塊の中の、XG に番地の無い演奏中の値
 constexpr u32 PART_MOD  = 0x7d;     // CC1
@@ -55,11 +59,24 @@ constexpr block EFFECTS[] = {
 	{ 0x02, 0x01, 0x00, 0x14, 0x0cad8 },   // リバーブ
 	{ 0x02, 0x01, 0x20, 0x14, 0x0caec },   // コーラス
 	{ 0x02, 0x01, 0x40, 0x1c, 0x0cb02 },   // バリエーション
-	{ 0x03, 0x00, 0x00, 0x2c, 0x0cb7e },   // インサーション 1
-	{ 0x03, 0x01, 0x00, 0x2c, 0x0cbaa },   // インサーション 2
-	{ 0x03, 0x02, 0x00, 0x2c, 0x0cbd6 },   // インサーション 3
-	{ 0x03, 0x03, 0x00, 0x2c, 0x0cc02 },   // インサーション 4
+	// インサーションは 03 0n 00-11 がそのまま並び、そのあとに 20-25（パラメータ 11-16）が
+	// 詰めて続く。1 つずつ書いて RAM の変わった所で確かめた。
+	// パラメータ 1-10 の 2 バイトの番地（30-43）は、+0x18 から 16bit の数で 10 個並ぶ
+	// （7bit ずつではないので、この表には入れない。INS_WIDE を見よ）
+	{ 0x03, 0x00, 0x00, 0x12, 0x0cb7e },   // インサーション 1
+	{ 0x03, 0x00, 0x20, 0x06, 0x0cb90 },
+	{ 0x03, 0x01, 0x00, 0x12, 0x0cbaa },   // インサーション 2
+	{ 0x03, 0x01, 0x20, 0x06, 0x0cbbc },
+	{ 0x03, 0x02, 0x00, 0x12, 0x0cbd6 },   // インサーション 3
+	{ 0x03, 0x02, 0x20, 0x06, 0x0cbe8 },
+	{ 0x03, 0x03, 0x00, 0x12, 0x0cc02 },   // インサーション 4
+	{ 0x03, 0x03, 0x20, 0x06, 0x0cc14 },
+	{ 0x02, 0x40, 0x00, 0x15, 0x0cc2e },   // マスター EQ（02 40 00-14）
 };
+
+// インサーション n（0-3）の塊の先頭と、そこからパラメータ 1-10 の 16bit の数（上位バイトが先）の位置
+constexpr u32 INS_BLOCK[4] = { 0x0cb7e, 0x0cbaa, 0x0cbd6, 0x0cc02 };
+constexpr u32 INS_WIDE = 0x18;
 
 // XG の番地から、ワーク RAM での位置。無ければ false
 inline bool locate(u32 addr, u32 &off)
@@ -71,6 +88,10 @@ inline bool locate(u32 addr, u32 &off)
 	}
 	if (hi == 0x08 && mid < 32 && lo < PART_XG_SIZE) {
 		off = part_base(mid) + lo;
+		return true;
+	}
+	if (hi == 0x08 && mid < 32 && lo >= PART_EQ_XG && lo < PART_EQ_XG + PART_EQ_SIZE) {
+		off = part_base(mid) + PART_EQ_RAM + (lo - PART_EQ_XG);
 		return true;
 	}
 	for (const block &b : EFFECTS) {

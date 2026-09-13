@@ -92,6 +92,11 @@ public:
 	// 写しにある値。まだ一度も読んでいなければ false（**決め打ちの初期値は返さない**）
 	bool get(const param &p, int part, int &value) const;
 
+	// 定義表に無い番地をそのまま読み書きする（エフェクトの種類ごとのパラメータ。xg/fx_params.h）。
+	// size バイトを 7bit ずつ（上の桁が先）。set_raw は set と同じく写しを書き換えて送るバイトを返す
+	bool get_raw(u32 addr, int size, int &value) const;
+	std::vector<u8> set_raw(u32 addr, int size, int value);
+
 	// 書く。写しをすぐ書き換え、送るバイト（パラメータチェンジ）を返す。
 	// 書いた番地は少しのあいだ、返事で上書きしない。つまみを回している最中に、
 	// 書く前に頼んだ読み返しが届いて古い値へ戻って見えるのを防ぐ

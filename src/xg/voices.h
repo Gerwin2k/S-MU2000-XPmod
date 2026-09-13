@@ -10,7 +10,8 @@
 //   * パートの塊の +0xF8 に、firmware が選んだ音色の記録を指す値がある（ROM の中）。
 //     記録は「要素の印 1 バイト・1 バイト・名前 10 文字」で始まる
 //   * ドラムキットはその値が 0。プログラム → キットの番号の表と、名前 8 文字＋4 バイトの並びを引く
-//   * 楽器の絵は 16×16 ドットを 16 ワードで持つ。通常の音色はプログラム番号 → 絵の番号の表で決まる
+//   * 楽器の絵は 16×16 ドットを 16 ワードで持つ。通常の音色はプログラム番号 → 絵の番号の表で決まる。
+//     ドラムキットは全キットで 1 つの絵（DRUM_ICON）
 
 #ifndef S_MU2000_XG_VOICES_H
 #define S_MU2000_XG_VOICES_H
@@ -114,11 +115,19 @@ public:
 		return s == "SilenKit" ? std::string() : s;
 	}
 
-	// 楽器の絵。16 行、各行 16 ビット（上の桁が左）。無ければ false（ドラムはまだ分からない）
+	// 楽器の絵。16 行、各行 16 ビット（上の桁が左）。無ければ false
 	bool icon(const u8 *part_ram, int msb, int prog, u16 rows[16]) const
 	{
-		if (!m_ok || msb == 127 || msb == 126)
+		if (!m_ok)
 			return false;
+		if (msb == 127 || msb == 126) {
+			// ドラムキットはどのキットも同じ絵。LCD は右端の 1 列を出さないので、そこは消す
+			if (word(DRUM_ICON) != 0x000e)
+				return false;                              // 版が違う
+			for (int y = 0; y < 16; y++)
+				rows[y] = word(DRUM_ICON + u32(y) * 2) & 0xfffe;
+			return true;
+		}
 		const u32 rec = record(part_ram);
 		if (!rec)
 			return false;
@@ -144,6 +153,9 @@ private:
 	static constexpr u32 SFX_NAMES       = 0x29bdec;
 	static constexpr u32 ICON_OF_PROGRAM = 0x1cd044;   // プログラム → 絵の番号
 	static constexpr u32 ICONS           = 0x1bbf70;   // 絵。16 ワードずつ
+	// ドラムキットの絵。プログラム → 絵の番号の表のすぐ後ろに、起動のときの動く絵のコマが並んでいて、
+	// その 2 コマ目。キットを選んだときに firmware が LCD の CGRAM に書いた絵と突き合わせて見つけた
+	static constexpr u32 DRUM_ICON       = 0x1cd0e4;
 
 	// バンク → 音色の組（firmware の 0x134AA8 が引く表）
 	static constexpr u32 GROUP_GM       = 0x283d50;   // GM モード: MSB → 組
