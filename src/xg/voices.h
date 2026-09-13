@@ -61,6 +61,59 @@ public:
 		return trim(std::string(reinterpret_cast<const char *>(at(rec + 2)), 10));
 	}
 
+	// バンクとプログラムから音色の記録を引く。firmware の 0x134AA8 と同じ手順。
+	// mode は RAM の 0x4226BC、set は 0x4226DE（xg::ram::VOICE_MODE / VOICE_SET）。
+	// 引けなければ 0（ドラム、MSB 16 の特別な組など）
+	u32 lookup(int mode, int set, int msb, int lsb, int prog) const
+	{
+		if (!m_ok)
+			return 0;
+		msb &= 0x7f; lsb &= 0x7f; prog &= 0x7f;
+		u32 group = 76;
+		if (mode == 0) {
+			const u8 g = byte(GROUP_GM + msb);
+			group = g == 0xff ? 76 : g;
+		} else if (mode == 1) {
+			if (msb == 16 && lsb < 2)
+				return 0;                        // firmware は別の関数へ行く。まだ真似していない
+			const u8 kind = byte(GROUP_XG + msb);
+			if (kind == 0)
+				group = byte((set == 0 ? GROUP_LSB0 : GROUP_LSB1) + lsb);
+			else if (kind == 77)
+				group = byte(GROUP_LSB77 + lsb);
+			else if (kind == 0xc9)
+				group = byte((set == 0 ? GROUP_LSBC9_0 : GROUP_LSBC9_1) + lsb);
+			else
+				group = kind;
+		}
+		const u32 slot = VOICE_TABLE + group * 512 + u32(prog) * 4;
+		if (slot + 4 > m_rom->size())
+			return 0;
+		const u32 off = u32(byte(slot)) << 24 | u32(byte(slot + 1)) << 16 | u32(byte(slot + 2)) << 8 | byte(slot + 3);
+		const u32 rec = VOICES + off * 2;
+		return rec >= VOICES && rec + 16 <= VOICES_END ? rec : 0;
+	}
+
+	// 記録の名前（lookup の戻り値から）
+	std::string record_name(u32 rec) const
+	{
+		if (!m_ok || rec < VOICES || rec + 12 > VOICES_END)
+			return {};
+		return trim(std::string(reinterpret_cast<const char *>(at(rec + 2)), 10));
+	}
+
+	// ドラムキットの名前。無いキット（SilenKit を指すもの）は空
+	std::string kit_name(int msb, int prog) const
+	{
+		if (!m_ok || (msb != 127 && msb != 126))
+			return {};
+		const u32 map = msb == 127 ? KIT_MAP : SFX_MAP;
+		const u32 names = msb == 127 ? KIT_NAMES : SFX_NAMES;
+		const u8 idx = byte(map + (prog & 0x7f));
+		const std::string s = trim(std::string(reinterpret_cast<const char *>(at(names + idx * 12)), 8));
+		return s == "SilenKit" ? std::string() : s;
+	}
+
 	// 楽器の絵。16 行、各行 16 ビット（上の桁が左）。無ければ false（ドラムはまだ分からない）
 	bool icon(const u8 *part_ram, int msb, int prog, u16 rows[16]) const
 	{
@@ -92,6 +145,17 @@ private:
 	static constexpr u32 ICON_OF_PROGRAM = 0x1cd044;   // プログラム → 絵の番号
 	static constexpr u32 ICONS           = 0x1bbf70;   // 絵。16 ワードずつ
 
+	// バンク → 音色の組（firmware の 0x134AA8 が引く表）
+	static constexpr u32 GROUP_GM       = 0x283d50;   // GM モード: MSB → 組
+	static constexpr u32 GROUP_XG       = 0x283950;   // XG モード: MSB → 組（0 / 77 / 0xC9 は LSB で引き直す）
+	static constexpr u32 GROUP_LSB0     = 0x2839d0;
+	static constexpr u32 GROUP_LSB1     = 0x283a50;
+	static constexpr u32 GROUP_LSB77    = 0x283ad0;
+	static constexpr u32 GROUP_LSBC9_0  = 0x292640;
+	static constexpr u32 GROUP_LSBC9_1  = 0x2926c0;
+	static constexpr u32 VOICE_TABLE    = 0x267f50;   // 組 × 128 プログラム。値の 2 倍が VOICES からの距離
+
+	u8 byte(u32 a) const { return (*m_rom)[a]; }
 	const u8 *at(u32 a) const { return m_rom->data() + a; }
 	u16 word(u32 a) const { return u16((*m_rom)[a] << 8 | (*m_rom)[a + 1]); }
 

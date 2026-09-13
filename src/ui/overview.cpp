@@ -201,6 +201,158 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 }
 
 
+
+namespace {
+
+// INS 列で扱うエフェクト。1-4 がインサーション、5 がバリエーション（接続が INSERTION のとき）
+struct fx_slot { int id; const char *mark; ImU32 color; const char *part_key; const char *type_key; const char *title; };
+
+const fx_slot FX_SLOTS[] = {
+	{ 1, "1", IM_COL32(214, 160, 48, 255),  "insertion1.part", "insertion1.type", "インサーション 1" },
+	{ 2, "2", IM_COL32(214, 160, 48, 255),  "insertion2.part", "insertion2.type", "インサーション 2" },
+	{ 3, "3", IM_COL32(214, 160, 48, 255),  "insertion3.part", "insertion3.type", "インサーション 3" },
+	{ 4, "4", IM_COL32(214, 160, 48, 255),  "insertion4.part", "insertion4.type", "インサーション 4" },
+	{ 5, "V", IM_COL32(150, 110, 220, 255), "variation.part",  "variation.type",  "バリエーション" },
+};
+
+constexpr const char *DRAG_FX = "S_MU2000_FX";
+
+// そのエフェクトが今どのパートに掛かっているか。掛かっていなければ -1
+int fx_target(const fx_slot &f, xg::model &m)
+{
+	int who = 127, conn = 1;
+	if (!m.get(P(f.part_key), 0, who) || who >= 32)
+		return -1;
+	if (f.id == 5 && (!m.get(P("variation.connect"), 0, conn) || conn != 0))
+		return -1;                               // SYSTEM のバリエーションはパートに掛からない
+	return who;
+}
+
+// エフェクトを別のパートへ（バリエーションは INSERTION にもする）
+void fx_move(const fx_slot &f, int part, xg::model &m, bridge &br)
+{
+	if (f.id == 5)
+		br.send(m.set(P("variation.connect"), 0, 0));
+	br.send(m.set(P(f.part_key), 0, part));
+}
+
+void fx_menu(int part, xg::model &m, bridge &br)
+{
+	ImGui::TextDisabled("パート %s に掛けるエフェクト", part_name(part).c_str());
+	ImGui::Separator();
+	for (const fx_slot &f : FX_SLOTS) {
+		int type = 0;
+		const bool has_type = m.get(P(f.type_key), 0, type);
+		const int where = fx_target(f, m);
+		char label[128];
+		if (f.id == 5 && where < 0)
+			std::snprintf(label, sizeof(label), "%s（いま SYSTEM・%s）", f.title, has_type ? xg::fx_name(type).c_str() : "--");
+		else
+			std::snprintf(label, sizeof(label), "%s（いま %s・%s）", f.title,
+			              where >= 0 ? part_name(where).c_str() : "OFF", has_type ? xg::fx_name(type).c_str() : "--");
+		if (!ImGui::BeginMenu(label))
+			continue;
+		if (where == part) {
+			if (ImGui::MenuItem(f.id == 5 ? "このパートから外して SYSTEM に戻す" : "このパートから外す")) {
+				if (f.id == 5) br.send(m.set(P("variation.connect"), 0, 1));
+				else           br.send(m.set(P(f.part_key), 0, 127));
+			}
+		} else if (ImGui::MenuItem(f.id == 5 ? "INSERTION にしてこのパートに掛ける" : "このパートに掛ける")) {
+			fx_move(f, part, m, br);
+		}
+		ImGui::Separator();
+		ImGui::TextDisabled("種類");
+		for (const xg::fx_type &t : xg::INS_TYPES) {
+			const int value = t.msb << 7 | t.lsb;
+			if (ImGui::MenuItem(t.name, nullptr, has_type && value == type))
+				br.send(m.set(P(f.type_key), 0, value));
+		}
+		ImGui::EndMenu();
+	}
+	ImGui::Separator();
+	ImGui::TextDisabled("印をドラッグして、別のパートの INS 欄に落とすと移る。\n種類が NO EFFECT のまま掛けると、そのパートの音が消える");
+}
+
+} // namespace
+
+
+void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
+{
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+
+	struct on_part { const fx_slot *slot; std::string name; };
+	std::vector<on_part> on;
+	for (const fx_slot &f : FX_SLOTS) {
+		int type = 0;
+		if (fx_target(f, m) == part && m.get(P(f.type_key), 0, type))
+			on.push_back({ &f, xg::fx_name(type) });
+	}
+
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	const float w = ImGui::GetContentRegionAvail().x;
+	ImGui::SetNextItemAllowOverlap();
+	ImGui::InvisibleButton("##ins", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+	const bool cell_hovered = ImGui::IsItemHovered();
+	// 落とし先。別のパートから印を持ってきたら、そのエフェクトをこのパートへ
+	if (ImGui::BeginDragDropTarget()) {
+		if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload(DRAG_FX)) {
+			const int id = *static_cast<const int *>(pl->Data);
+			for (const fx_slot &f : FX_SLOTS)
+				if (f.id == id)
+					fx_move(f, part, m, br);
+		}
+		ImGui::EndDragDropTarget();
+	}
+	if (ImGui::BeginPopupContextItem("fxmenu")) {
+		fx_menu(part, m, br);
+		ImGui::EndPopup();
+	}
+	if (cell_hovered && on.empty() && !ImGui::IsDragDropActive())
+		ImGui::SetItemTooltip("右クリックでエフェクトを掛ける");
+
+	dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+	const float line = fs * 1.05f;
+	for (size_t i = 0; i < on.size() && i < 2; i++) {
+		const float y = pos.y + fs * 0.1f + line * float(i);
+		const float bw = fs * 1.0f;
+		const fx_slot &f = *on[i].slot;
+		std::string name = on[i].name;
+		if (i == 1 && on.size() > 2)
+			name += " ほか";
+
+		// 印の行はつかめる（ドラッグで移す）
+		ImGui::SetCursorScreenPos(ImVec2(pos.x, y));
+		ImGui::PushID(f.id);
+		ImGui::InvisibleButton("##fx", ImVec2(w, line), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+		const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+		if (ImGui::BeginDragDropSource()) {
+			ImGui::SetDragDropPayload(DRAG_FX, &f.id, sizeof(f.id));
+			ImGui::Text("%s（%s）を移す", f.title, name.c_str());
+			ImGui::EndDragDropSource();
+		}
+		ImGui::OpenPopupOnItemClick("fxmenu_badge", ImGuiPopupFlags_MouseButtonRight);
+		if (ImGui::BeginPopup("fxmenu_badge")) {
+			fx_menu(part, m, br);
+			ImGui::EndPopup();
+		}
+		if (ImGui::IsItemHovered() && !ImGui::IsDragDropActive())
+			ImGui::SetItemTooltip("%s: %s\nドラッグで別のパートへ・右クリックで種類や外す", f.title, on[i].name.c_str());
+		ImGui::PopID();
+
+		dl->AddRectFilled(ImVec2(pos.x + fs * 0.2f, y + 1), ImVec2(pos.x + fs * 0.2f + bw, y + fs), f.color, 3.0f);
+		const ImVec2 ms = ImGui::CalcTextSize(f.mark);
+		dl->AddText(ImVec2(pos.x + fs * 0.2f + (bw - ms.x) * 0.5f, y), IM_COL32(20, 20, 20, 255), f.mark);
+		dl->AddText(ImVec2(pos.x + fs * 1.5f, y), hot ? col(ImGuiCol_SliderGrabActive) : col(ImGuiCol_Text), name.c_str());
+	}
+	// 落とせる欄を光らせる
+	if (cell_hovered && ImGui::GetDragDropPayload() && ImGui::GetDragDropPayload()->IsDataType(DRAG_FX))
+		dl->AddRect(ImVec2(pos.x + 1, pos.y + 1), ImVec2(pos.x + w - 1, pos.y + h - 1), col(ImGuiCol_DragDropTarget), 3.0f, 0, 2.0f);
+	dl->PopClipRect();
+	ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h));
+	ImGui::Dummy(ImVec2(0, 0));
+}
+
 void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h)
 {
 	const float fs = ImGui::GetFontSize();
@@ -217,7 +369,7 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
 			m_part = part;
 		if (ImGui::BeginPopupContextItem("program")) {
-			program_menu(part, m, br);
+			program_menu(part, m, &ram, br);
 			ImGui::EndPopup();
 		}
 		if (m_part == part)
@@ -277,50 +429,9 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		dl->PopClipRect();
 	}
 
-	// ---- インサーション。このパートに割り当てられているものを、印と種別の名前で。
-	// バリエーションも接続が INSERTION ならこのパートだけに掛かるので並べる
+	// ---- インサーション（右クリックで掛ける・外す・種類、印をドラッグして別のパートへ）
 	ImGui::TableNextColumn();
-	{
-		struct fx { const char *mark; ImU32 color; std::string name; };
-		std::vector<fx> on;
-		static const char *const INS[4][3] = {
-			{ "1", "insertion1.part", "insertion1.type" }, { "2", "insertion2.part", "insertion2.type" },
-			{ "3", "insertion3.part", "insertion3.type" }, { "4", "insertion4.part", "insertion4.type" },
-		};
-		int who = 0, type = 0;
-		for (const auto &ins : INS)
-			if (m.get(P(ins[1]), 0, who) && who == part && m.get(P(ins[2]), 0, type))
-				on.push_back({ ins[0], IM_COL32(214, 160, 48, 255), xg::fx_name(type) });
-		int conn = 1;
-		if (m.get(P("variation.connect"), 0, conn) && conn == 0 && m.get(P("variation.part"), 0, who) &&
-		    who == part && m.get(P("variation.type"), 0, type))
-			on.push_back({ "V", IM_COL32(150, 110, 220, 255), xg::fx_name(type) });
-
-		const ImVec2 pos = ImGui::GetCursorScreenPos();
-		const float w = ImGui::GetContentRegionAvail().x;
-		ImGui::Dummy(ImVec2(w, h));
-		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
-		const float line = fs * 1.05f;
-		for (size_t i = 0; i < on.size() && i < 2; i++) {
-			const float y = pos.y + fs * 0.1f + line * float(i);
-			const float bw = fs * 1.0f;
-			dl->AddRectFilled(ImVec2(pos.x + fs * 0.2f, y + 1), ImVec2(pos.x + fs * 0.2f + bw, y + fs), on[i].color, 3.0f);
-			const ImVec2 ms = ImGui::CalcTextSize(on[i].mark);
-			dl->AddText(ImVec2(pos.x + fs * 0.2f + (bw - ms.x) * 0.5f, y), IM_COL32(20, 20, 20, 255), on[i].mark);
-			std::string name = on[i].name;
-			if (i == 1 && on.size() > 2)
-				name += " ほか";
-			dl->AddText(ImVec2(pos.x + fs * 1.5f, y), col(ImGuiCol_Text), name.c_str());
-		}
-		dl->PopClipRect();
-		if (!on.empty() && ImGui::IsItemHovered()) {
-			std::string tip;
-			for (const fx &f : on)
-				tip += std::string(f.mark[0] == 'V' ? "バリエーション（INSERTION）: " : "インサーション ") +
-				       (f.mark[0] == 'V' ? "" : std::string(f.mark) + ": ") + f.name + "\n";
-			ImGui::SetTooltip("%s", tip.c_str());
-		}
-	}
+	ins_cell(part, m, br, h);
 
 	// 受信チャンネルから、見張りの口×チャンネル
 	int rcv = 127;

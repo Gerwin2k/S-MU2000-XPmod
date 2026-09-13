@@ -137,6 +137,8 @@ public:
 	{
 		const std::vector<u8> &ram = mu.nvram();
 		std::memcpy(m_xg.system, ram.data() + xg::ram::SYSTEM, XG_SYSTEM_SIZE);
+		m_xg.voice_mode = ram[xg::ram::VOICE_MODE];
+		m_xg.voice_set  = ram[xg::ram::VOICE_SET];
 		std::memcpy(m_xg.effect, ram.data() + xg::ram::EFFECT, XG_EFFECT_SIZE);
 		for (int p = 0; p < XG_PARTS; p++)
 			std::memcpy(m_xg.parts[p], ram.data() + xg::ram::part_base(p), XG_PART_COPY);

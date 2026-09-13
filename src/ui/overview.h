@@ -28,6 +28,8 @@ public:
 
 private:
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
+	// INS 列の 1 マス。右クリックで掛ける・外す・種類、印のドラッグで別のパートへ
+	void ins_cell(int part, xg::model &m, bridge &br, float h);
 	// 一番上の行。マスターボリューム、移調、システムのエフェクトの種別と戻り
 	void master_row(xg::model &m, const xg_snapshot &ram, bridge &br, float h);
 	// 棒 1 つ。XG のパラメータなら触れる。part が -1 ならマスターの行

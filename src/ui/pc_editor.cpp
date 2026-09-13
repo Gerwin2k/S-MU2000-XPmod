@@ -227,7 +227,7 @@ void pc_editor::part_list(xg::model &m, bridge &br)
 			m_part = i;
 		}
 		if (ImGui::BeginPopupContextItem("program")) {
-			xgui::program_menu(i, m, br);
+			xgui::program_menu(i, m, m_ram, br);
 			ImGui::EndPopup();
 		}
 		int v = 0;
@@ -362,8 +362,9 @@ void pc_editor::part_page(xg::model &m, bridge &br)
 }
 
 
-void pc_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
+void pc_editor::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
+	m_ram = &ram;
 	m_wheel_taken = false;
 
 	const ImGuiViewport *vp = ImGui::GetMainViewport();

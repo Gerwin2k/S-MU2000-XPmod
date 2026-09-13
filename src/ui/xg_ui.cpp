@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include <windows.h>
 
@@ -104,47 +105,147 @@ std::string voice_text(int msb, int lsb, int prog)
 }
 
 
-void program_menu(int part, xg::model &m, bridge &br)
+namespace {
+
+// バンクとプログラムを 1 通で選ぶ。MSB と LSB を書いてからプログラムを送る
+void select_voice(int part, int msb, int lsb, int prog, xg::model &m, bridge &br)
 {
-	int msb = -1, prog = -1;
-	m.get(P("part.bank_msb"), part, msb);
-	m.get(P("part.program"), part, prog);
+	br.send(m.set(P("part.bank_msb"), part, msb));
+	br.send(m.set(P("part.bank_lsb"), part, lsb));
+	br.send(m.set(P("part.program"), part, prog));
+}
+
+// あるプログラムで選べる音色（MSB/LSB の組）。同じ記録に落ちるものは最初の 1 つだけ。
+// 開くたびに 1 万回ほど引くので、引き方とプログラムが同じなら覚えておく
+struct bank_choice { int msb, lsb; std::string name; };
+
+const std::vector<bank_choice> &bank_choices(const xg::voice_rom &vr, int mode, int set, int prog)
+{
+	static int key = -1;
+	static std::vector<bank_choice> list;
+	const int k = (mode << 16) | (set << 8) | prog;
+	if (k == key)
+		return list;
+	key = k;
+	list.clear();
+	std::vector<u32> seen;
+	for (int msb = 0; msb < 126; msb++) {
+		for (int lsb = 0; lsb < 128; lsb++) {
+			const u32 rec = vr.lookup(mode, set, msb, lsb, prog);
+			if (!rec)
+				continue;
+			bool dup = false;
+			for (u32 r : seen)
+				dup |= r == rec;
+			if (dup)
+				continue;
+			const std::string name = vr.record_name(rec);
+			if (name.empty() || name == "Silence")
+				continue;
+			seen.push_back(rec);
+			list.push_back({ msb, lsb, name });
+		}
+	}
+	return list;
+}
+
+} // namespace
+
+void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
+{
+	int msb = 0, lsb = 0, prog = 0;
+	const bool known = m.get(P("part.bank_msb"), part, msb) && m.get(P("part.bank_lsb"), part, lsb) &&
+	                   m.get(P("part.program"), part, prog);
+	const int mode = ram ? ram->voice_mode : 1;
+	const int set  = ram ? ram->voice_set : 1;
+	const xg::voice_rom *vr = voices();
+	const bool drum = msb == 126 || msb == 127;
 
 	ImGui::TextDisabled("パート %s", part_name(part).c_str());
 	ImGui::Separator();
 
+	// ---- プログラム。いまのバンクのまま番号を替える
 	if (ImGui::BeginMenu("プログラム")) {
-		for (int g = 0; g < 16; g++) {
-			const bool here = prog >= 0 && prog / 8 == g;
-			if (ImGui::BeginMenu(GM_GROUPS[g], true)) {
-				for (int i = g * 8; i < g * 8 + 8; i++) {
-					char label[64];
-					std::snprintf(label, sizeof(label), "%3d  %s", i + 1, GM_NAMES[i]);
-					if (ImGui::MenuItem(label, nullptr, i == prog))
-						br.send(m.set(P("part.program"), part, i));
-				}
-				ImGui::EndMenu();
+		if (drum && vr) {
+			// ドラムキット。あるものだけ並べる
+			for (int i = 0; i < 128; i++) {
+				const std::string kit = vr->kit_name(msb, i);
+				if (kit.empty())
+					continue;
+				char label[48];
+				std::snprintf(label, sizeof(label), "%3d  %s", i + 1, kit.c_str());
+				if (ImGui::MenuItem(label, nullptr, known && i == prog))
+					br.send(m.set(P("part.program"), part, i));
 			}
-			if (here) {                           // いまの組に印
-				ImGui::SameLine();
-				ImGui::TextDisabled("●");
+		} else {
+			for (int g = 0; g < 16; g++) {
+				if (ImGui::BeginMenu(GM_GROUPS[g])) {
+					for (int i = g * 8; i < g * 8 + 8; i++) {
+						std::string name = GM_NAMES[i];
+						if (vr) {
+							const std::string real = vr->record_name(vr->lookup(mode, set, msb, lsb, i));
+							if (!real.empty())
+								name = real;
+						}
+						char label[64];
+						std::snprintf(label, sizeof(label), "%3d  %s", i + 1, name.c_str());
+						if (ImGui::MenuItem(label, nullptr, known && i == prog))
+							br.send(m.set(P("part.program"), part, i));
+					}
+					ImGui::EndMenu();
+				}
+				if (known && prog / 8 == g) {             // いまの組に印
+					ImGui::SameLine();
+					ImGui::TextDisabled("●");
+				}
 			}
 		}
 		ImGui::EndMenu();
 	}
 
-	if (ImGui::BeginMenu("バンク MSB")) {
-		static const struct { int msb; const char *name; } BANKS[] = {
-			{ 0, "0  Normal" }, { 64, "64  SFX" }, { 126, "126  SFX Kit" }, { 127, "127  Drum Kit" },
-		};
-		for (const auto &b : BANKS)
-			if (ImGui::MenuItem(b.name, nullptr, b.msb == msb))
-				br.send(m.set(P("part.bank_msb"), part, b.msb));   // 今のプログラムも続けて送る
+	// ---- バンク。いまのプログラム番号で選べる音色を、MSB ごとに並べる
+	if (ImGui::BeginMenu("バンク（このプログラムの音色）")) {
+		if (vr && known && !drum) {
+			const std::vector<bank_choice> &list = bank_choices(*vr, mode, set, prog);
+			int open_msb = -1;
+			bool open = false;
+			for (const bank_choice &c : list) {
+				if (c.msb != open_msb) {
+					if (open)
+						ImGui::EndMenu();
+					open_msb = c.msb;
+					char head[24];
+					std::snprintf(head, sizeof(head), "MSB %d", c.msb);
+					open = ImGui::BeginMenu(head);
+					if (c.msb == msb && !open) {
+						ImGui::SameLine();
+						ImGui::TextDisabled("●");
+					}
+				}
+				if (!open)
+					continue;
+				char label[48];
+				std::snprintf(label, sizeof(label), "LSB %3d  %s", c.lsb, c.name.c_str());
+				if (ImGui::MenuItem(label, nullptr, c.msb == msb && c.lsb == lsb))
+					select_voice(part, c.msb, c.lsb, prog, m, br);
+			}
+			if (open)
+				ImGui::EndMenu();
+			ImGui::Separator();
+		}
+		// ドラムの組へ（プログラムは 1 番から）
+		if (ImGui::MenuItem("MSB 127  ドラムキット", nullptr, msb == 127))
+			select_voice(part, 127, 0, 0, m, br);
+		if (ImGui::MenuItem("MSB 126  効果音キット", nullptr, msb == 126))
+			select_voice(part, 126, 0, 0, m, br);
+		if (drum && ImGui::MenuItem("MSB 0  普通の音色に戻す"))
+			select_voice(part, 0, 0, 0, m, br);
 		ImGui::EndMenu();
 	}
-
-	ImGui::Separator();
-	ImGui::TextDisabled("バンクとプログラムの細かい値はパートの面で");
+	if (!vr) {
+		ImGui::Separator();
+		ImGui::TextDisabled("ROM から音色の名前を読めないので、GM の名前で出している");
+	}
 }
 
 

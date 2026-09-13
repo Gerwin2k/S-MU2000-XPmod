@@ -38,6 +38,7 @@ private:
 	void write(const xg::param &p, int part, int v, xg::model &m, bridge &br);
 
 	int  m_part = 0;
+	const xg_snapshot *m_ram = nullptr;   // draw の間だけ（品書きが音色の引き方を知るため）
 	bool m_knobs = false;       // つまみで出すか。普段は数だけ
 	double m_scrolled_at = -1;  // 最後にホイールで表をスクロールした時刻（ImGui の時計）
 	bool m_wheel_taken = false; // このコマでつまみがホイールを取ったか

@@ -41,8 +41,9 @@ std::string voice_text(int msb, int lsb, int program);
 void set_voice_rom(std::shared_ptr<const std::vector<u8>> rom);
 const xg::voice_rom *voices();
 
-// 左クリックでパートを選び、右クリックで出す品書き（プログラムとバンク）
-void program_menu(int part, xg::model &m, bridge &br);
+// 右クリックで出す品書き（プログラムとバンク）。ROM から読めれば MU2000 の音色の名前で並べる。
+// ram は音色の引き方を知るため（無ければ XG の既定）
+void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br);
 
 // ---- 説明（ヘルプ）。見出しや名前にカーソルを当てると、何に効くのかを出す（日本語・英語）。
 // 邪魔な人もいるので、窓の上のチェックボックスで消せる。選んだ状態は
