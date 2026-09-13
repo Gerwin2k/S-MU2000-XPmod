@@ -2,6 +2,8 @@
 
 #include "xg_ui.h"
 
+#include "fx_help.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -78,6 +80,9 @@ bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chose
 			chosen = value;
 			picked = true;
 		}
+		if (help_on() && ImGui::IsItemHovered())
+			if (const char *h = fx_type_help(t.msb, t.lsb))
+				ImGui::SetTooltip("%s\n%s", t.name, h);
 	};
 	auto category_of = [](u8 msb) -> int {
 		const auto &cats = xg::fx_categories();
@@ -100,7 +105,11 @@ bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chose
 		const bool here = current >= 0 && (current >> 7) == msb;
 		char label[64];
 		std::snprintf(label, sizeof(label), "%s（%d）", list[0]->name, int(list.size()));
-		if (ImGui::BeginMenu(label)) {
+		const bool open = ImGui::BeginMenu(label);
+		if (help_on() && ImGui::IsItemHovered() && !open)
+			if (const char *h = fx_type_help(msb, list[0]->lsb))
+				ImGui::SetTooltip("%s", h);
+		if (open) {
 			for (const xg::fx_type *t : list)
 				item(*t, true);
 			ImGui::EndMenu();
@@ -614,6 +623,12 @@ const char *find_help(const char *name)
 }
 
 } // namespace
+
+int help_lang()
+{
+	ensure_loaded();
+	return g_lang;
+}
 
 bool &help_on()
 {

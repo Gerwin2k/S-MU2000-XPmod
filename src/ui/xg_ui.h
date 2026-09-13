@@ -64,6 +64,7 @@ void set_fx_window_slot(int slot);
 // 邪魔な人もいるので、窓の上のチェックボックスで消せる。選んだ状態は
 // %LOCALAPPDATA%\S-MU2000\editor.ini に覚えておく（窓どうしで共通）
 bool &help_on();
+int help_lang();                        // 0 が日本語、1 が English
 // 直前の部品にカーソルが載っていれば、説明を出す。name は列の見出しかパラメータのキー
 void help_tip(const char *name);
 // 「説明を出す」のチェックボックスと、言語の選択

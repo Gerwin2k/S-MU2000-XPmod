@@ -6,6 +6,7 @@
 #include "imgui_internal.h"
 #include "xg/fx_params.h"
 #include "xg/fx_types.h"
+#include "fx_help.h"
 
 #include <algorithm>
 #include <cmath>
@@ -233,12 +234,29 @@ void fx_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
 		dl->AddCircleFilled(lamp, fs * 0.9f, IM_COL32(255, 60, 40, 60), 24);
 	dl->AddCircleFilled(lamp, fs * 0.45f, part < 32 ? IM_COL32(255, 80, 60, 255) : IM_COL32(70, 22, 18, 255), 20);
 
+	const float left = pos.x + fs * 1.8f, right = end.x - fs * 1.8f;
+	// 種類の説明
+	float y = pos.y + fs * 4.6f;
+	if (has_type) {
+		if (const char *h = fx_type_help(type >> 7, type & 0x7f)) {
+			dl->AddText(font, fs, ImVec2(left, y), IM_COL32(250, 250, 240, 220), h, nullptr, right - left);
+			y += ImGui::CalcTextSize(h, nullptr, false, right - left).y;
+		}
+	}
+	y += fs * 0.8f;
+
+	// ---- 下の説明の欄（カーソルが載った・最後に触ったつまみ）
+	const float note_h = fs * 3.4f;
+	const ImVec2 note0(left - fs * 0.4f, end.y - fs * 0.9f - note_h), note1(right + fs * 0.4f, end.y - fs * 0.9f);
+
 	// ---- つまみ
 	const xg::fx_def *def = has_type ? xg::fx_find(type) : nullptr;
+	if (m_focus_type != type) {
+		m_focus_type = type;
+		m_focus = -1;
+	}
 	const float ksize = fs * 3.8f;
 	const float cell_w = ksize + fs * 1.6f, cell_h = ksize + fs * 2.5f;
-	const float left = pos.x + fs * 1.8f, right = end.x - fs * 1.8f;
-	float y = pos.y + fs * 5.0f;
 	if (!def || def->count == 0) {
 		ImGui::SetCursorScreenPos(ImVec2(left, y));
 		ImGui::TextColored(ImVec4(1, 1, 1, 0.75f), "%s",
@@ -260,7 +278,24 @@ void fx_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
 			std::snprintf(id, sizeof(id), "p%d", i);
 			if (knob(id, v, fp.lo, fp.hi, ksize, fp.label, text.c_str()) && known)
 				br.send(m.set_raw(addr, fp.size, v));
+			if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+				m_focus = i;
 		}
+	}
+	dl->AddRectFilled(note0, note1, IM_COL32(0, 0, 0, 70), 8.0f);
+	if (def && m_focus >= 0 && m_focus < def->count) {
+		const xg::fx_param &fp = def->params[m_focus];
+		int v = 0;
+		const bool known = m.get_raw(xg::pack(0x03, blk, fp.addr), fp.size, v);
+		char head[64];
+		std::snprintf(head, sizeof(head), "%s   %s", fp.label, known ? value_text(fp, std::clamp(v, int(fp.lo), int(fp.hi))).c_str() : "--");
+		dl->AddText(font, fs * 1.1f, ImVec2(note0.x + fs * 0.6f, note0.y + fs * 0.4f), IM_COL32(150, 230, 90, 255), head);
+		const char *h = fx_param_help(fp.label);
+		dl->AddText(font, fs, ImVec2(note0.x + fs * 0.6f, note0.y + fs * 1.8f), IM_COL32(250, 250, 240, 230),
+		            h ? h : (help_lang() == 1 ? "(no description yet)" : "（まだ説明が無い）"), nullptr, note1.x - note0.x - fs * 1.2f);
+	} else if (def && def->count) {
+		dl->AddText(font, fs, ImVec2(note0.x + fs * 0.6f, note0.y + fs * 0.5f), IM_COL32(250, 250, 240, 150),
+		            help_lang() == 1 ? "Hover over a knob to see what it does." : "つまみにカーソルを載せると、ここに何に効くのかが出る");
 	}
 	ImGui::SetCursorScreenPos(ImVec2(pos.x, end.y));
 	ImGui::Dummy(ImVec2(0, 0));
