@@ -108,8 +108,12 @@ ROM は読むだけなので、DLL の中で 1 組だけ持ち、何枚挿して
 音源そのものは枚数ぶん動く。1 枚あたり CPU 40% 前後なので、
 この機械（実測）では 4 枚同時までは余裕があった。
 
-Reason での使い方と、Reason で起きたこと（MIDI の輪で PC ごと固まった）は
-[doc/reason.md](reason.md)。
+DAW ごとの使い方:
+
+| DAW | マルチティンバー | 書いたもの |
+|---|---|---|
+| Cakewalk Sonar | **できる**。MIDI トラックごとに送り先とチャンネルを選ぶ | [doc/sonar.md](sonar.md) |
+| Reason | できない。1 トラック 1 楽器でパート 1 だけ。MIDI の輪で PC ごと固まった件も | [doc/reason.md](reason.md) |
 
 ## MIDI の入力バスは 2 本
 
