@@ -112,7 +112,7 @@ DAW ごとの使い方:
 
 | DAW | マルチティンバー | 書いたもの |
 |---|---|---|
-| Cakewalk Sonar | **できる**。MIDI トラックごとに送り先とチャンネルを選ぶ | [doc/sonar.md](sonar.md) |
+| Cakewalk Sonar | **できる**。MIDI トラックごとに送り先（A / B のバス）とチャンネルを選ぶ。32 パート | [doc/sonar.md](sonar.md) |
 | Reason | できない。1 トラック 1 楽器でパート 1 だけ。MIDI の輪で PC ごと固まった件も | [doc/reason.md](reason.md) |
 
 ## MIDI の入力バスは 2 本
