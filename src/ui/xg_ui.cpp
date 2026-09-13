@@ -304,6 +304,13 @@ const help_text HELP[] = {
 	{ "INS 2", { "インサーションエフェクト 2。使い方は INS 1 と同じ", "Insertion effect 2. Works like INS 1." } },
 	{ "INS 3", { "インサーションエフェクト 3。使い方は INS 1 と同じ", "Insertion effect 3. Works like INS 1." } },
 	{ "INS 4", { "インサーションエフェクト 4。使い方は INS 1 と同じ", "Insertion effect 4. Works like INS 1." } },
+	{ "MASTER EQ", {
+		"マスター EQ。全部の音の最後に掛かる 5 つの帯のイコライザ。左が低い音、右が高い音。\n"
+		"点をつまんで、横で周波数、縦でゲイン（±12dB）。点の近くでホイールを回すと幅（Q）。\n"
+		"右クリックで種類（FLAT / JAZZ / POPS / ROCK / CLASSIC）と、両端の帯をシェルフにするかピークにするか",
+		"Master EQ: a 5-band equaliser applied last, to everything. Low frequencies on the left, high on the right.\n"
+		"Drag a point sideways for frequency and up/down for gain (+/-12 dB). Use the wheel near a point for its width (Q).\n"
+		"Right-click for the preset type (FLAT / JAZZ / POPS / ROCK / CLASSIC) and the shape of the outer bands." } },
 	{ "MASTER", {
 		"全体に効く値。VOL はマスターボリューム、REV・CHO・VAR はそれぞれのエフェクトの\n"
 		"戻り量（エフェクトを通った音を、どれだけ全体に戻すか）",
@@ -353,6 +360,20 @@ const help_text HELP[] = {
 		"Drag the point sideways for cutoff (CC74, brightness): right is brighter, left is duller.\n"
 		"Drag it up and down for resonance (CC71, harmonic content): up emphasises the area around the cutoff.\n"
 		"Both are relative to the voice's own settings. The curve is a guide, not the real frequency response." } },
+	{ "VIB", {
+		"ビブラート。弾いてから音程がどう揺れるかの形。\n"
+		"波の山の点を横に動かすと速さ（Rate、左へ速く）、縦に動かすと深さ（Depth）。\n"
+		"平らな所の終わりの点を横に動かすと、揺れ始めるまでの時間（Delay）。\n"
+		"どれも音色の元の値に対する増減。形は目安",
+		"Vibrato: how the pitch wobbles after a note starts.\n"
+		"Drag the crest of the wave sideways for speed (rate, left is faster) and up/down for depth.\n"
+		"Drag the end of the flat part sideways for the delay before the vibrato starts.\n"
+		"All relative to the voice's own settings. The drawing is a guide." } },
+	{ "EQ", {
+		"パートの EQ。左が低い音、右が高い音。点 1 が低音、点 2 が高音（どちらもシェルフ）。\n"
+		"点をつまんで、横で周波数、縦でゲイン（±12dB）",
+		"Part EQ. Low frequencies on the left, high on the right. Point 1 is bass, point 2 is treble (both shelving).\n"
+		"Drag a point sideways for frequency and up/down for gain (+/-12 dB)." } },
 	{ "EG", {
 		"音量の変わり方（エンベロープ）。左から、鍵盤を押して立ち上がる（アタック）、\n"
 		"伸ばしている音量へ落ち着く（ディケイ）、伸ばしている間、離して消える（リリース）。\n"

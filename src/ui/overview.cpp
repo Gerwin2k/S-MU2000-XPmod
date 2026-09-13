@@ -22,7 +22,10 @@ namespace {
 
 constexpr int PARTS = 32;
 
-enum class src { param, exp, mod, bend, hold, filter, eg };
+enum class src { param, exp, mod, bend, hold, vib, filter, eq, eg, ins };
+
+// 絵で触る列（1 マスが広い）
+bool wide(src s) { return s == src::vib || s == src::filter || s == src::eq || s == src::eg; }
 
 ImU32 col(ImGuiCol c, float a = 1.0f) { return ImGui::GetColorU32(c, a); }
 
@@ -111,8 +114,11 @@ static const overview::column COLUMNS[] = {
 	{ "P.BEND", src::bend,  nullptr },
 	{ "MOD",    src::mod,   nullptr },
 	{ "HOLD",   src::hold,  nullptr },
+	{ "VIB",    src::vib,   nullptr },          // ビブラートの速さ・深さ・掛かり始めを 1 マスで
 	{ "FILTER", src::filter, nullptr },         // カットオフとレゾナンスを 1 マスで（Domino の CUT RESO）
+	{ "EQ",     src::eq,    nullptr },          // パートの EQ（低音・高音の周波数とゲイン）を 1 マスで
 	{ "EG",     src::eg,    nullptr },          // アタック・ディケイ・リリースを 1 マスで
+	{ "INS",    src::ins,   nullptr },          // 掛かっているインサーション
 	{ "REV",    src::param, "part.reverb_send" },
 	{ "CHO",    src::param, "part.chorus_send" },
 	{ "VAR",    src::param, "part.variation_send" },
@@ -136,13 +142,19 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 	ImGuiIO &io = ImGui::GetIO();
 	const float fs = ImGui::GetFontSize();
 
-	if (c.from == src::eg || c.from == src::filter) {
+	if (wide(c.from) || c.from == src::ins) {
 		if (part < 0)
 			ImGui::Dummy(ImVec2(w, h));
 		else if (c.from == src::eg)
 			eg_cell(part, m, br, w, h);
-		else
+		else if (c.from == src::filter)
 			filter_cell(part, m, br, w, h);
+		else if (c.from == src::eq)
+			eq_cell(part, m, br, w, h);
+		else if (c.from == src::vib)
+			vib_cell(part, m, br, w, h);
+		else
+			ins_cell(part, m, br, h);
 		return;
 	}
 
@@ -191,6 +203,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 		break;
 	}
 	case src::hold: v = blk[xg::ram::PART_HOLD] ? 127 : 0; text = v ? "ON" : "OFF"; break;
+	default: break;
 	}
 
 	ImGui::PushID(c.title);
@@ -607,6 +620,325 @@ void overview::filter_cell(int part, xg::model &m, bridge &br, float w, float h)
 	ImGui::PopID();
 }
 
+namespace {
+
+// XG の EQ の周波数の表（値 0-60 → Hz）。パートの EQ、マスター EQ、エフェクトの EQ で共通
+constexpr int EQ_HZ[61] = {
+	20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 70, 80, 90, 100, 110, 125, 140, 160, 180,
+	200, 225, 250, 280, 315, 355, 400, 450, 500, 560, 630, 700, 800, 900, 1000, 1100, 1200, 1400, 1600, 1800,
+	2000, 2200, 2500, 2800, 3200, 3600, 4000, 4500, 5000, 5600, 6300, 7000, 8000, 9000, 10000, 11000, 12000, 14000, 16000, 18000,
+	20000 };
+
+std::string hz_text(int index)
+{
+	const int hz = EQ_HZ[std::clamp(index, 0, 60)];
+	char buf[16];
+	if (hz >= 1000) std::snprintf(buf, sizeof(buf), hz % 1000 ? "%.1fk" : "%.0fk", hz / 1000.0);
+	else            std::snprintf(buf, sizeof(buf), "%d", hz);
+	return buf;
+}
+
+// 周波数の軸。20Hz-20kHz を対数で並べる。t は 0-1
+float t_of_hz(float hz) { return std::log10(hz / 20.0f) / 3.0f; }
+float hz_of_t(float t)  { return 20.0f * std::pow(10.0f, t * 3.0f); }
+
+// 周波数の表の値のうち、横の位置 t に一番近いもの（lo-hi の中で）
+int index_near(float t, int lo, int hi)
+{
+	int best = lo;
+	for (int i = lo; i <= hi; i++)
+		if (std::fabs(t_of_hz(float(EQ_HZ[i])) - t) < std::fabs(t_of_hz(float(EQ_HZ[best])) - t))
+			best = i;
+	return best;
+}
+
+// EQ の 1 帯の、周波数 f での持ち上がり（dB）。見た目だけの形
+enum class band_shape { low_shelf, high_shelf, peak };
+float band_db(band_shape s, float gain_db, float fc, float q, float f)
+{
+	const float r = f / fc;
+	switch (s) {
+	case band_shape::low_shelf:  return gain_db / (1.0f + r * r);
+	case band_shape::high_shelf: return gain_db * r * r / (1.0f + r * r);
+	default: {
+		const float x = q * (r - 1.0f / r);
+		return gain_db / (1.0f + x * x);
+	}
+	}
+}
+
+struct eq_band {
+	band_shape shape;
+	const xg::param *gain, *freq, *q;     // q は無ければ nullptr
+	int part;
+	int vg, vf, vq;
+	bool known;
+};
+
+// EQ の絵の 1 マス。帯ごとの点をつまんで、横で周波数、縦でゲイン。ホイールで Q（あれば）。
+// 戻り値はつかんでいる帯（無ければ -1）
+int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, float w, float h, const char *tip)
+{
+	ImGuiIO &io = ImGui::GetIO();
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	bool known = true;
+	for (int i = 0; i < n; i++) {
+		eq_band &b = bands[i];
+		b.known = m.get(*b.gain, b.part, b.vg) && m.get(*b.freq, b.part, b.vf) && (!b.q || m.get(*b.q, b.part, b.vq));
+		known &= b.known;
+	}
+
+	ImGui::PushID(id);
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##eq", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
+	const ImGuiID iid = ImGui::GetItemID();
+	const bool hovered = ImGui::IsItemHovered();
+	const bool active = ImGui::IsItemActive();
+
+	const float pad = fs * 0.25f;
+	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
+	const float top = pos.y + pad, bottom = pos.y + h - pad;
+	const float DB = 15.0f;
+	auto x_of = [&](float hz) { return x0 + (x1 - x0) * t_of_hz(hz); };
+	auto y_of = [&](float db) { return (top + bottom) * 0.5f - (bottom - top) * 0.5f * std::clamp(db, -DB, DB) / DB; };
+	auto handle = [&](const eq_band &b) { return ImVec2(x_of(float(EQ_HZ[b.vf])), y_of(float(b.vg - 64))); };
+
+	// 押した瞬間に一番近い点を選ぶ。ずれを覚えて、点が指に飛ばないようにする
+	int &grab = *ImGui::GetStateStorage()->GetIntRef(iid, -1);
+	float &gx = *ImGui::GetStateStorage()->GetFloatRef(iid + 1, 0.0f);
+	float &gy = *ImGui::GetStateStorage()->GetFloatRef(iid + 2, 0.0f);
+	auto nearest = [&]() {
+		int best = -1; float bd = 1e9f;
+		for (int i = 0; i < n; i++) {
+			if (!bands[i].known) continue;
+			const ImVec2 hp = handle(bands[i]);
+			const float d = (hp.x - io.MousePos.x) * (hp.x - io.MousePos.x) + (hp.y - io.MousePos.y) * (hp.y - io.MousePos.y);
+			if (d < bd) { bd = d; best = i; }
+		}
+		return best;
+	};
+	if (ImGui::IsItemActivated() && known) {
+		grab = nearest();
+		if (grab >= 0) {
+			const ImVec2 hp = handle(bands[grab]);
+			gx = hp.x - io.MousePos.x;
+			gy = hp.y - io.MousePos.y;
+		}
+	}
+	if (!active)
+		grab = -1;
+	if (active && grab >= 0 && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+		const eq_band &b = bands[grab];
+		const float t = (io.MousePos.x + gx - x0) / (x1 - x0);
+		const int nf = index_near(t, b.freq->min, b.freq->max);
+		const float db = -((io.MousePos.y + gy) - (top + bottom) * 0.5f) / ((bottom - top) * 0.5f) * DB;
+		const int ng = std::clamp(int(std::lround(64 + db)), b.gain->min, b.gain->max);
+		if (nf != b.vf) br.send(m.set(*b.freq, b.part, nf));
+		if (ng != b.vg) br.send(m.set(*b.gain, b.part, ng));
+	}
+	// ホイールで Q。カーソルに一番近い帯
+	const int hot = hovered && !active ? nearest() : grab;
+	if (hovered && known && hot >= 0 && bands[hot].q) {
+		ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+		if (io.MouseWheel != 0.0f) {
+			const eq_band &b = bands[hot];
+			const int nq = std::clamp(b.vq + (io.MouseWheel > 0 ? 1 : -1) * (io.KeyCtrl ? 10 : 2), b.q->min, b.q->max);
+			if (nq != b.vq) br.send(m.set(*b.q, b.part, nq));
+		}
+	}
+
+	dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), col(hovered || active ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), 3.0f);
+	if (known) {
+		const ImU32 guide = col(ImGuiCol_TextDisabled, 0.35f);
+		dl->AddLine(ImVec2(x0, y_of(0)), ImVec2(x1, y_of(0)), guide);
+		for (float hz : { 100.0f, 1000.0f, 10000.0f })
+			dl->AddLine(ImVec2(x_of(hz), top), ImVec2(x_of(hz), bottom), guide);
+		const int np = std::max(8, int(x1 - x0) / 2);
+		std::vector<ImVec2> pts;
+		pts.reserve(np + 1);
+		for (int i = 0; i <= np; i++) {
+			const float t = float(i) / float(np);
+			const float f = hz_of_t(t);
+			float db = 0;
+			for (int k = 0; k < n; k++)
+				db += band_db(bands[k].shape, float(bands[k].vg - 64), float(EQ_HZ[bands[k].vf]),
+				              bands[k].q ? bands[k].vq / 10.0f : 0.7f, f);
+			pts.push_back(ImVec2(x0 + (x1 - x0) * t, y_of(db)));
+		}
+		const ImU32 line = col(ImGuiCol_SliderGrabActive);
+		dl->PathClear();
+		dl->PathLineTo(ImVec2(x0, y_of(0)));
+		for (const ImVec2 &p : pts) dl->PathLineTo(p);
+		dl->PathLineTo(ImVec2(x1, y_of(0)));
+		dl->PathFillConcave(col(ImGuiCol_SliderGrab, 0.25f));
+		dl->AddPolyline(pts.data(), int(pts.size()), line, 0, std::max(1.5f, fs * 0.1f));
+		const float r = std::max(2.5f, fs * 0.2f);
+		for (int k = 0; k < n; k++) {
+			const ImVec2 hp = handle(bands[k]);
+			const bool on = k == grab || (k == hot && hovered);
+			dl->AddCircleFilled(hp, on ? r * 1.4f : r, on ? col(ImGuiCol_Text) : line);
+		}
+	} else {
+		const ImVec2 ts = ImGui::CalcTextSize("--");
+		dl->AddText(ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(ImGuiCol_TextDisabled), "--");
+	}
+
+	if ((hovered || active) && known) {
+		std::string text;
+		for (int k = 0; k < n; k++) {
+			char buf[96];
+			const eq_band &b = bands[k];
+			std::snprintf(buf, sizeof(buf), "%s%d: %sHz %+ddB", k ? "\n" : "", k + 1, hz_text(b.vf).c_str(), b.vg - 64);
+			text += buf;
+			if (b.q) {
+				std::snprintf(buf, sizeof(buf), "  Q %.1f", b.vq / 10.0);
+				text += buf;
+			}
+		}
+		ImGui::SetItemTooltip("%s\n%s", text.c_str(), tip);
+	}
+	ImGui::PopID();
+	return grab;
+}
+
+} // namespace
+
+
+// パートの EQ の 1 マス。低音（シェルフ）と高音（シェルフ）の 2 つの点
+void overview::eq_cell(int part, xg::model &m, bridge &br, float w, float h)
+{
+	eq_band bands[] = {
+		{ band_shape::low_shelf,  &P("part.eq_bass_gain"),   &P("part.eq_bass_freq"),   nullptr, part, 64, 12, 0, false },
+		{ band_shape::high_shelf, &P("part.eq_treble_gain"), &P("part.eq_treble_freq"), nullptr, part, 64, 54, 0, false },
+	};
+	eq_plot("eq", bands, 2, m, br, w, h, "点をつまんで、横で周波数、縦でゲイン（1 が低音、2 が高音）");
+}
+
+
+// マスター EQ の 1 マス。5 つの帯。1 と 5 は形（シェルフ／ピーク）を右クリックで選ぶ
+void overview::master_eq_cell(xg::model &m, bridge &br, float h)
+{
+	const float w = ImGui::GetContentRegionAvail().x;
+	int s1 = 0, s5 = 0;
+	m.get(P("master_eq.shape1"), 0, s1);
+	m.get(P("master_eq.shape5"), 0, s5);
+	eq_band bands[] = {
+		{ s1 ? band_shape::peak : band_shape::low_shelf,  &P("master_eq.gain1"), &P("master_eq.freq1"), &P("master_eq.q1"), 0, 64, 12, 7, false },
+		{ band_shape::peak,                               &P("master_eq.gain2"), &P("master_eq.freq2"), &P("master_eq.q2"), 0, 64, 28, 7, false },
+		{ band_shape::peak,                               &P("master_eq.gain3"), &P("master_eq.freq3"), &P("master_eq.q3"), 0, 64, 34, 7, false },
+		{ band_shape::peak,                               &P("master_eq.gain4"), &P("master_eq.freq4"), &P("master_eq.q4"), 0, 64, 46, 7, false },
+		{ s5 ? band_shape::peak : band_shape::high_shelf, &P("master_eq.gain5"), &P("master_eq.freq5"), &P("master_eq.q5"), 0, 64, 52, 7, false },
+	};
+	eq_plot("meq", bands, 5, m, br, w, h,
+	        "点をつまんで、横で周波数、縦でゲイン。ホイールで幅（Q）。右クリックで種類と、両端の帯の形");
+	if (ImGui::BeginPopupContextItem("meqmenu", ImGuiPopupFlags_MouseButtonRight)) {
+		ImGui::TextDisabled("マスター EQ");
+		ImGui::Separator();
+		int type = 0;
+		m.get(P("master_eq.type"), 0, type);
+		const xg::param &pt = P("master_eq.type");
+		for (int t = pt.min; t <= pt.max; t++)
+			if (ImGui::MenuItem(pt.choices[t], nullptr, t == type))
+				br.send(m.set(pt, 0, t));
+		ImGui::Separator();
+		if (ImGui::MenuItem("帯 1 をピークにする", nullptr, s1 == 1))
+			br.send(m.set(P("master_eq.shape1"), 0, s1 ? 0 : 1));
+		if (ImGui::MenuItem("帯 5 をピークにする", nullptr, s5 == 1))
+			br.send(m.set(P("master_eq.shape5"), 0, s5 ? 0 : 1));
+		ImGui::Separator();
+		ImGui::TextDisabled("種類を選ぶと、firmware が 5 つの帯を\nその種類の値に書き換える");
+		ImGui::EndPopup();
+	}
+}
+
+
+// ビブラートの 1 マス。弾いてからの揺れの形。平らな所が掛かり始めるまで（Delay）、
+// そのあとの波の山の点をつまんで、横で速さ（山が近いほど速い）、縦で深さ。
+// 平らな所の終わりの点を横に動かすと Delay。どれも音色の元の値に対する増減（64 が音色のまま）で、
+// 形は 2 の (値 - 64) / 24 乗で伸び縮みさせた見た目だけのもの
+void overview::vib_cell(int part, xg::model &m, bridge &br, float w, float h)
+{
+	ImGuiIO &io = ImGui::GetIO();
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const xg::param &pr = P("part.vib_rate"), &pd = P("part.vib_depth"), &pl = P("part.vib_delay");
+	int vr = 64, vd = 64, vl = 64;
+	const bool known = m.get(pr, part, vr) && m.get(pd, part, vd) && m.get(pl, part, vl);
+
+	ImGui::PushID("vib");
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##vib", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
+	const ImGuiID id = ImGui::GetItemID();
+	const bool hovered = ImGui::IsItemHovered();
+	const bool active = ImGui::IsItemActive();
+
+	const float pad = fs * 0.25f;
+	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
+	const float top = pos.y + pad, bottom = pos.y + h - pad;
+	const float mid = (top + bottom) * 0.5f, half = (bottom - top) * 0.5f;
+	const float unit = (x1 - x0) / 5.0f;
+	auto scale = [](int v) { return std::pow(2.0f, float(v - 64) / 24.0f); };
+	const float delay = std::min(unit * scale(vl), (x1 - x0) * 0.8f);
+	const float period = std::clamp(unit * 0.8f / scale(vr), 3.0f, (x1 - x0));
+	const float amp = std::min(half * 0.45f * scale(vd), half);
+	const float xd = x0 + delay;
+	const ImVec2 crest(xd + period * 0.25f, mid - amp);
+
+	int &grab = *ImGui::GetStateStorage()->GetIntRef(id, -1);
+	float &gx = *ImGui::GetStateStorage()->GetFloatRef(id + 1, 0.0f);
+	float &gy = *ImGui::GetStateStorage()->GetFloatRef(id + 2, 0.0f);
+	if (ImGui::IsItemActivated() && known) {
+		const float dd = std::fabs(io.MousePos.x - xd) + std::fabs(io.MousePos.y - mid);
+		const float dc = std::fabs(io.MousePos.x - crest.x) + std::fabs(io.MousePos.y - crest.y);
+		grab = dd < dc ? 0 : 1;
+		gx = (grab == 0 ? xd : crest.x) - io.MousePos.x;
+		gy = (grab == 0 ? mid : crest.y) - io.MousePos.y;
+	}
+	if (!active)
+		grab = -1;
+	if (active && known && grab >= 0 && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+		auto value = [](float ratio, const xg::param &p) {
+			return std::clamp(int(std::lround(64 + 24 * std::log2(std::max(ratio, 1e-3f)))), p.min, p.max);
+		};
+		const float fx = io.MousePos.x + gx, fy = io.MousePos.y + gy;
+		if (grab == 0) {
+			const int nl = value((fx - x0) / unit, pl);
+			if (nl != vl) br.send(m.set(pl, part, nl));
+		} else {
+			const int nr = value(unit * 0.8f / std::max(1.0f, (fx - xd) * 4.0f), pr);
+			const int nd = value((mid - fy) / (half * 0.45f), pd);
+			if (nr != vr) br.send(m.set(pr, part, nr));
+			if (nd != vd) br.send(m.set(pd, part, nd));
+		}
+	}
+
+	dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), col(hovered || active ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), 3.0f);
+	if (known) {
+		const ImU32 line = col(ImGuiCol_SliderGrabActive);
+		dl->AddLine(ImVec2(x0, mid), ImVec2(x1, mid), col(ImGuiCol_TextDisabled, 0.35f));
+		std::vector<ImVec2> pts;
+		pts.push_back(ImVec2(x0, mid));
+		pts.push_back(ImVec2(xd, mid));
+		for (float x = xd + 1.0f; x <= x1; x += 1.0f)
+			pts.push_back(ImVec2(x, mid - amp * std::sin((x - xd) / period * 2.0f * IM_PI)));
+		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+		dl->AddPolyline(pts.data(), int(pts.size()), line, 0, std::max(1.5f, fs * 0.1f));
+		const float r = std::max(2.5f, fs * 0.2f);
+		dl->AddCircleFilled(ImVec2(xd, mid), grab == 0 ? r * 1.4f : r, grab == 0 ? col(ImGuiCol_Text) : line);
+		dl->AddCircleFilled(crest, grab == 1 ? r * 1.4f : r, grab == 1 ? col(ImGuiCol_Text) : line);
+		dl->PopClipRect();
+	} else {
+		const ImVec2 ts = ImGui::CalcTextSize("--");
+		dl->AddText(ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(ImGuiCol_TextDisabled), "--");
+	}
+	if ((hovered || active) && known)
+		ImGui::SetItemTooltip("Rate %s   Depth %s   Delay %s\n波の山の点: 横で速さ、縦で深さ\n平らな所の終わりの点: 横で掛かり始めるまでの時間",
+		                      xg::format(pr, vr).c_str(), xg::format(pd, vd).c_str(), xg::format(pl, vl).c_str());
+	ImGui::PopID();
+}
+
+
 void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h)
 {
 	const float fs = ImGui::GetFontSize();
@@ -682,10 +1014,6 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		dl->AddText(ImVec2(text_x, pos.y + fs * 1.15f), col(ImGuiCol_TextDisabled), sub);
 		dl->PopClipRect();
 	}
-
-	// ---- インサーション（右クリックで掛ける・外す・種類、印をドラッグして別のパートへ）
-	ImGui::TableNextColumn();
-	ins_cell(part, m, br, h);
 
 	// 受信チャンネルから、見張りの口×チャンネル
 	int rcv = 127;
@@ -925,7 +1253,7 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 
 	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuterH |
 	                              ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
-	constexpr int NCOL = 10;
+	constexpr int NCOL = 11;
 	if (!ImGui::BeginTable("master", NCOL, flags))
 		return;
 	ImGui::TableSetupColumn("マスター", ImGuiTableColumnFlags_WidthFixed, fs * 17);
@@ -937,6 +1265,7 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 	ImGui::TableSetupColumn("INS 2", ImGuiTableColumnFlags_WidthFixed, fs * 7);
 	ImGui::TableSetupColumn("INS 3", ImGuiTableColumnFlags_WidthFixed, fs * 7);
 	ImGui::TableSetupColumn("INS 4", ImGuiTableColumnFlags_WidthFixed, fs * 7);
+	ImGui::TableSetupColumn("MASTER EQ", ImGuiTableColumnFlags_WidthFixed, fs * 11);
 	ImGui::TableSetupColumn("##mkeys", ImGuiTableColumnFlags_WidthStretch);
 	headers_with_help(NCOL);
 	ImGui::TableNextRow(0, h);
@@ -971,6 +1300,8 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 		ImGui::TableNextColumn();
 		insertion_cell(i, m, br, h);
 	}
+	ImGui::TableNextColumn();
+	master_eq_cell(m, br, h);
 
 	// ---- 鍵盤。全パートで鳴っている鍵を重ねる。色はパートごと、重なったら混ぜる
 	ImGui::TableNextColumn();
@@ -1040,15 +1371,15 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV |
 	                              ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
 	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1, 1));
-	if (ImGui::BeginTable("rows", NCOLS + 4, flags)) {
+	if (ImGui::BeginTable("rows", NCOLS + 3, flags)) {
 		ImGui::TableSetupScrollFreeze(1, 1);            // 見出しは流さない
 		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 17);
-		ImGui::TableSetupColumn("INS", ImGuiTableColumnFlags_WidthFixed, fs * 8.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
-			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed, c.from == src::eg || c.from == src::filter ? fs * 8.0f : fs * 3.4f);
+			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed,
+			                        wide(c.from) ? fs * 7.5f : c.from == src::ins ? fs * 8.5f : fs * 3.4f);
 		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
-		headers_with_help(NCOLS + 4);
+		headers_with_help(NCOLS + 3);
 
 		for (int part = 0; part < PARTS; part++) {
 			ImGui::TableNextRow(0, h);

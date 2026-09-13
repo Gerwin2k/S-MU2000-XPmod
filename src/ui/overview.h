@@ -3,8 +3,8 @@
 // 一覧の窓（doc/pc-editor.md）。Domino のトラック一覧のように、32 パートを 1 行ずつ並べて、
 // 曲を流しながら全体のバランスを見て整える。
 //
-// 1 行に: パートと音色、VEL メーター、VOL / EXP / PAN / P.BEND / MOD / HOLD / CUT / RESO /
-// REV / CHO / VAR の棒と数、鳴っている鍵盤。
+// 1 行に: パートと音色、VEL メーター、VOL / EXP / PAN / P.BEND / MOD / HOLD の棒と数、
+// VIB / FILTER / EQ / EG の絵（点をつまんで変える）、INS、REV / CHO / VAR の棒と数、鳴っている鍵盤。
 // 値は RAM の写し（panel::tick が層に入れたもの）と、MIDI の見張り（押さえている鍵）から。
 
 #ifndef S_MU2000_UI_OVERVIEW_H
@@ -21,7 +21,7 @@ class overview : public imgui_view
 {
 public:
 	const wchar_t *title() const override { return L"S-MU2000 一覧"; }
-	int default_width() const override  { return 1400; }
+	int default_width() const override  { return 1680; }
 	int default_height() const override { return 760; }
 	void draw(xg::model &m, const xg_snapshot &ram, bridge &br) override;
 	void hidden(bridge &br) override { release_keys(br); }
@@ -37,6 +37,12 @@ private:
 	void eg_cell(int part, xg::model &m, bridge &br, float w, float h);
 	// フィルタの 1 マス。周波数特性の山を描き、山の頂をつまんで横でカットオフ、縦でレゾナンス
 	void filter_cell(int part, xg::model &m, bridge &br, float w, float h);
+	// パートの EQ の 1 マス。低音と高音の点をつまんで、横で周波数、縦でゲイン
+	void eq_cell(int part, xg::model &m, bridge &br, float w, float h);
+	// ビブラートの 1 マス。揺れの波の山をつまんで速さと深さ、平らな所の終わりで掛かり始め
+	void vib_cell(int part, xg::model &m, bridge &br, float w, float h);
+	// マスター EQ の 1 マス。5 つの帯の点、ホイールで Q、右クリックで種類
+	void master_eq_cell(xg::model &m, bridge &br, float h);
 	// 上のマスターの表。マスターボリューム、移調、リバーブ・コーラス・バリエーションの種類と戻り、
 	// インサーション 1-4 の種類と掛け先、全パートの鍵盤
 	void master_pane(xg::model &m, const xg_snapshot &ram, bridge &br);
