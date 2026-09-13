@@ -70,7 +70,8 @@ build/blocktime.exe <rom> <MIDI> <フレーム数> [秒] [回数]  1 ブロッ�
 ひとつだけ。`gui.exe` は入口と出口を**動かしたまま画面から選べる**ので、
 パネルの `MIDI IN A` のジャックを押すか、窓のどこかを右クリックする。
 入口は **A と B の 2 口**（パート 1-16 と 17-32）で、THRU の出口も口ごとに選べる。
-選んだものは `%LOCALAPPDATA%\S-MU2000\gui.ini` に覚えておく。
+選んだものは `%LOCALAPPDATA%\S-MU2000\gui.ini` に覚えておく。パネルの VOLUME の
+つまみの位置もここ（実機でもアナログのつまみで、firmware の RAM には入らない）。
 
 **MU2000 の設定は電源を入れ直しても残る。** 実機の電池で保持される RAM と同じ
 ものを、`gui` と `live` が終わるときに `%LOCALAPPDATA%\S-MU2000\nvram\` へ残し、

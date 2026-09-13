@@ -252,7 +252,7 @@ std::string settings_path()
 
 void load_settings(std::string &in_name, std::string &in_name_b,
                    std::string &out_name, std::string &out_name_b,
-                   std::string &audio_name)
+                   std::string &audio_name, float *volume = nullptr)
 {
 	const std::string path = settings_path();
 	if (path.empty())
@@ -274,6 +274,8 @@ void load_settings(std::string &in_name, std::string &in_name_b,
 		if (key == "midi_out")   out_name   = val;
 		if (key == "midi_out_b") out_name_b = val;
 		if (key == "audio_out")  audio_name = val;
+		if (key == "volume" && volume && !val.empty())
+			*volume = std::clamp(float(std::atof(val.c_str())), 0.0f, 1.0f);
 	}
 	std::fclose(f);
 }
@@ -291,6 +293,10 @@ void save_settings()
 	std::fprintf(f, "midi_out=%s\n",   g_win.out_name.c_str());
 	std::fprintf(f, "midi_out_b=%s\n", g_win.out_name_b.c_str());
 	std::fprintf(f, "audio_out=%s\n", g_win.audio_name.c_str());
+	// パネルの VOLUME のつまみ。実機でも DAC の後ろのアナログのつまみで、
+	// firmware の RAM には入らないので、こちらで覚える
+	if (g_win.br)
+		std::fprintf(f, "volume=%.3f\n", g_win.br->gain());
 	std::fclose(f);
 }
 
@@ -931,7 +937,13 @@ int main(int argc, char **argv)
 	g_win.panel.resize(win_w, win_h);
 	apply_layout(layout_path, false);
 	g_win.panel.resize(win_w, win_h);
-	br.set_gain(1.0f);
+	{
+		// VOLUME のつまみは前に閉じたときの位置から
+		std::string a, b, c, d, e;
+		float volume = 1.0f;
+		load_settings(a, b, c, d, e, &volume);
+		br.set_gain(volume);
+	}
 
 	eng.publish();
 	ShowWindow(hwnd, SW_SHOW);
@@ -1015,6 +1027,7 @@ int main(int argc, char **argv)
 		boot_thread.join();
 	if (g_win.reboot.joinable())
 		g_win.reboot.join();
+	save_settings();   // VOLUME のつまみの位置
 	// 音はもう止まっている。起動できていたときだけ残す
 	if (eng.state.load() == 1 && !smu2000::nvram::save(eng.mu))
 		std::fprintf(stderr, "設定を残せなかった: %s\n", smu2000::nvram::path(eng.mu).c_str());
