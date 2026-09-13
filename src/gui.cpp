@@ -235,6 +235,7 @@ struct window_state {
 	std::string in_keep, in_keep_b, out_keep, out_keep_b, out_keep_mu;
 	std::string last_error;            // 品書きから選んで開けなかったときの理由
 	u64 reported_drops = 0;            // 画面の糸が最後に知らせた、捨てた MIDI の量
+	bool keep_settings = false;        // gui.ini を書き換えない（--nomidi）
 
 
 	// 二重書き用
@@ -312,6 +313,8 @@ void load_settings(std::string &in_name, std::string &in_name_b,
 
 void save_settings()
 {
+	if (g_win.keep_settings)                 // --nomidi。覚えている口を消さない
+		return;
 	const std::string path = settings_path();
 	if (path.empty())
 		return;
@@ -929,7 +932,12 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--midiout") && i + 1 < argc) mout_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout-b") && i + 1 < argc) moutb_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout-mu") && i + 1 < argc) moutmu_dev = std::atoi(argv[++i]);
-		else if (!std::strcmp(argv[i], "--nomidi")) { midi_dev = -1; midib_dev = -1; }
+		// 入口も出口も開かない。試しに動かすとき、覚えている THRU の先（実機）へ
+		// 流れないように。覚えている口は書き換えない
+		else if (!std::strcmp(argv[i], "--nomidi")) {
+			midi_dev = midib_dev = mout_dev = moutb_dev = moutmu_dev = -1;
+			g_win.keep_settings = true;
+		}
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
