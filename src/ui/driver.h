@@ -10,6 +10,7 @@
 
 #include "bridge.h"
 #include "mu2000.h"
+#include "xg/ram.h"
 
 #include <cstdio>
 
@@ -38,6 +39,7 @@ public:
 		u8 b;
 		while (br.take_midi(b)) {
 			mu.midi_in(b);
+			watch(b, 0);
 			echo(b);
 		}
 		// パラメータの層の問い合わせ。外へは流さない
@@ -75,6 +77,47 @@ public:
 			mu.turn_encoder(step);
 	}
 
+	// 音源へ入れた MIDI を 1 バイトずつ見せる。押さえている鍵とベロシティを写しに書く
+	// （音源の中の鍵の状態はきれいに取り出せないので、入口で数える）
+	void watch(u8 b, int port)
+	{
+		port = port ? 1 : 0;
+		if (b >= 0xf8)
+			return;                           // リアルタイム
+		if (b == 0xf0) { m_sysex[port] = true; return; }
+		if (m_sysex[port]) {
+			if (b & 0x80) m_sysex[port] = false;   // F7 か、途中で別のものが来た
+			if (b == 0xf7) return;
+		}
+		if (b & 0x80) {
+			m_status[port] = b < 0xf0 ? b : 0;    // F1-F7 は無視して、ランニングステータスも捨てる
+			m_have[port] = 0;
+			return;
+		}
+		const u8 st = m_status[port];
+		if (!st)
+			return;
+		const u8 kind = st & 0xf0;
+		m_data[port][m_have[port]++] = b;
+		const int need = (kind == 0xc0 || kind == 0xd0) ? 1 : 2;
+		if (m_have[port] < need)
+			return;
+		m_have[port] = 0;
+		const int slot = port * 16 + (st & 0x0f);
+		const u8 d0 = m_data[port][0], d1 = m_data[port][1];
+		u64 &bits = m_xg.notes[slot][d0 >> 6];
+		const u64 bit = u64(1) << (d0 & 63);
+		if (kind == 0x90 && d1) {
+			bits |= bit;
+			m_xg.velocity[slot] = d1;
+			m_xg.note_ons[slot]++;
+		} else if (kind == 0x80 || kind == 0x90) {
+			bits &= ~bit;
+		} else if (kind == 0xb0 && (d0 == 120 || d0 == 123)) {
+			m_xg.notes[slot][0] = m_xg.notes[slot][1] = 0;   // オールサウンドオフ・オールノートオフ
+		}
+	}
+
 	// ブロックの終わりで。25ms ごとに LCD と LED を画面へ渡す
 	void publish(mu2000 &mu, bridge &br, u32 frames, u32 rate,
 	             bool ready, const char *message)
@@ -85,6 +128,20 @@ public:
 			return;
 		m_since = 0;
 		publish_now(mu, br, ready, message);
+		if (ready)
+			publish_xg(mu, br);
+	}
+
+	// firmware のワーク RAM から XG の値を写す（xg/ram.h）
+	void publish_xg(mu2000 &mu, bridge &br)
+	{
+		const std::vector<u8> &ram = mu.nvram();
+		std::memcpy(m_xg.system, ram.data() + xg::ram::SYSTEM, XG_SYSTEM_SIZE);
+		std::memcpy(m_xg.effect, ram.data() + xg::ram::EFFECT, XG_EFFECT_SIZE);
+		for (int p = 0; p < XG_PARTS; p++)
+			std::memcpy(m_xg.parts[p], ram.data() + xg::ram::part_base(p), XG_PART_COPY);
+		m_xg.serial++;
+		br.publish_xg(m_xg);
 	}
 
 	static void publish_now(mu2000 &mu, bridge &br, bool ready, const char *message)
@@ -117,6 +174,10 @@ public:
 private:
 	u64 m_applied = 0;
 	u64 m_since = 0;
+	xg_snapshot m_xg;                        // 音声の糸だけが触る
+	u8   m_status[2] = {}, m_data[2][2] = {};
+	int  m_have[2] = {};
+	bool m_sysex[2] = {};
 };
 
 } // namespace ui

@@ -16,10 +16,6 @@ namespace {
 
 constexpr int PARTS = 32;
 
-// 選んでいるパートは 1 秒ごと、一覧に出す 32 パートは 3 秒ごとに読み返す。
-// 塊 1 つは 20ms ほどで、層は 1 つずつしか頼まないので、32 個で 1 秒弱かかる
-constexpr u64 PART_MS = 1000;
-constexpr u64 ALL_MS  = 3000;
 
 const xg::param &P(const char *key)
 {
@@ -102,19 +98,6 @@ ImU32 col(ImGuiCol c, float alpha = 1.0f) { return ImGui::GetColorU32(c, alpha);
 
 } // namespace
 
-
-void pc_editor::request(xg::model &m, u64 now)
-{
-	if (now >= m_part_at) {
-		m.want_part(m_part);
-		m_part_at = now + PART_MS;
-	}
-	if (now >= m_all_at) {
-		for (int i = 0; i < PARTS; i++)
-			m.want_part(i);
-		m_all_at = now + ALL_MS;
-	}
-}
 
 void pc_editor::write(const xg::param &p, int part, int v, xg::model &m, bridge &br)
 {
@@ -342,7 +325,6 @@ void pc_editor::part_list(xg::model &m, bridge &br)
 		const std::string name = part_name(i);
 		if (ImGui::Selectable(name.c_str(), m_part == i, ImGuiSelectableFlags_SpanAllColumns)) {
 			m_part = i;
-			m_part_at = 0;                           // すぐ読み返す
 		}
 		if (ImGui::BeginPopupContextItem("program")) {
 			program_menu(i, m, br);
@@ -404,7 +386,6 @@ void pc_editor::mixer(xg::model &m, bridge &br)
 			ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 1.1f));  // 名前をつまみの真ん中あたりへ
 		if (ImGui::Selectable(part_name(i).c_str(), m_part == i)) {
 			m_part = i;
-			m_part_at = 0;
 		}
 		for (const char *key : COLS) {
 			ImGui::TableNextColumn();
@@ -485,7 +466,6 @@ void pc_editor::part_page(xg::model &m, bridge &br)
 
 void pc_editor::draw(xg::model &m, bridge &br)
 {
-	request(m, br.audio_ms());
 	m_wheel_taken = false;
 
 	const ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -501,8 +481,6 @@ void pc_editor::draw(xg::model &m, bridge &br)
 	if (ImGui::Button("XG リセット")) {
 		static const u8 XG_ON[] = { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00, 0xf7 };
 		br.send(XG_ON, sizeof(XG_ON));
-		m.forget();
-		m_part_at = m_all_at = 0;
 	}
 	ImGui::SameLine();
 	if (ImGui::Button("オールノートオフ")) {

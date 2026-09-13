@@ -83,6 +83,18 @@ public:
 		}
 	}
 
+	void read_xg(xg_snapshot &out) const
+	{
+		for (;;) {
+			const unsigned a = m_xg_seq.load(std::memory_order_acquire);
+			if (a & 1)
+				continue;
+			std::memcpy(&out, &m_xg, sizeof(out));
+			if (m_xg_seq.load(std::memory_order_acquire) == a)
+				return;
+		}
+	}
+
 	// ---- 音源から
 
 	u64 buttons() const { return m_buttons.load(std::memory_order_relaxed); }
@@ -111,6 +123,14 @@ public:
 		const int step = (v > 0) ? 1 : -1;
 		m_wheel.fetch_sub(step, std::memory_order_relaxed);
 		return step;
+	}
+
+	// XG の値の写し（25ms ごと）。書き手は音声の糸だけ
+	void publish_xg(const xg_snapshot &s)
+	{
+		m_xg_seq.fetch_add(1, std::memory_order_release);
+		std::memcpy(&m_xg, &s, sizeof(m_xg));
+		m_xg_seq.fetch_add(1, std::memory_order_release);
 	}
 
 	void publish(const snapshot &s)
@@ -173,6 +193,8 @@ private:
 	std::atomic<float>    m_gain{1.0f};
 	std::atomic<unsigned> m_seq{0};
 	snapshot              m_snap;
+	std::atomic<unsigned> m_xg_seq{0};
+	xg_snapshot           m_xg;
 };
 
 } // namespace ui

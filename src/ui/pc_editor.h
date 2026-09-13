@@ -20,12 +20,10 @@ namespace ui {
 class pc_editor
 {
 public:
-	// 窓いっぱいに描く。層への問い合わせ（want_*）もここで積む。
-	// 実際に送るのは model::poll を回している側（panel::tick）
+	// 窓いっぱいに描く。値は panel::tick が RAM の写しから層に入れている
 	void draw(xg::model &m, bridge &br);
 
 private:
-	void request(xg::model &m, u64 now);
 	void part_list(xg::model &m, bridge &br);
 	void program_menu(int part, xg::model &m, bridge &br);
 	void mixer(xg::model &m, bridge &br);
@@ -39,8 +37,6 @@ private:
 
 	int  m_part = 0;
 	bool m_knobs = false;       // つまみで出すか。普段は数だけ
-	u64  m_part_at = 0;         // 次に選んでいるパートを読み返す時刻（音源の時計）
-	u64  m_all_at = 0;          // 次に 32 パート全部を読み返す時刻
 	double m_scrolled_at = -1;  // 最後にホイールで表をスクロールした時刻（ImGui の時計）
 	bool m_wheel_taken = false; // このコマでつまみがホイールを取ったか
 };

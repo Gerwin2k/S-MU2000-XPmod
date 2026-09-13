@@ -12,6 +12,7 @@
 
 #include "panel.h"
 #include "draw.h"
+#include "xg/ram.h"
 
 #include <algorithm>
 #include <cmath>
@@ -52,10 +53,6 @@ constexpr int KNOB_COUNT = int(sizeof(KNOBS) / sizeof(KNOBS[0]));
 
 constexpr int PARTS = 32;
 
-// 何も起きていなくても、見えている塊をこの間隔で読み返す。
-// firmware は変わったことを自分からは知らせないので、パネルや曲が変えたものは
-// これで拾う。塊 1 つは 31250bps の線で 20ms もかからない
-constexpr u64 REFRESH_MS = 1000;
 
 } // namespace
 
@@ -90,28 +87,19 @@ void panel::set_value(int ctl, int v, bridge &br)
 
 bool panel::tick(bridge &br)
 {
-	const u64 before = m_xg.accepted();
-	u8 b;
-	while (br.take_out(b))
-		m_xg.feed(b);
-
+	// 値は MU2000 に問い合わせずに、音声の糸が 25ms ごとに写すワーク RAM から読む
+	// （xg/ram.h）。問い合わせは MIDI IN に入るので、LCD の受信マークが点きっぱなしになる
+	br.read_xg(m_ram);
+	if (m_ram.serial == m_ram_serial)
+		return false;
+	m_ram_serial = m_ram.serial;
 	const u64 now = br.audio_ms();
-	if (m_page != page::front && now >= m_refresh_at) {
-		if (m_page == page::editor) {
-			m_xg.want_part(m_part);
-		} else {
-			// エフェクトの面。システムの塊 1 つとインサーション 2 つ
-			m_xg.want_dump(xg::pack(0x02, 0x01, 0x00));   // リバーブ
-			m_xg.want_dump(xg::pack(0x02, 0x01, 0x20));   // コーラス
-			m_xg.want_dump(xg::pack(0x02, 0x01, 0x40));   // バリエーション
-			m_xg.want_dump(xg::pack(0x03, 0x00, 0x00));   // インサーション 1
-			m_xg.want_dump(xg::pack(0x03, 0x01, 0x00));   // インサーション 2
-		}
-		m_refresh_at = now + REFRESH_MS;
-	}
-	// 面を閉じても、頼みかけたものは最後まで片づける
-	br.ask(m_xg.poll(now));
-	return m_xg.accepted() != before;
+	m_xg.load(xg::pack(0x00, 0x00, 0x00), m_ram.system, XG_SYSTEM_SIZE, now);
+	for (const xg::ram::block &blk : xg::ram::EFFECTS)
+		m_xg.load(xg::pack(blk.hi, blk.mid, blk.lo), m_ram.effect + (blk.ram - xg::ram::EFFECT), blk.size, now);
+	for (int p = 0; p < XG_PARTS; p++)
+		m_xg.load(xg::pack(0x08, u8(p), 0x00), m_ram.parts[p], xg::ram::PART_XG_SIZE, now);
+	return true;
 }
 
 
@@ -243,7 +231,6 @@ bool panel::press(int x, int y, bridge &br)
 		m_page = (sp->ctl == CTL_TAB_EDIT) ? page::editor
 		       : (sp->ctl == CTL_TAB_FX)   ? page::effects : page::front;
 		build_spots();
-		refresh_soon();
 		return true;
 
 	case spot_kind::button:
@@ -266,7 +253,6 @@ bool panel::press(int x, int y, bridge &br)
 
 	case spot_kind::part:
 		m_part = sp->ctl - CTL_PART;
-		refresh_soon();
 		return true;
 
 	case spot_kind::knob: {
@@ -291,11 +277,9 @@ bool panel::press(int x, int y, bridge &br)
 	case spot_kind::action:
 		if (sp->ctl == CTL_XG_RESET) {
 			// XG システムオン。実機の電源投入直後と同じ状態に戻す。
-			// 写しは全部古くなるので捨て、firmware が片づけ終わる頃に読み直す
+			// 値は次に RAM を写したときに入れ替わる
 			const u8 xg[9] = { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00, 0xf7 };
 			br.send(xg, 9);
-			m_xg.forget();
-			m_refresh_at = br.audio_ms() + 300;
 		} else if (sp->ctl == CTL_ALL_OFF) {
 			for (int p = 0; p < 16; p++) {
 				const u8 msg[6] = { u8(0xb0 | p), 120, 0, u8(0xb0 | p), 123, 0 };
@@ -373,7 +357,6 @@ bool panel::wheel_at(int x, int y, int delta, bridge &br)
 	// ホイールをどこで回しても VALUE を 1 回叩いたのと同じになる
 	br.turn(delta);
 	m_wheel_angle = (m_wheel_angle + delta * 15) % 360;
-	refresh_soon();                            // パネルで何か変えたかもしれない
 	return true;
 }
 
