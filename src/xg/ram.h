@@ -43,7 +43,8 @@ constexpr u32 PART_MOD  = 0x7d;     // CC1
 constexpr u32 PART_EXP  = 0x7e;     // CC11
 constexpr u32 PART_BEND = 0x80;     // ピッチベンドの MSB の半分（0x20 が真ん中）
 constexpr u32 PART_HOLD = 0xd9;     // CC64。0 か 1
-constexpr u32 PART_COPY = 0xe0;     // 画面へ写す長さ（上の全部を含む）
+constexpr u32 PART_VOICE = 0xf8;    // 選んでいる音色の記録を指す値（ROM の中。xg/voices.h）
+constexpr u32 PART_COPY = 0x100;    // 画面へ写す長さ（上の全部を含む）
 
 // エフェクトの塊。xg は XG の番地の先頭、ram はワーク RAM での先頭
 struct block { u8 hi, mid, lo; u32 size; u32 ram; };

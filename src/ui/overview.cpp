@@ -231,12 +231,37 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		const bool has_rcv = m.get(P("part.rcv_channel"), part, rcv);
 		const std::string name = part_name(part);
 		dl->AddText(ImVec2(pos.x + fs * 0.3f, pos.y + fs * 0.1f), col(ImGuiCol_Text), name.c_str());
-		const std::string vt = voice ? voice_text(msb, lsb, prog) : "--";
+		// 音色の名前と楽器の絵。利用者の ROM から読めれば MU2000 の本当の名前、
+		// 読めなければ GM の名前（xg/voices.h）
+		std::string vt = voice ? voice_text(msb, lsb, prog) : "--";
+		const xg::voice_rom *vr = voices();
+		const u8 *blk = ram.parts[part];
+		if (voice && vr) {
+			const std::string real = vr->name(blk, msb, prog);
+			if (!real.empty()) {
+				char buf[40];
+				std::snprintf(buf, sizeof(buf), "%3d  %s", prog + 1, real.c_str());
+				vt = buf;
+			}
+		}
 		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
-		dl->AddText(ImVec2(pos.x + fs * 2.4f, pos.y + fs * 0.1f), col(ImGuiCol_Text), vt.c_str());
+		const float icon_x = pos.x + fs * 2.2f;
+		const float dot = std::max(1.0f, std::floor((h - fs * 0.3f) / 16.0f));
+		u16 rows[16];
+		if (voice && vr && vr->icon(blk, msb, prog, rows)) {
+			const float top = pos.y + (h - dot * 16) * 0.5f;
+			const ImU32 ink = col(ImGuiCol_Text, 0.85f);
+			for (int y = 0; y < 16; y++)
+				for (int x = 0; x < 16; x++)
+					if ((rows[y] >> (15 - x)) & 1)
+						dl->AddRectFilled(ImVec2(icon_x + x * dot, top + y * dot),
+						                  ImVec2(icon_x + (x + 1) * dot, top + (y + 1) * dot), ink);
+		}
+		const float text_x = icon_x + dot * 16 + fs * 0.4f;
+		dl->AddText(ImVec2(text_x, pos.y + fs * 0.1f), col(ImGuiCol_Text), vt.c_str());
 		char sub[64];
 		std::snprintf(sub, sizeof(sub), "受信 %s   M %d  L %d", has_rcv ? channel_name(rcv).c_str() : "--", msb, lsb);
-		dl->AddText(ImVec2(pos.x + fs * 2.4f, pos.y + fs * 1.15f), col(ImGuiCol_TextDisabled), sub);
+		dl->AddText(ImVec2(text_x, pos.y + fs * 1.15f), col(ImGuiCol_TextDisabled), sub);
 		dl->PopClipRect();
 	}
 

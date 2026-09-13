@@ -49,6 +49,19 @@ const char *const GM_GROUPS[16] = {
 } // namespace
 
 
+namespace {
+std::unique_ptr<xg::voice_rom> g_voices;
+}
+
+void set_voice_rom(std::shared_ptr<const std::vector<u8>> rom)
+{
+	g_voices = std::make_unique<xg::voice_rom>(std::move(rom));
+	if (!g_voices->ok())
+		g_voices.reset();                  // 版が違う。GM の名前で出す
+}
+
+const xg::voice_rom *voices() { return g_voices.get(); }
+
 const xg::param &P(const char *key)
 {
 	const xg::param *p = xg::find(key);

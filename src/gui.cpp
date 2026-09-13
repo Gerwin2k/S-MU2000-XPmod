@@ -1014,6 +1014,8 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "%s\n", eng.message.c_str());
 		return 1;
 	}
+	// 一覧の窓で、音色の名前と楽器の絵を利用者の ROM から読む（xg/voices.h）
+	ui::xgui::set_voice_rom(eng.mu.program_rom());
 
 	// 絵だけ、ただし起動後の LCD が欲しい場合
 	if (!shot_path.empty()) {

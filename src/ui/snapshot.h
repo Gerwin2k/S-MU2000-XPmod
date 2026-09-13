@@ -46,7 +46,7 @@ struct snapshot {
 // XG の値の写し。音声の糸が firmware のワーク RAM から 25ms ごとに写す（xg/ram.h）。
 // 画面は MU2000 に問い合わせずにこれを読む
 constexpr int XG_PARTS = 32;
-constexpr int XG_PART_COPY = 0xe0;      // xg::ram::PART_COPY
+constexpr int XG_PART_COPY = 0x100;     // xg::ram::PART_COPY
 constexpr int XG_SYSTEM_SIZE = 7;
 constexpr int XG_EFFECT_SIZE = 0x156;   // xg::ram::EFFECT_SIZE
 

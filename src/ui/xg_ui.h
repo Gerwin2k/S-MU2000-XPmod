@@ -10,6 +10,7 @@
 #include "bridge.h"
 #include "snapshot.h"
 #include "xg/model.h"
+#include "xg/voices.h"
 
 #include <string>
 
@@ -35,6 +36,10 @@ std::string part_name(int part);        // A1-A16・B1-B16
 std::string channel_name(int value);    // 受信チャンネル。127 は OFF
 const char *gm_name(int program);       // General MIDI の楽器名（規格の名前）
 std::string voice_text(int msb, int lsb, int program);
+
+// 音色の名前と絵を読む ROM。音源を読み込んだあとで 1 回渡す（無ければ GM の名前で出す）
+void set_voice_rom(std::shared_ptr<const std::vector<u8>> rom);
+const xg::voice_rom *voices();
 
 // 左クリックでパートを選び、右クリックで出す品書き（プログラムとバンク）
 void program_menu(int part, xg::model &m, bridge &br);
