@@ -4,7 +4,7 @@
 // 曲を流しながら全体のバランスを見て整える。
 //
 // 1 行に: パートと音色、VEL メーター、VOL / EXP / PAN / P.BEND / MOD / HOLD の棒と数、
-// VIB / FILTER / EQ / EG の絵（点をつまんで変える）、INS、REV / CHO / VAR の棒と数、鳴っている鍵盤。
+// VIB / FILTER / EG / EQ の絵（点をつまんで変える）、INS、VAR / CHO / REV の棒と数、鳴っている鍵盤。
 // 値は RAM の写し（panel::tick が層に入れたもの）と、MIDI の見張り（押さえている鍵）から。
 
 #ifndef S_MU2000_UI_OVERVIEW_H

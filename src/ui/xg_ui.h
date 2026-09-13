@@ -47,6 +47,12 @@ const xg::voice_rom *voices();
 // ram は音色の引き方を知るため（無ければ XG の既定）
 void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br);
 
+// ---- インサーションの設定の窓を開く頼み。一覧が出して、gui がタイマーで拾って窓を出す
+void request_fx(int slot);              // slot は 1-4
+bool take_fx_request();                 // 頼みがあれば true（1 回だけ）
+int  fx_window_slot();                         // 設定の窓で見ているインサーション（1-4）
+void set_fx_window_slot(int slot);
+
 // ---- 説明（ヘルプ）。見出しや名前にカーソルを当てると、何に効くのかを出す（日本語・英語）。
 // 邪魔な人もいるので、窓の上のチェックボックスで消せる。選んだ状態は
 // %LOCALAPPDATA%\S-MU2000\editor.ini に覚えておく（窓どうしで共通）

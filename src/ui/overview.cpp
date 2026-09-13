@@ -105,8 +105,9 @@ struct overview::column {
 	const char *key;      // from が param のとき
 };
 
-// 列の並び。Domino の並び（VOL EXP PAN P.BEND MOD HOLD CUT RESO REV CHO DLY）に倣い、
-// DLY の代わりに XG の VAR（バリエーションの送り）
+// 列の並び。前半は Domino の並び（VOL EXP PAN P.BEND MOD HOLD）。後半は音の流れの順に、
+// 音色を作るもの（揺れ → フィルタ → 音量の形 → パートの EQ）、インサーション、
+// 送り（バリエーション → コーラス → リバーブ。前のものは後ろへも送れる）
 static const overview::column COLUMNS[] = {
 	{ "VOL",    src::param, "part.volume" },
 	{ "EXP",    src::exp,   nullptr },
@@ -116,12 +117,12 @@ static const overview::column COLUMNS[] = {
 	{ "HOLD",   src::hold,  nullptr },
 	{ "VIB",    src::vib,   nullptr },          // ビブラートの速さ・深さ・掛かり始めを 1 マスで
 	{ "FILTER", src::filter, nullptr },         // カットオフとレゾナンスを 1 マスで（Domino の CUT RESO）
-	{ "EQ",     src::eq,    nullptr },          // パートの EQ（低音・高音の周波数とゲイン）を 1 マスで
 	{ "EG",     src::eg,    nullptr },          // アタック・ディケイ・リリースを 1 マスで
+	{ "EQ",     src::eq,    nullptr },          // パートの EQ（低音・高音の周波数とゲイン）を 1 マスで
 	{ "INS",    src::ins,   nullptr },          // 掛かっているインサーション
-	{ "REV",    src::param, "part.reverb_send" },
-	{ "CHO",    src::param, "part.chorus_send" },
 	{ "VAR",    src::param, "part.variation_send" },
+	{ "CHO",    src::param, "part.chorus_send" },
+	{ "REV",    src::param, "part.reverb_send" },
 };
 static constexpr int NCOLS = int(sizeof(COLUMNS) / sizeof(COLUMNS[0]));
 
@@ -414,6 +415,8 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
 		ImGui::PushID(f.id);
 		ImGui::InvisibleButton("##fx", ImVec2(w, line), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 		const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+		if (f.id <= 4 && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+			request_fx(f.id);                    // 設定の窓を出す
 		if (ImGui::BeginDragDropSource()) {
 			ImGui::SetDragDropPayload(DRAG_FX, &f.id, sizeof(f.id));
 			ImGui::Text("%s（%s）を移す", f.title, name.c_str());
@@ -425,7 +428,8 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
 			ImGui::EndPopup();
 		}
 		if (ImGui::IsItemHovered() && !ImGui::IsDragDropActive())
-			ImGui::SetItemTooltip("%s: %s\nドラッグで別のパートへ・右クリックで種類や外す", f.title, on[i].name.c_str());
+			ImGui::SetItemTooltip(f.id <= 4 ? "%s: %s\nダブルクリックで設定の窓・ドラッグで別のパートへ・右クリックで種類や外す"
+			                                : "%s: %s\nドラッグで別のパートへ・右クリックで種類や外す", f.title, on[i].name.c_str());
 		ImGui::PopID();
 
 		dl->AddRectFilled(ImVec2(pos.x + fs * 0.2f, y + 1), ImVec2(pos.x + fs * 0.2f + bw, y + fs), f.color, 3.0f);
@@ -990,7 +994,7 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		u16 rows[16];
 		if (vr) {
 			// パネルの LCD と同じ色（draw.h の LCD_BACK / LCD_GHOST / LCD_DOT）。
-			// 絵の無いもの（ドラム）も、LCD の枠だけ出して並びを揃える
+			// 絵が引けないもの（ROM の版が違うなど）も、LCD の枠だけ出して並びを揃える
 			static const ImU32 LCD_BACK  = IM_COL32(150, 205, 45, 255);
 			static const ImU32 LCD_GHOST = IM_COL32(140, 194, 44, 255);
 			static const ImU32 LCD_DOT   = IM_COL32(18, 22, 14, 255);
@@ -1203,6 +1207,8 @@ void overview::insertion_cell(int slot_index, xg::model &m, bridge &br, float h)
 	const bool has_type = m.get(P(f.type_key), 0, type);
 	const std::string name = has_type ? xg::fx_name(type) : "--";
 	const int where = fx_target(f, m);
+	if (f.id <= 4 && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+		request_fx(f.id);                        // 設定の窓を出す
 	if (ImGui::BeginDragDropSource()) {
 		ImGui::SetDragDropPayload(DRAG_FX, &f.id, sizeof(f.id));
 		ImGui::Text("%s（%s）を掛けるパートの INS 欄へ", f.title, name.c_str());
@@ -1224,7 +1230,7 @@ void overview::insertion_cell(int slot_index, xg::model &m, bridge &br, float h)
 		ImGui::EndPopup();
 	}
 	if (ImGui::IsItemHovered() && !ImGui::IsDragDropActive())
-		ImGui::SetItemTooltip("%s: %s → %s\n右クリックで種類と掛けるパート・つかんでパートの INS 欄へ",
+		ImGui::SetItemTooltip("%s: %s → %s\nダブルクリックで設定の窓・右クリックで種類と掛けるパート・つかんでパートの INS 欄へ",
 		                      f.title, name.c_str(), where >= 0 ? part_name(where).c_str() : "OFF");
 	ImGui::PopID();
 
@@ -1258,13 +1264,14 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 		return;
 	ImGui::TableSetupColumn("マスター", ImGuiTableColumnFlags_WidthFixed, fs * 17);
 	ImGui::TableSetupColumn("M.VOL", ImGuiTableColumnFlags_WidthFixed, fs * 3.4f);
-	ImGui::TableSetupColumn("REVERB", ImGuiTableColumnFlags_WidthFixed, fs * 7.5f);
-	ImGui::TableSetupColumn("CHORUS", ImGuiTableColumnFlags_WidthFixed, fs * 7.5f);
-	ImGui::TableSetupColumn("VARIATION", ImGuiTableColumnFlags_WidthFixed, fs * 9.5f);
+	// 音の流れの順（インサーション → バリエーション → コーラス → リバーブ → マスター EQ）
 	ImGui::TableSetupColumn("INS 1", ImGuiTableColumnFlags_WidthFixed, fs * 7);
 	ImGui::TableSetupColumn("INS 2", ImGuiTableColumnFlags_WidthFixed, fs * 7);
 	ImGui::TableSetupColumn("INS 3", ImGuiTableColumnFlags_WidthFixed, fs * 7);
 	ImGui::TableSetupColumn("INS 4", ImGuiTableColumnFlags_WidthFixed, fs * 7);
+	ImGui::TableSetupColumn("VARIATION", ImGuiTableColumnFlags_WidthFixed, fs * 9.5f);
+	ImGui::TableSetupColumn("CHORUS", ImGuiTableColumnFlags_WidthFixed, fs * 7.5f);
+	ImGui::TableSetupColumn("REVERB", ImGuiTableColumnFlags_WidthFixed, fs * 7.5f);
 	ImGui::TableSetupColumn("MASTER EQ", ImGuiTableColumnFlags_WidthFixed, fs * 11);
 	ImGui::TableSetupColumn("##mkeys", ImGuiTableColumnFlags_WidthStretch);
 	headers_with_help(NCOL);
@@ -1290,16 +1297,16 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 
 	ImGui::TableNextColumn();
 	cell(column_of("VOL"), -1, m, ram, br, ImGui::GetContentRegionAvail().x, h);
-	ImGui::TableNextColumn();
-	system_fx_cell("リバーブ", xg::REV_TYPES, "reverb.type", "REV", false, m, ram, br, h);
-	ImGui::TableNextColumn();
-	system_fx_cell("コーラス", xg::CHO_TYPES, "chorus.type", "CHO", false, m, ram, br, h);
-	ImGui::TableNextColumn();
-	system_fx_cell("バリエーション", xg::INS_TYPES, "variation.type", "VAR", true, m, ram, br, h);
 	for (int i = 0; i < 4; i++) {
 		ImGui::TableNextColumn();
 		insertion_cell(i, m, br, h);
 	}
+	ImGui::TableNextColumn();
+	system_fx_cell("バリエーション", xg::INS_TYPES, "variation.type", "VAR", true, m, ram, br, h);
+	ImGui::TableNextColumn();
+	system_fx_cell("コーラス", xg::CHO_TYPES, "chorus.type", "CHO", false, m, ram, br, h);
+	ImGui::TableNextColumn();
+	system_fx_cell("リバーブ", xg::REV_TYPES, "reverb.type", "REV", false, m, ram, br, h);
 	ImGui::TableNextColumn();
 	master_eq_cell(m, br, h);
 

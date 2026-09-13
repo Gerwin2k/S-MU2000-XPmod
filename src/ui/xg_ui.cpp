@@ -4,6 +4,7 @@
 
 #include "imgui.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -62,6 +63,16 @@ void set_voice_rom(std::shared_ptr<const std::vector<u8>> rom)
 }
 
 const xg::voice_rom *voices() { return g_voices.get(); }
+
+namespace {
+int  g_fx_slot = 1;
+bool g_fx_request = false;
+}
+
+void request_fx(int slot) { g_fx_slot = std::clamp(slot, 1, 4); g_fx_request = true; }
+bool take_fx_request() { const bool r = g_fx_request; g_fx_request = false; return r; }
+int  fx_window_slot() { return g_fx_slot; }
+void set_fx_window_slot(int slot) { g_fx_slot = std::clamp(slot, 1, 4); }
 
 const xg::param &P(const char *key)
 {

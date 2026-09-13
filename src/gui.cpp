@@ -31,6 +31,7 @@
 #include "ui/midi_out.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
+#include "ui/fx_editor.h"
 #include "ui/overview.h"
 #include "ui/pc_editor.h"
 #include "ui/pc_window.h"
@@ -210,6 +211,7 @@ struct window_state {
 	ui::panel   panel;
 	ui::pc_window pc{ std::make_unique<ui::pc_editor>() };    // PC エディタ（F2 か右クリック）
 	ui::pc_window list{ std::make_unique<ui::overview>() };   // 一覧（F3 か右クリック）
+	ui::pc_window fx{ std::make_unique<ui::fx_editor>() };    // インサーションの設定（一覧でダブルクリック）
 	ui::bridge *br = nullptr;
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
@@ -642,6 +644,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			g_win.panel.tick(*g_win.br);
 			g_win.pc.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 			g_win.list.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			g_win.fx.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			// 一覧でインサーションの欄をダブルクリックされたら、設定の窓を出す
+			if (ui::xgui::take_fx_request())
+				open_window(hwnd, g_win.fx);
 		}
 		InvalidateRect(hwnd, nullptr, FALSE);
 		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
@@ -900,6 +906,7 @@ int main(int argc, char **argv)
 	bool factory = false;
 	bool open_editor = false;          // 起動したら PC エディタも出す
 	bool open_list = false;            // 起動したら一覧も出す
+	bool open_fx = false;              // 起動したらインサーションの設定の窓も出す
 	int win_w = 1000, win_h = 400;   // パネルの論理寸法（1000 × 400）と同じ比
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
@@ -944,6 +951,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--factory")) factory = true;
 		else if (!std::strcmp(argv[i], "--editor")) open_editor = true;
 		else if (!std::strcmp(argv[i], "--list-window")) open_list = true;
+		else if (!std::strcmp(argv[i], "--fx-window")) open_fx = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -999,6 +1007,7 @@ int main(int argc, char **argv)
 			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
 			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
 			"        [--list-window] 一覧の窓も開く（窓では F3 か右クリック）\n"
+			"        [--fx-window] インサーションの設定の窓も開く（一覧でインサーションの欄をダブルクリック）\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1000x400]\n");
@@ -1104,6 +1113,8 @@ int main(int argc, char **argv)
 	ShowWindow(hwnd, SW_SHOW);
 	if (open_editor)
 		open_window(hwnd, g_win.pc);
+	if (open_fx)
+		open_window(hwnd, g_win.fx);
 	if (open_list)
 		open_window(hwnd, g_win.list);
 	UpdateWindow(hwnd);
