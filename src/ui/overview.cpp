@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -53,22 +54,51 @@ static const overview::column COLUMNS[] = {
 };
 static constexpr int NCOLS = int(sizeof(COLUMNS) / sizeof(COLUMNS[0]));
 
+// マスターの行で、その列に出すもの。無ければ空欄
+static const char *master_key(const char *title)
+{
+	if (!std::strcmp(title, "VOL")) return "system.master_volume";
+	if (!std::strcmp(title, "REV")) return "reverb.return";
+	if (!std::strcmp(title, "CHO")) return "chorus.return";
+	if (!std::strcmp(title, "VAR")) return "variation.return";
+	return nullptr;
+}
+
 
 void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &ram, bridge &br,
                     float w, float h)
 {
 	ImGuiIO &io = ImGui::GetIO();
 	const float fs = ImGui::GetFontSize();
-	const u8 *blk = ram.parts[part];
+
+	// part が -1 ならマスターの行。列ごとに、システムやエフェクトの戻りの値を出す
+	const bool master = part < 0;
+	src from = c.from;
+	const char *key = c.key;
+	if (master) {
+		key = master_key(c.title);
+		from = src::param;
+		if (!key) {
+			ImGui::Dummy(ImVec2(w, h));
+			return;
+		}
+	}
+	const int at = master ? 0 : part;
+	const u8 *blk = master ? nullptr : ram.parts[part];
+
+	// バリエーションの接続が INSERTION のとき、送り（パートの VAR）も戻り（マスターの VAR）も
+	// 使われない。触れはするが薄く出す
+	int conn = 1;
+	const bool dim = !std::strcmp(c.title, "VAR") && m.get(P("variation.connect"), 0, conn) && conn == 0;
 
 	// 値と、見せ方
 	int v = 0, lo = 0, hi = 127;
 	bool known = true, bipolar = false, editable = false;
 	std::string text;
-	const xg::param *p = c.from == src::param ? &P(c.key) : nullptr;
-	switch (c.from) {
+	const xg::param *p = from == src::param ? &P(key) : nullptr;
+	switch (from) {
 	case src::param:
-		known = m.get(*p, part, v);
+		known = m.get(*p, at, v);
 		lo = p->min; hi = p->max;
 		bipolar = p->how == xg::view::center || p->how == xg::view::pan;
 		editable = known;
@@ -116,7 +146,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 		if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			ImGui::OpenPopup("##type");
 		if (ImGui::BeginPopup("##type")) {
-			ImGui::TextDisabled("%s %s（%d-%d）", part_name(part).c_str(), p->label, lo, hi);
+			ImGui::TextDisabled("%s %s（%d-%d）", master ? "MASTER" : part_name(part).c_str(), p->label, lo, hi);
 			int &typed = *ImGui::GetStateStorage()->GetIntRef(ImGui::GetID("typed"), v);
 			if (ImGui::IsWindowAppearing()) { typed = v; ImGui::SetKeyboardFocusHere(); }
 			ImGui::SetNextItemWidth(fs * 6);
@@ -127,7 +157,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 			ImGui::EndPopup();
 		}
 		if (nv != v) {
-			br.send(m.set(*p, part, nv));
+			br.send(m.set(*p, at, nv));
 			text = xg::format(*p, nv);
 		}
 	}
@@ -141,8 +171,10 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 	dl->AddRectFilled(b0, b1, col(ImGuiCol_FrameBg));
 	if (known && hi > lo) {
 		const float frac = std::clamp(float(nv - lo) / float(hi - lo), 0.0f, 1.0f);
-		const ImU32 fill = editable ? col(active || hovered ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab)
-		                            : IM_COL32(200, 70, 60, 255);
+		ImU32 fill = editable ? col(active || hovered ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab)
+		                      : IM_COL32(200, 70, 60, 255);
+		if (dim)
+			fill = col(ImGuiCol_TextDisabled, 0.5f);
 		const float x = b0.x + (b1.x - b0.x) * frac;
 		if (bipolar) {
 			const float mid = (b0.x + b1.x) * 0.5f;
@@ -155,11 +187,16 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 		dl->AddRect(ImVec2(pos.x + 1, pos.y + 1), ImVec2(pos.x + w - 1, pos.y + h - 1), col(ImGuiCol_Border));
 	const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
 	dl->AddText(ImVec2(pos.x + w - pad - ts.x, b1.y + (pos.y + h - b1.y - ts.y) * 0.5f),
-	            known ? col(ImGuiCol_Text) : col(ImGuiCol_TextDisabled), text.c_str());
+	            known && !dim ? col(ImGuiCol_Text) : col(ImGuiCol_TextDisabled), text.c_str());
 
-	if (hovered && !active)
-		ImGui::SetItemTooltip(editable ? "%s  %s\n左右か上下にドラッグ・ホイール・ダブルクリックで打つ"
-		                               : "%s  %s\n演奏の値（表示だけ）", c.title, text.c_str());
+	if (hovered && !active) {
+		const char *what = master ? p->label : c.title;
+		if (dim)
+			ImGui::SetItemTooltip("%s  %s\nバリエーションの接続が INSERTION なので、この値は使われない", what, text.c_str());
+		else
+			ImGui::SetItemTooltip(editable ? "%s  %s\n左右か上下にドラッグ・ホイール・ダブルクリックで打つ"
+			                               : "%s  %s\n演奏の値（表示だけ）", what, text.c_str());
+	}
 	ImGui::PopID();
 }
 
@@ -312,6 +349,85 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 }
 
 
+void overview::master_row(xg::model &m, const xg_snapshot &ram, bridge &br, float h)
+{
+	const float fs = ImGui::GetFontSize();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	ImGui::PushID("master");
+
+	// ---- 名前。移調とマスターチューンも
+	ImGui::TableNextColumn();
+	{
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const float w = ImGui::GetContentRegionAvail().x;
+		ImGui::Dummy(ImVec2(w, h));
+		help_tip("MASTER");
+		dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), col(ImGuiCol_TableHeaderBg));
+		dl->AddText(ImVec2(pos.x + fs * 0.3f, pos.y + fs * 0.1f), col(ImGuiCol_Text), "MASTER");
+		int tr = 0x40, tune = 0x400;
+		char sub[64];
+		if (m.get(P("system.transpose"), 0, tr) && m.get(P("system.master_tune"), 0, tune))
+			std::snprintf(sub, sizeof(sub), "Transpose %s   Tune %s",
+			              xg::format(P("system.transpose"), tr).c_str(), xg::format(P("system.master_tune"), tune).c_str());
+		else
+			std::snprintf(sub, sizeof(sub), "--");
+		dl->AddText(ImVec2(pos.x + fs * 0.3f, pos.y + fs * 1.15f), col(ImGuiCol_TextDisabled), sub);
+	}
+
+	// ---- システムのエフェクトの種別。リバーブ・コーラス・バリエーション
+	ImGui::TableNextColumn();
+	{
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const float w = ImGui::GetContentRegionAvail().x;
+		ImGui::Dummy(ImVec2(w, h));
+		help_tip("MASTER.INS");
+		dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+		int type = 0, conn = 1, vpart = 127;
+		const bool system = m.get(P("variation.connect"), 0, conn) && conn == 1;
+		m.get(P("variation.part"), 0, vpart);
+		struct line { const char *mark; ImU32 color; const char *key; bool dim; };
+		const line lines[] = {
+			{ "R", IM_COL32(90, 160, 220, 255), "reverb.type", false },
+			{ "C", IM_COL32(90, 190, 150, 255), "chorus.type", false },
+			{ "V", IM_COL32(150, 110, 220, 255), "variation.type", !system },
+		};
+		const float lh = (h - fs * 0.2f) / 3.0f;
+		for (int i = 0; i < 3; i++) {
+			const float y = pos.y + fs * 0.1f + lh * float(i);
+			const ImVec2 ms = ImGui::CalcTextSize(lines[i].mark);
+			const float sc = std::min(1.0f, (lh - 1) / ms.y);
+			const float bw = fs * 0.9f * sc;
+			dl->AddRectFilled(ImVec2(pos.x + fs * 0.2f, y + 1), ImVec2(pos.x + fs * 0.2f + bw, y + lh - 1),
+			                  lines[i].dim ? col(ImGuiCol_TextDisabled, 0.5f) : lines[i].color, 3.0f);
+			dl->AddText(ImGui::GetFont(), fs * sc, ImVec2(pos.x + fs * 0.2f + (bw - ms.x * sc) * 0.5f, y + (lh - ms.y * sc) * 0.5f),
+			            IM_COL32(20, 20, 20, 255), lines[i].mark);
+			std::string name = m.get(P(lines[i].key), 0, type) ? xg::fx_name(type) : "--";
+			if (i == 2 && !system)
+				name += vpart < 32 ? "（INSERTION → " + part_name(vpart) + "）" : "（INSERTION）";
+			dl->AddText(ImGui::GetFont(), fs * sc, ImVec2(pos.x + fs * 0.4f + bw, y + (lh - ms.y * sc) * 0.5f),
+			            lines[i].dim ? col(ImGuiCol_TextDisabled) : col(ImGuiCol_Text), name.c_str());
+		}
+		dl->PopClipRect();
+	}
+
+	// ---- VEL は無し
+	ImGui::TableNextColumn();
+	ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, h));
+
+	// ---- 値の棒（マスターボリュームと、エフェクトの戻り）
+	for (const column &c : COLUMNS) {
+		ImGui::TableNextColumn();
+		cell(c, -1, m, ram, br, ImGui::GetContentRegionAvail().x, h);
+	}
+
+	// ---- 鍵盤の欄は空ける
+	ImGui::TableNextColumn();
+	ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, h));
+
+	ImGui::PopID();
+}
+
+
 void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
 	m_wheel_taken = false;
@@ -333,7 +449,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	                              ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
 	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1, 1));
 	if (ImGui::BeginTable("rows", NCOLS + 4, flags)) {
-		ImGui::TableSetupScrollFreeze(1, 1);
+		ImGui::TableSetupScrollFreeze(1, 2);            // 見出しとマスターの行は流さない
 		ImGui::TableSetupColumn("パート（右クリックで音色）", ImGuiTableColumnFlags_WidthFixed, fs * 15);
 		ImGui::TableSetupColumn("INS", ImGuiTableColumnFlags_WidthFixed, fs * 8.5f);
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
@@ -342,6 +458,9 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
 		headers_with_help(NCOLS + 4);
 
+		// マスターの行は種別を 3 行並べるので、少し高くする
+		ImGui::TableNextRow(0, fs * 3.4f);
+		master_row(m, ram, br, fs * 3.4f);
 		for (int part = 0; part < PARTS; part++) {
 			ImGui::TableNextRow(0, h);
 			row(part, m, ram, br, h);

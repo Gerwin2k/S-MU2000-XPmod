@@ -162,6 +162,16 @@ const help_text HELP[] = {
 		"The MU2000 plays 32 parts at once. A1-A16 receive MIDI IN A channels 1-16,\n"
 		"B1-B16 receive MIDI IN B channels 1-16 (the receive channel can be changed).\n"
 		"Right-click to choose the voice (program and bank)." } },
+	{ "MASTER", {
+		"全体に効く値。VOL はマスターボリューム、REV・CHO・VAR はそれぞれのエフェクトの\n"
+		"戻り量（エフェクトを通った音を、どれだけ全体に戻すか）",
+		"Values for the whole mix. VOL is the master volume; REV, CHO and VAR are the\n"
+		"effect return levels (how much of each effect's output is mixed back in)." } },
+	{ "MASTER.INS", {
+		"システムのエフェクトの種別。R がリバーブ、C がコーラス、V がバリエーション。\n"
+		"バリエーションの接続が INSERTION のときは、1 つのパートにだけ掛かるので薄く出す",
+		"System effect types: R reverb, C chorus, V variation.\n"
+		"The variation is dimmed when it is connected as INSERTION (it then applies to one part only)." } },
 	{ "INS", {
 		"このパートだけに掛かっているエフェクト。\n"
 		"1-4 はインサーションエフェクト、V は接続が INSERTION のバリエーション。\n"

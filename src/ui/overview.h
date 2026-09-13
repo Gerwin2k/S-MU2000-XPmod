@@ -28,7 +28,9 @@ public:
 
 private:
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
-	// 棒 1 つ。XG のパラメータなら触れる。戻り値は無し（書くときは中で送る）
+	// 一番上の行。マスターボリューム、移調、システムのエフェクトの種別と戻り
+	void master_row(xg::model &m, const xg_snapshot &ram, bridge &br, float h);
+	// 棒 1 つ。XG のパラメータなら触れる。part が -1 ならマスターの行
 	void cell(const column &c, int part, xg::model &m, const xg_snapshot &ram, bridge &br, float w, float h);
 
 	int    m_part = 0;
