@@ -29,6 +29,40 @@ ImU32 col(ImGuiCol c, float a = 1.0f) { return ImGui::GetColorU32(c, a); }
 // 押さえている鍵の色。VEL メーターと同じ
 const ImU32 NOTE_ON = IM_COL32(236, 116, 70, 255);
 
+// マスターの鍵盤でのパートの色。32 色を色相で振る（隣のパートが似ないよう 7 つ飛ばし）
+ImU32 part_color(int part)
+{
+	float r, g, b;
+	ImGui::ColorConvertHSVtoRGB(float((part * 7) % 32) / 32.0f, 0.75f, 1.0f, r, g, b);
+	return IM_COL32(int(r * 255), int(g * 255), int(b * 255), 255);
+}
+
+// 128 鍵の鍵盤。color は鍵ごとの色（0 なら押さえていない）
+template <typename F>
+void draw_keys(ImDrawList *dl, ImVec2 pos, float w, float h, F color)
+{
+	const float fs = ImGui::GetFontSize();
+	const float pad = fs * 0.2f;
+	const float top = pos.y + pad, bottom = pos.y + h - pad;
+	static const bool BLACK[12] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
+	static const float WHITE_POS[12] = { 0, 0.6f, 1, 1.6f, 2, 3, 3.6f, 4, 4.6f, 5, 5.6f, 6 };
+	constexpr int WHITES = 75;                    // 0-127 の白鍵
+	const float kw = (w - pad * 2) / WHITES;
+	const float left = pos.x + pad;
+	for (int note = 0; note < 128; note++) {
+		if (BLACK[note % 12]) continue;
+		const float x = left + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
+		const ImU32 c = color(note);
+		dl->AddRectFilled(ImVec2(x, top), ImVec2(x + kw - 1, bottom), c ? c : IM_COL32(220, 220, 215, 255));
+	}
+	for (int note = 0; note < 128; note++) {
+		if (!BLACK[note % 12]) continue;
+		const float x = left + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
+		const ImU32 c = color(note);
+		dl->AddRectFilled(ImVec2(x, top), ImVec2(x + kw * 0.8f, top + (bottom - top) * 0.6f), c ? c : IM_COL32(30, 30, 32, 255));
+	}
+}
+
 } // namespace
 
 struct overview::column {
@@ -468,29 +502,9 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 		const float w = ImGui::GetContentRegionAvail().x;
 		ImGui::Dummy(ImVec2(w, h));
-		const float pad = fs * 0.2f;
-		const float top = pos.y + pad, bottom = pos.y + h - pad;
-		static const bool BLACK[12] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
-		static const float WHITE_POS[12] = { 0, 0.6f, 1, 1.6f, 2, 3, 3.6f, 4, 4.6f, 5, 5.6f, 6 };
-		constexpr int WHITES = 75;                    // 0-127 の白鍵
-		const float kw = (w - pad * 2) / WHITES;
-		const float left = pos.x + pad;
-		auto held = [&](int note) {
-			return slot >= 0 && ((ram.notes[slot][note >> 6] >> (note & 63)) & 1);
-		};
-		// 白鍵
-		for (int note = 0; note < 128; note++) {
-			if (BLACK[note % 12]) continue;
-			const float x = left + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
-			dl->AddRectFilled(ImVec2(x, top), ImVec2(x + kw - 1, bottom), held(note) ? NOTE_ON : IM_COL32(220, 220, 215, 255));
-		}
-		// 黒鍵
-		for (int note = 0; note < 128; note++) {
-			if (!BLACK[note % 12]) continue;
-			const float x = left + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
-			dl->AddRectFilled(ImVec2(x, top), ImVec2(x + kw * 0.8f, top + (bottom - top) * 0.6f),
-			                  held(note) ? NOTE_ON : IM_COL32(30, 30, 32, 255));
-		}
+		draw_keys(dl, pos, w, h, [&](int note) -> ImU32 {
+			return slot >= 0 && ((ram.notes[slot][note >> 6] >> (note & 63)) & 1) ? NOTE_ON : 0;
+		});
 	}
 
 	ImGui::PopID();
@@ -568,9 +582,33 @@ void overview::master_row(xg::model &m, const xg_snapshot &ram, bridge &br, floa
 		cell(c, -1, m, ram, br, ImGui::GetContentRegionAvail().x, h);
 	}
 
-	// ---- 鍵盤の欄は空ける
+	// ---- 鍵盤。全パートで鳴っている鍵を重ねる。色はパートごと、重なったら混ぜる
 	ImGui::TableNextColumn();
-	ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, h));
+	{
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		const float w = ImGui::GetContentRegionAvail().x;
+		ImGui::Dummy(ImVec2(w, h));
+		// パートごとの受信の口×チャンネル（読めていなければ -1）
+		int slots[PARTS];
+		for (int p = 0; p < PARTS; p++) {
+			int rcv = 127;
+			slots[p] = m.get(P("part.rcv_channel"), p, rcv) && rcv < 32 ? rcv : -1;
+		}
+		draw_keys(dl, pos, w, h, [&](int note) -> ImU32 {
+			int r = 0, g = 0, b = 0, n = 0;
+			for (int p = 0; p < PARTS; p++) {
+				const int sl = slots[p];
+				if (sl < 0 || !((ram.notes[sl][note >> 6] >> (note & 63)) & 1))
+					continue;
+				const ImU32 c = part_color(p);
+				r += (c >> IM_COL32_R_SHIFT) & 0xff;
+				g += (c >> IM_COL32_G_SHIFT) & 0xff;
+				b += (c >> IM_COL32_B_SHIFT) & 0xff;
+				n++;
+			}
+			return n ? IM_COL32(r / n, g / n, b / n, 255) : 0;
+		});
+	}
 
 	ImGui::PopID();
 }
