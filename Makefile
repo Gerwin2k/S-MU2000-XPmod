@@ -68,6 +68,11 @@ $(BUILD)/blocktime.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
+# パラメータの層の定義表を firmware に確かめさせる（doc/params.md）
+$(BUILD)/xgtest.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/xg/model.o $(BUILD)/src/xgtest.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
 $(BUILD)/render.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -176,7 +181,7 @@ regen:
 #   make test                     全部
 #   make test T=piano             1 件だけ
 #   make test-update              指紋を焼き直す（意図して音を変えたとき）
-TEST_EXES := $(BUILD)/verify.exe $(BUILD)/statetest.exe $(BUILD)/render.exe
+TEST_EXES := $(BUILD)/verify.exe $(BUILD)/statetest.exe $(BUILD)/render.exe $(BUILD)/xgtest.exe
 
 test: $(TEST_EXES)
 	$(PYTHON) tools/run_tests.py $(if $(T),--only $(T),)

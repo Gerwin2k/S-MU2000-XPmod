@@ -10,6 +10,7 @@
   2. statetest.exe   状態の保存と復元。写し忘れがあれば落ちる
   3. 鳴らし比べ       tests/*.json の指紋と突き合わせる
   4. スレーブ別糸      threaded と --single で出る音が同じこと
+  5. xgtest.exe      パラメータの層の定義表を firmware に読み返させる（doc/params.md）
 
 **ROM が無い機械では 1 番だけ走る**（ROM は同梱できないので、それが正しい）。
 ROM の置き場は --roms、環境変数 SMU2000_ROMS、roms/、../MU2000/roms の順に探す。
@@ -197,6 +198,25 @@ def step_threading(rep, roms, first):
                 (name, "一致" if ok else "食い違う"))
 
 
+def step_xg(rep, roms):
+    """定義表の番地・大きさ・範囲が firmware と合っているか。音は見ない"""
+    exe = BUILD / "xgtest.exe"
+    if not exe.exists():
+        rep.add("xg", False, "build/xgtest.exe が無い")
+        return
+    log = WORK / "xgtest.log"
+    rc = run([exe, roms], out=log, err=log)
+    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    head = [l for l in lines if l.startswith("書いて読み返す")]
+    note = head[0] if head else ""
+    if rc != 0:
+        note += "（build/tests/xgtest.log）"
+        for l in lines:
+            if l.strip().startswith("NG"):
+                print("   " + l.strip())
+    rep.add("xg", rc == 0, note)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -243,6 +263,11 @@ def main():
     print()
     print("== 4. スレーブを別の糸で回しても同じ音か")
     step_threading(rep, roms, first)
+
+    if not a.only:
+        print()
+        print("== 5. パラメータの層を firmware に読み返させる")
+        step_xg(rep, roms)
 
     rep.show()
     return 1 if rep.bad else 0
