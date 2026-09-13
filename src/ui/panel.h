@@ -115,6 +115,9 @@ public:
 
 	const std::vector<spot> &spots() const { return m_spots; }
 
+	// パラメータの層の写し。PC エディタも同じものを読み書きする（tick が回している）
+	xg::model &xg() { return m_xg; }
+
 private:
 	RECT scale(double x, double y, double w, double h) const;
 	POINT at(double x, double y) const;

@@ -251,6 +251,9 @@ VST3 のインターフェース定義（`third_party/vst3/pluginterfaces`）は
 プラグインの土台は全部このリポジトリの中にある。
 くわしくは [third_party/vst3/README.md](third_party/vst3/README.md)。
 
+gui.exe の PC エディタの窓は Dear ImGui（`third_party/imgui`、Omar Cornut、**MIT**）で
+描いている。手を加えずに取り込んだ。
+
 このリポジトリ独自のコードは BSD-3-Clause とする。
 
 ## 上流への還元

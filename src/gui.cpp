@@ -31,6 +31,7 @@
 #include "ui/midi_out.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
+#include "ui/pc_window.h"
 #include "ui/player.h"
 #include "ui/text.h"
 #include "ui/png.h"
@@ -203,6 +204,7 @@ struct engine {
 
 struct window_state {
 	ui::panel   panel;
+	ui::pc_window pc;                  // PC エディタの窓（F2 か右クリックで出す）
 	ui::bridge *br = nullptr;
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
@@ -348,6 +350,7 @@ enum : UINT {
 	ID_OUTMU_NONE = 3100, ID_OUTMU_BASE = 3101,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
 	ID_FACTORY = 3000,
+	ID_PC_EDITOR = 3001,
 };
 
 // 品書きは **W 版**で作る。ソースは UTF-8 なので、A 版に渡すと
@@ -396,6 +399,7 @@ void show_port_menu(HWND hwnd, POINT screen)
 	add_item(top, MF_POPUP, UINT_PTR(mo),  "MIDI THRU A（A で受けたものを外へ）");
 	add_item(top, MF_POPUP, UINT_PTR(mob), "MIDI THRU B（B で受けたものを外へ）");
 	AppendMenuW(top, MF_SEPARATOR, 0, nullptr);
+	add_item(top, MF_STRING, ID_PC_EDITOR, "エディタを開く	F2");
 	const bool ready = g_win.eng && g_win.eng->state.load() == 1;
 	add_item(top, MF_STRING | (ready ? 0 : MF_GRAYED), ID_FACTORY, "工場出荷状態に戻す...");
 
@@ -608,6 +612,13 @@ mu2000::button key_to_button(WPARAM vk, bool &ok)
 	return mu2000::button::count;
 }
 
+void open_pc_editor(HWND hwnd)
+{
+	std::string err;
+	if (!g_win.pc.show(GetModuleHandleA(nullptr), err))
+		MessageBoxW(hwnd, ui::to_wide(err).c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+}
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
 	switch (msg) {
@@ -617,8 +628,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 	case WM_TIMER: {
 		// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む
-		if (g_win.br)
+		if (g_win.br) {
 			g_win.panel.tick(*g_win.br);
+			g_win.pc.frame(g_win.panel.xg(), *g_win.br);
+		}
 		InvalidateRect(hwnd, nullptr, FALSE);
 		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
 		static DWORD last = 0;
@@ -727,6 +740,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		else if (id == ID_FACTORY) choose_factory_reset(hwnd);
+		else if (id == ID_PC_EDITOR) open_pc_editor(hwnd);
 		if (!g_win.last_error.empty()) {
 			const std::wstring w = ui::to_wide(g_win.last_error);
 			MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
@@ -773,6 +787,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 	case WM_KEYDOWN: {
 		if (lp & (1 << 30))                     // 押しっぱなしの繰り返しは無視
 			return 0;
+		if (wp == VK_F2) {                      // PC エディタ
+			open_pc_editor(hwnd);
+			return 0;
+		}
 		if (wp == VK_F5) {                      // 配置を読み直す
 			apply_layout(g_win.layout_path, false);
 			InvalidateRect(hwnd, nullptr, FALSE);
@@ -864,6 +882,7 @@ int main(int argc, char **argv)
 	bool exclusive = false;
 	const char *audio_dev = nullptr;
 	bool factory = false;
+	bool open_editor = false;          // 起動したら PC エディタも出す
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
@@ -901,6 +920,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--factory")) factory = true;
+		else if (!std::strcmp(argv[i], "--editor")) open_editor = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -954,6 +974,7 @@ int main(int argc, char **argv)
 			" [--midiout 番号] [--midiout-b 番号] [--midiout-mu 番号]"
 			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid]\n"
 			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
+			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
@@ -1055,6 +1076,8 @@ int main(int argc, char **argv)
 
 	eng.publish();
 	ShowWindow(hwnd, SW_SHOW);
+	if (open_editor)
+		open_pc_editor(hwnd);
 	UpdateWindow(hwnd);
 
 	// 起動は別スレッド。終わったら音を出し始める
