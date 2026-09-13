@@ -188,7 +188,8 @@ std::weak_ptr<rom_set> g_roms;
 engine::engine()
 {
 	build_table();
-	m_pending.reserve(4096);
+	for (std::vector<uint8_t> &p : m_pending)
+		p.reserve(4096);
 }
 
 engine::~engine()
@@ -373,29 +374,32 @@ void engine::one_sample(float &l, float &r)
 }
 
 
-void engine::midi(const uint8_t *bytes, size_t n)
+void engine::midi(const uint8_t *bytes, size_t n, int port)
 {
+	port = port == 1 ? 1 : 0;
 	const status s = state();
 	if (s == status::ready) {
 		for (size_t i = 0; i < n; i++)
-			m_mu->midi_in(bytes[i]);
+			m_mu->midi_in(bytes[i], port);
 		return;
 	}
 	if (s == status::failed)
 		return;
 	// 起動待ち。あふれるようなら捨てる
-	if (m_pending.size() + n > 65536)
+	std::vector<uint8_t> &pending = m_pending[port];
+	if (pending.size() + n > 65536)
 		return;
-	m_pending.insert(m_pending.end(), bytes, bytes + n);
+	pending.insert(pending.end(), bytes, bytes + n);
 }
 
 void engine::all_notes_off()
 {
-	for (int ch = 0; ch < 16; ch++) {
-		const uint8_t msg[6] = { uint8_t(0xb0 | ch), 120, 0,
-		                         uint8_t(0xb0 | ch), 123, 0 };
-		midi(msg, sizeof(msg));
-	}
+	for (int port = 0; port < 2; port++)
+		for (int ch = 0; ch < 16; ch++) {
+			const uint8_t msg[6] = { uint8_t(0xb0 | ch), 120, 0,
+			                         uint8_t(0xb0 | ch), 123, 0 };
+			midi(msg, sizeof(msg), port);
+		}
 }
 
 
@@ -416,10 +420,10 @@ void engine::fill(float *left, float *right, int n)
 	m_drv.pump_midi(*m_mu, m_bridge);
 	m_drv.pump_wheel(*m_mu, m_bridge);
 
-	if (!m_pending.empty()) {
-		for (uint8_t b : m_pending)
-			m_mu->midi_in(b);
-		m_pending.clear();
+	for (int port = 0; port < 2; port++) {
+		for (uint8_t b : m_pending[port])
+			m_mu->midi_in(b, port);
+		m_pending[port].clear();
 	}
 
 	if (m_direct) {
