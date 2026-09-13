@@ -6,10 +6,14 @@
 //   * firmware が受け付ける範囲（0 と最大を書いて RAM で読む）
 //   * 値ごとの LCD の表示
 // を書き出す。RAM: 塊の +0x02 から 1 バイトの値、+0x18 からパラメータ 1-10 の 16bit、+0x12 から 11-16。
-// 使い方: build/fxsweep.exe <rom ディレクトリ> > fxsweep.txt（1 時間ほど）
+// 種類は ROM の種類の表（xg/fx_types.h）の全部（LSB 違いも 1 つずつ）。
+// 使い方: build/fxsweep.exe <rom ディレクトリ> [何番目から 何番目の前まで] > fxsweep.txt
+// 1 つの種類に 2 分ほど。範囲を分けて並べて流せる
 #include "mu2000.h"
 #include "xg/fx_types.h"
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -53,7 +57,7 @@ static std::string value_text(const std::string &s)
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
-		std::fprintf(stderr, "fxsweep <rom ディレクトリ> [種類の MSB（16 進）]\n");
+		std::fprintf(stderr, "fxsweep <rom ディレクトリ> [何番目から 何番目の前まで]\n");
 		return 1;
 	}
 	const std::string dir = argv[1]; s32 l, r;
@@ -61,11 +65,20 @@ int main(int argc, char **argv)
 	mu.reset();
 	for (int s = 0; s < 30 * 44100 && !mu.midi_ready(); s++) mu.run_sample(l, r);
 	pump(1500);
-	const int only = argc > 2 ? std::stoi(argv[2], nullptr, 16) : -1;
+	{
+		std::ifstream f(dir + "/mu2000_flash.bin", std::ios::binary);
+		const std::vector<u8> rom((std::istreambuf_iterator<char>(f)), {});
+		if (!xg::set_fx_type_rom(rom)) {
+			std::fprintf(stderr, "ROM の種類の表が読めない\n");
+			return 1;
+		}
+	}
+	const int first = argc > 2 ? std::stoi(argv[2]) : 0;
+	const int last  = argc > 3 ? std::stoi(argv[3]) : int(xg::ins_types().size());
 
-	for (const xg::fx_type &t : xg::INS_TYPES) {
-		if (t.msb == 0 || t.msb == 0x40 || t.lsb != 0) continue;
-		if (only >= 0 && t.msb != only) continue;
+	for (int index = first; index < last && index < int(xg::ins_types().size()); index++) {
+		const xg::fx_type &t = xg::ins_types()[index];
+		if (t.msb == 0 || t.msb == 0x40) continue;
 		send({ 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x00, 0x00, t.msb, t.lsb, 0xf7 }); pump(300);
 		for (int i = 0; i < 4; i++) press(B::exit);
 		press(B::effect);
