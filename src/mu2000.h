@@ -109,6 +109,20 @@ public:
 		return true;
 	}
 
+	// MIDI OUT。実機の OUT 端子で、SH7043 の SCI ch0 の送信線に繋がっている
+	// （MAME の ymmu2000.cpp と同じ）。firmware が送り出したもの
+	// （XG の問い合わせやダンプ要求への返事など）を 1 バイトずつ取る。
+	// **run_sample と同じ糸から呼ぶこと**。溜めは 4096 バイトで、溢れたら捨てる。
+	// 状態の保存には入れない（読み戻したときは空から始まる）
+	bool midi_out_take(u8 &v)
+	{
+		if (m_tx_r == m_tx_w)
+			return false;
+		v = m_tx_buf[m_tx_r];
+		m_tx_r = (m_tx_r + 1) & TX_MASK;
+		return true;
+	}
+
 	// スレーブの SWP30 を別スレッドで回すか。
 	// 2 個の SWP30 は 1 サンプルの中では互いに独立している（相手の出力は
 	// 前サンプルのものしか使わない）ので、並べて走らせても結果は変わらない
@@ -255,6 +269,15 @@ private:
 	};
 	void midi_step(u64 now);
 	std::array<midi_line, MIDI_PORTS> m_midi;
+
+	// MIDI OUT の線から枠を組み立てる。SCI は 1 ビットにつき 1 回だけ線の値を
+	// 知らせてくるので、時刻を見なくても「0 で開始、8 ビット、1 で終わり」で読める
+	void tx_line(int state);
+	static constexpr size_t TX_SIZE = 4096, TX_MASK = TX_SIZE - 1;
+	u8     m_tx_buf[TX_SIZE] = {};
+	size_t m_tx_r = 0, m_tx_w = 0;
+	int    m_tx_bit = -1;       // -1 待ち / 0-7 データ / 8 ストップ
+	u8     m_tx_cur = 0;
 };
 
 #endif // S_MU2000_MU2000_H

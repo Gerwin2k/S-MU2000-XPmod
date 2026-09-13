@@ -567,6 +567,11 @@ void mu2000::reset()
 	m_cpu->sci_rx_w<0>(1);
 	m_cpu->sci_rx_w<1>(1);
 
+	// MIDI OUT。SCI ch0 の送信線（MAME も ch0 を mdout へ繋いでいる）
+	m_tx_r = m_tx_w = 0;
+	m_tx_bit = -1;
+	m_cpu->write_sci_tx<0>().set([this](int s) { tx_line(s); });
+
 	start_devices();
 
 	for (auto &d : m_config.m_devices)
@@ -646,6 +651,31 @@ void mu2000::run_cycles(u64 n)
 //
 // 実機のエンコーダは A 相と B 相が 1/4 周期ずれて開閉する。firmware は
 // その順番で向きを読むので、位相をまとめて飛ばしてはいけない。
+void mu2000::tx_line(int state)
+{
+	if (m_tx_bit < 0) {
+		if (!state) {            // スタートビット
+			m_tx_bit = 0;
+			m_tx_cur = 0;
+		}
+		return;
+	}
+	if (m_tx_bit < 8) {
+		m_tx_cur |= u8((state ? 1 : 0) << m_tx_bit);
+		m_tx_bit++;
+		return;
+	}
+	// ストップビット。0 なら枠がずれているので、その 1 バイトは捨てる
+	m_tx_bit = -1;
+	if (!state)
+		return;
+	const size_t next = (m_tx_w + 1) & TX_MASK;
+	if (next == m_tx_r)
+		return;                  // 溢れ。誰も読んでいない
+	m_tx_buf[m_tx_w] = m_tx_cur;
+	m_tx_w = next;
+}
+
 void mu2000::midi_step(u64 now)
 {
 	// A と B は別々の SCI に繋がっている。互いに待たせない
@@ -834,5 +864,8 @@ bool mu2000::load_state(const u8 *p, size_t n, std::string &err)
 		err = s.error();
 		return false;
 	}
+	// MIDI OUT の途中の枠と溜めは保存していない。空から始める
+	m_tx_r = m_tx_w = 0;
+	m_tx_bit = -1;
 	return true;
 }
