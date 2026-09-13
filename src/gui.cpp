@@ -11,6 +11,9 @@
 // ジャックを押すか、どこでも右クリックすると品書きが出る。選んだものは
 // %LOCALAPPDATA%\S-MU2000\gui.ini に覚えておいて、次から使う。
 //
+// MU2000 の設定（ワーク RAM）は終わるときに残し、次の起動で使う（src/nvram.h）。
+// --factory か右クリックの「工場出荷状態に戻す」で捨てられる。
+//
 // 音の作り方は live.exe と同じ。**時計を自分で持たない**（doc/design.md）。
 // 画面は別スレッドで、音源とは ui::bridge 越しにしか触れ合わない。
 //
@@ -18,6 +21,7 @@
 // エンコーダがあり、VALUE -/+ のボタンと同じ働きをする。
 
 #include "mu2000.h"
+#include "nvram.h"
 #include "smf.h"
 #include "ui/audio_out.h"
 #include "ui/bridge.h"
@@ -55,6 +59,9 @@ struct engine {
 	ui::midi_out *mout_b = nullptr;   // MIDI OUT B（B で受けたものを外へ）
 
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
+	// fill() が機械に触っている最中か。起動し直すときはこれが落ちるのを待つ
+	std::atomic<bool> in_fill{false};
+	bool use_nvram = false;           // 覚えている設定で起動するか（窓を出すときだけ）
 	std::string      message = "起動中...";
 
 	ui::driver drv;
@@ -77,6 +84,8 @@ struct engine {
 	bool boot()
 	{
 		mu.set_threaded(true);
+		if (use_nvram && smu2000::nvram::load(mu))
+			std::printf("設定: %s\n", smu2000::nvram::path(mu).c_str());
 		mu.reset();
 		const size_t limit = size_t(30.0 * RATE);
 		size_t i = 0;
@@ -91,6 +100,35 @@ struct engine {
 		return true;
 	}
 
+	// 工場出荷状態に戻す。覚えている設定を捨てて電源を入れ直す。
+	// 音声の糸が機械から手を離すのを待ってから触る
+	void factory_reset()
+	{
+		state.store(0);
+		message = "工場出荷状態に戻している...";
+		publish();
+		while (in_fill.load())
+			Sleep(1);
+
+		const std::vector<u8> zero(mu.nvram().size(), 0);
+		mu.set_nvram(zero.data(), zero.size());
+		const bool keep = use_nvram;
+		use_nvram = false;
+		const bool ok = boot();
+		use_nvram = keep;
+		if (!ok) {
+			state.store(2);
+			publish();
+			return;
+		}
+		// すぐ残す。ここで落ちても前の設定に戻らないように
+		smu2000::nvram::save(mu);
+		std::printf("工場出荷状態に戻した\n");
+		std::fflush(stdout);
+		state.store(1);
+		publish();
+	}
+
 	void publish()
 	{
 		if (state.load() == 1)
@@ -102,7 +140,11 @@ struct engine {
 	// 音声デバイスに頼まれた分だけ進める
 	void fill(s16 *out, u32 n)
 	{
+		// 先に「触っている」を立ててから state を見る。逆にすると、見た直後に
+		// 起動し直しが始まって、両方が機械に触ってしまう
+		in_fill.store(true);
 		if (state.load() != 1) {
+			in_fill.store(false);
 			std::memset(out, 0, size_t(n) * 4);
 			return;
 		}
@@ -139,6 +181,7 @@ struct engine {
 		}
 
 		drv.publish(mu, br, n, RATE, true, nullptr);
+		in_fill.store(false);
 	}
 };
 
@@ -158,6 +201,7 @@ struct window_state {
 	ui::midi_in  *midi_b = nullptr;    // MIDI IN B
 	ui::midi_out *mout = nullptr;      // MIDI OUT A
 	ui::midi_out *mout_b = nullptr;    // MIDI OUT B
+	std::thread   reboot;              // 工場出荷状態に戻す作業
 	int  in_dev  = -1;                 // いま開いている番号。-1 は使っていない
 	int  in_dev_b = -1;
 	int  out_dev = -1;
@@ -269,6 +313,7 @@ enum : UINT {
 	ID_OUT_NONE = 1900, ID_OUT_BASE = 1901,
 	ID_OUTB_NONE = 2400, ID_OUTB_BASE = 2401,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
+	ID_FACTORY = 3000,
 };
 
 // 品書きは **W 版**で作る。ソースは UTF-8 なので、A 版に渡すと
@@ -313,6 +358,9 @@ void show_port_menu(HWND hwnd, POINT screen)
 	add_item(top, MF_POPUP, UINT_PTR(mib), "MIDI IN B（パート 17-32）");
 	add_item(top, MF_POPUP, UINT_PTR(mo),  "MIDI OUT A（A で受けたものを外へ）");
 	add_item(top, MF_POPUP, UINT_PTR(mob), "MIDI OUT B（B で受けたものを外へ）");
+	AppendMenuW(top, MF_SEPARATOR, 0, nullptr);
+	const bool ready = g_win.eng && g_win.eng->state.load() == 1;
+	add_item(top, MF_STRING | (ready ? 0 : MF_GRAYED), ID_FACTORY, "工場出荷状態に戻す...");
 
 	TrackPopupMenu(top, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
 	               screen.x, screen.y, 0, hwnd, nullptr);
@@ -358,6 +406,22 @@ void choose_midi_file(HWND hwnd)
 	}
 	std::printf("再生: %s（%.1f 秒)\n", path.c_str(), g_win.play_file.length());
 	std::fflush(stdout);
+}
+
+// 覚えている設定を捨てて、電源を入れ直す
+void choose_factory_reset(HWND hwnd)
+{
+	if (!g_win.eng || g_win.eng->state.load() != 1)
+		return;
+	if (MessageBoxW(hwnd,
+	                L"MU2000 を工場出荷状態に戻して、電源を入れ直します。\n"
+	                L"ユーティリティの設定や、覚えている音量・音色の設定はすべて消えます。",
+	                L"S-MU2000", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
+		return;
+	g_win.play_file.stop();
+	if (g_win.reboot.joinable())
+		g_win.reboot.join();
+	g_win.reboot = std::thread([] { g_win.eng->factory_reset(); });
 }
 
 // 品書きで選ばれたものを開く。開けなかったら「使わない」に戻す
@@ -557,6 +621,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id >= ID_OUTB_BASE && id < ID_OUTB_BASE + 256) choose_out_b(int(id - ID_OUTB_BASE));
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
+		else if (id == ID_FACTORY) choose_factory_reset(hwnd);
 		InvalidateRect(hwnd, nullptr, FALSE);
 		return 0;
 	}
@@ -687,6 +752,7 @@ int main(int argc, char **argv)
 	int latency = 20;        // 溜める目標
 	bool exclusive = false;
 	const char *audio_dev = nullptr;
+	bool factory = false;
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
@@ -722,6 +788,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
+		else if (!std::strcmp(argv[i], "--factory")) factory = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -774,6 +841,7 @@ int main(int argc, char **argv)
 			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号]"
 			" [--midiout 番号] [--midiout-b 番号]"
 			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid]\n"
+			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
@@ -851,6 +919,10 @@ int main(int argc, char **argv)
 
 	g_win.br   = &br;
 	g_win.eng  = &eng;
+	// 窓を出すときだけ、覚えている設定で起動する（--shot は毎回同じ絵にしたい）
+	eng.use_nvram = !factory;
+	if (factory)
+		std::printf("工場出荷状態で起動する（覚えていた設定は終わるときに上書きされる）\n");
 	g_win.layout_path = layout_path;
 	g_win.midi   = &midi;
 	g_win.midi_b = &midi_b;
@@ -941,6 +1013,11 @@ int main(int argc, char **argv)
 	out.stop();
 	if (boot_thread.joinable())
 		boot_thread.join();
+	if (g_win.reboot.joinable())
+		g_win.reboot.join();
+	// 音はもう止まっている。起動できていたときだけ残す
+	if (eng.state.load() == 1 && !smu2000::nvram::save(eng.mu))
+		std::fprintf(stderr, "設定を残せなかった: %s\n", smu2000::nvram::path(eng.mu).c_str());
 	g_win.play_file.stop();
 	midi.close();
 	mout.close();

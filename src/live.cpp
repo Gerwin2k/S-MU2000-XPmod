@@ -5,6 +5,10 @@
 //   live --list                          MIDI 入力の一覧
 //   live <rom ディレクトリ> [--midi 番号] [--latency ミリ秒]
 //   live <rom ディレクトリ> --waveout    古い方式（WinMM）で鳴らす
+//   live <rom ディレクトリ> --factory    覚えている設定を捨てて工場出荷状態で起動する
+//
+// 設定（ワーク RAM）は終わるときに src/nvram.h の置き場へ残し、次の起動で使う。
+// Ctrl+C でも、音を止めて残してから終わる。
 //
 // 設計の要点は doc/design.md にあるとおりで、**時計を自分で持たない**こと。
 // 音声デバイスが「N サンプルくれ」と要求した分だけ CPU と音源を進める。
@@ -16,6 +20,7 @@
 //                              供給が追いつかず細切れになる（合計 70ms 必要）
 
 #include "mu2000.h"
+#include "nvram.h"
 #include "ui/audio_out.h"
 #include "ui/midi_in.h"
 
@@ -40,6 +45,20 @@ constexpr u32 RATE = 44100;
 // （gui.exe と同じもの。**SysEx の入れ物を Windows へ渡す**のもそちら）
 
 ui::midi_in g_midi;
+
+// Ctrl+C や窓を閉じたとき。すぐには死なず、止めて NVRAM を残してから終わる
+std::atomic<bool> g_quit{false};
+std::atomic<bool> g_done{false};
+
+BOOL WINAPI on_console_ctrl(DWORD type)
+{
+	g_quit.store(true);
+	// 窓を閉じられたときは、ここから戻ると数秒で殺される。後始末を待つ
+	if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT)
+		for (int i = 0; i < 400 && !g_done.load(); i++)
+			Sleep(10);
+	return TRUE;
+}
 
 void list_midi_inputs()
 {
@@ -166,7 +185,7 @@ int run_wasapi(generator &gen, double seconds, int latency_ms, bool exclusive,
 	gen.cushion_frames = u32(out.target_ms() * RATE / 1000.0);
 
 	u64 shown = 0;
-	while (seconds <= 0.0 || gen.produced < u64(seconds * RATE)) {
+	while (!g_quit.load() && (seconds <= 0.0 || gen.produced < u64(seconds * RATE))) {
 		Sleep(20);
 		if (!out.running()) {
 			const std::string e = out.error();
@@ -245,7 +264,7 @@ int run_waveout(generator &gen, double seconds, int frames, int buffers)
 		emit(i);
 
 	int next = 0;
-	while (seconds <= 0.0 || gen.produced < u64(seconds * RATE)) {
+	while (!g_quit.load() && (seconds <= 0.0 || gen.produced < u64(seconds * RATE))) {
 		while (!(hdr[next].dwFlags & WHDR_DONE))
 			WaitForSingleObject(done, 100);
 		emit(next);
@@ -299,7 +318,7 @@ int main(int argc, char **argv)
 	const char *audio_dev = nullptr;  // 音声の出口の名前（一部でよい）
 	bool raw = false;                 // エンジンの信号処理を飛ばす
 	double seconds = 0.0;   // 0 なら Ctrl+C まで
-	bool nomidi = false, use_waveout = false, single = false;
+	bool nomidi = false, use_waveout = false, single = false, factory = false;
 	const char *wav = nullptr;
 	std::string dir;
 
@@ -325,6 +344,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--wav") && i + 1 < argc) wav = argv[++i];
 		else if (!std::strcmp(argv[i], "--waveout")) use_waveout = true;
 		else if (!std::strcmp(argv[i], "--nomidi")) nomidi = true;
+		else if (!std::strcmp(argv[i], "--factory")) factory = true;
 		else if (!std::strcmp(argv[i], "--single"))
 			single = true;
 		else if (!std::strcmp(argv[i], "-v")) smu2000::g_verbose = true;
@@ -334,6 +354,7 @@ int main(int argc, char **argv)
 		std::fprintf(stderr,
 			"使い方: live <rom ディレクトリ> [--midi 番号] [--latency ミリ秒]\n"
 			"        [--exclusive]  デバイスを独り占めして待ち時間を詰める\n"
+			"        [--factory]    覚えている設定を捨てて工場出荷状態で起動する\n"
 			"        live <rom ディレクトリ> --waveout [--frames 数] [--buffers 数]\n"
 			"        live --list        MIDI 入力の一覧\n");
 		return 1;
@@ -350,6 +371,10 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "警告: %s\n", mu.error().c_str());
 
 	mu.set_threaded(!single);
+	if (factory)
+		std::printf("工場出荷状態で起動する（覚えていた設定は終わるときに上書きされる）\n");
+	else if (smu2000::nvram::load(mu))
+		std::printf("設定: %s\n", smu2000::nvram::path(mu).c_str());
 	mu.reset();
 
 	// 起動を待つ。実機と同じで、ここを待たないと音色指定が捨てられる
@@ -384,6 +409,7 @@ int main(int argc, char **argv)
 
 	std::vector<s16> rec;
 	generator gen(mu, wav ? &rec : nullptr);
+	SetConsoleCtrlHandler(on_console_ctrl, TRUE);
 
 	const int rc = use_waveout ? run_waveout(gen, seconds, frames, buffers)
 	                           : run_wasapi(gen, seconds, latency_ms, exclusive, dump_dev,
@@ -393,10 +419,15 @@ int main(int argc, char **argv)
 		write_wav(wav, rec);
 	g_midi.close();
 
+	// 音はもう止まっている。ここで機械に触ってよい
+	if (!smu2000::nvram::save(mu))
+		std::fprintf(stderr, "設定を残せなかった: %s\n", smu2000::nvram::path(mu).c_str());
+
 	const double audio = double(gen.produced) / RATE;
 	const double busy  = double(gen.busy_ticks) / gen.freq.QuadPart;
 	std::printf("終了。%.1f 秒ぶんを %.2f 秒で生成（CPU 使用率 %.1f%%）  MIDI %llu バイト\n",
 	            audio, busy, audio > 0 ? 100.0 * busy / audio : 0.0,
 	            (unsigned long long)g_midi.bytes());
+	g_done.store(true);
 	return rc;
 }

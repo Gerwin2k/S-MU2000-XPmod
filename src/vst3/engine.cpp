@@ -3,6 +3,7 @@
 #include "engine.h"
 
 #include "mu2000.h"
+#include "nvram.h"
 
 #include <algorithm>
 #include <cmath>
@@ -277,6 +278,11 @@ void engine::boot()
 	}
 
 	mu->set_threaded(true);
+	// gui / live が残した設定で起動する。**読むだけで書かない。**VST3 の中で
+	// 変えたものは DAW のプロジェクトに残るし、何枚も挿されたときに
+	// 同じファイルを取り合わずに済む
+	if (nvram::load(*mu))
+		logf("設定: %s", nvram::path(*mu).c_str());
 	mu->reset();
 
 	ui::driver::publish_message(m_bridge, "MU2000 起動中");

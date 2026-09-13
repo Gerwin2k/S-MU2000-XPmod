@@ -20,6 +20,7 @@
 #include "mame/video/hd44780.h"
 
 #include <cstdio>
+#include <cstring>
 #include <atomic>
 #include <array>
 #include <deque>
@@ -60,6 +61,18 @@ public:
 	bool load_lcd_font(const std::string &path);
 
 	void reset();
+
+	// ワーク RAM（0x400000-0x43ffff、256KB）。実機では電池で保持される。
+	// MAME も NVRAM としてこれを保存している（ymmu2000.cpp）。
+	// 入れるのは reset() の前。大きさが違えば false
+	const std::vector<u8> &nvram() const { return m_ram; }
+	bool set_nvram(const u8 *p, size_t n)
+	{
+		if (n != m_ram.size())
+			return false;
+		std::memcpy(m_ram.data(), p, n);
+		return true;
+	}
 
 	// 状態の保存と復元。**機械まるごと**（CPU・RAM・SWP30・LCD・タイマ）。
 	// ROM は入れないので、戻すときは同じ ROM を積んでおくこと。
