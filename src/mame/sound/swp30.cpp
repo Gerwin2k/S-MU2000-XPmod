@@ -3547,7 +3547,9 @@ void swp30_device::meg_state::step()
 			r <<= shift == 3 ? 4 : shift;
 
 		// wrap at 42 bits (27.15)
-		r = util::sext(r, 42);
+		// S-MU2000: 飽和する形（=s など）は折り返さずに止める（doc/upstream.md の 20）
+		if(d.clamp == 0)
+			r = util::sext(r, 42);
 
 		switch(d.clamp) {
 		case 0:
@@ -3835,7 +3837,8 @@ void swp30_device::meg_state::run_program(const op *ops)
 			}
 
 			r <<= o.shift;
-			r = util::sext(r, 42);
+			if(o.clamp == 0)
+				r = util::sext(r, 42);
 
 			switch(o.clamp) {
 			case 0:  break;

@@ -454,8 +454,10 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 			}
 			if (o.shift)
 				a.shl64(RAX, o.shift);
-			a.shl64(RAX, 22);
-			a.sar64(RAX, 22);
+			if (o.clamp == 0) {
+				a.shl64(RAX, 22);
+				a.sar64(RAX, 22);
+			}
 			switch (o.clamp) {
 			case 0: break;
 			case 1:
