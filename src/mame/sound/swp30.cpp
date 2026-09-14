@@ -3188,6 +3188,8 @@ u16 swp30_device::meg_state::const_r(offs_t offset)
 
 void swp30_device::meg_state::const_w(offs_t offset, u16 data)
 {
+	if(u16(m_const[offset]) != data)
+		m_swp->m_meg_const_gen++;
 	m_const[offset] = data;
 }
 

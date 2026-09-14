@@ -125,24 +125,38 @@ void emit_revram_decode(assembler &a)
 
 struct swp30_device::meg_jit {
 	using fn_t = void (*)(meg_state *, swp30_device *, u16 *);
-	fn_t fn = nullptr;
-	void *buf = nullptr;
-	size_t buf_size = 0;
-	u32 d3 = 0, d2 = 0;
 
-	~meg_jit()
-	{
+	// 訳した機械語 1 本
+	struct code {
+		fn_t fn = nullptr;
+		void *buf = nullptr;
+		size_t buf_size = 0;
+		u32 d3 = 0, d2 = 0;
+		~code()
+		{
 #if SMU2000_MEG_JIT
-		if (buf)
-			VirtualFree(buf, 0, MEM_RELEASE);
+			if (buf)
+				VirtualFree(buf, 0, MEM_RELEASE);
 #endif
-	}
+		}
+	};
+
+	// gen: 定数を実行時に読む版（いつでも使える）。spec: 今の定数を焼き込んだ版。
+	// 定数は firmware がエフェクトを組むときにまとめて書き、そのあとはほとんど変わらない。
+	// 変わってから STABLE サンプルのあいだ動かなければ spec を作り、次に変わった瞬間に gen へ戻す
+	code gen, spec;
+	const meg_state::op *ops = nullptr;
+	u32 spec_const_gen = 0;
+	u32 seen_const_gen = 0;
+	u32 stable = 0;
+	bool spec_tried = false;
+	static constexpr u32 STABLE = 8192;
 
 #if SMU2000_MEG_JIT
 	static u32 call_lfo(meg_state *ms, u32 lfo) { return ms->get_lfo(int(lfo)); }
 #endif
 
-	bool build(meg_state &ms, const meg_state::op *ops, swp30_device &swp);
+	bool build(code &c, meg_state &ms, const meg_state::op *ops, swp30_device &swp, bool bake);
 };
 
 void swp30_device::meg_jit_delete(meg_jit *j)
@@ -171,16 +185,52 @@ void swp30_device::meg_jit_rebuild()
 	}
 	if (!m_jit)
 		m_jit.reset(new meg_jit);
-	if (!m_jit->build(*m_meg, m_meg_ops.data(), *this))
-		m_jit->fn = nullptr;
+	meg_jit &j = *m_jit;
+	j.ops = m_meg_ops.data();
+	if (!j.build(j.gen, *m_meg, j.ops, *this, false))
+		j.gen.fn = nullptr;
+	// プログラムか番地が変わったので、焼き込んだ版は作り直す
+	j.spec.fn = nullptr;
+	j.spec_tried = false;
+	j.seen_const_gen = m_meg_const_gen;
+	j.stable = 0;
 }
 
 bool swp30_device::meg_jit_run()
 {
 	meg_jit *j = m_jit.get();
-	if (!j || !j->fn || j->d3 != m_meg->m_delay_3 || j->d2 != m_meg->m_delay_2)
+	if (!j || !j->gen.fn)
 		return false;
-	j->fn(m_meg, this, m_reverb_ram.data());
+
+	static const bool bake_on = [] {
+		const char *e = std::getenv("SMU2000_MEG_BAKE");
+		return !(e && e[0] == '0');
+	}();
+
+	meg_jit::code *c = &j->gen;
+	if (bake_on) {
+		const u32 cg = m_meg_const_gen;
+		if (cg != j->seen_const_gen) {
+			j->seen_const_gen = cg;
+			j->stable = 0;
+			j->spec_tried = false;
+		} else if (j->stable < meg_jit::STABLE)
+			j->stable++;
+		if (j->spec.fn && j->spec_const_gen == cg)
+			c = &j->spec;
+		else if (j->stable >= meg_jit::STABLE && !j->spec_tried) {
+			j->spec_tried = true;
+			if (j->build(j->spec, *m_meg, j->ops, *this, true)) {
+				j->spec_const_gen = cg;
+				c = &j->spec;
+			} else
+				j->spec.fn = nullptr;
+		}
+	}
+
+	if (c->d3 != m_meg->m_delay_3 || c->d2 != m_meg->m_delay_2)
+		return false;
+	c->fn(m_meg, this, m_reverb_ram.data());
 	m_meg->m_pc = 0;
 	m_meg->m_icount -= 0x180;
 	return true;
@@ -230,15 +280,19 @@ u64 swp30_device::meg_jit_selftest()
 
 #if !SMU2000_MEG_JIT
 
-bool swp30_device::meg_jit::build(meg_state &, const meg_state::op *, swp30_device &)
+bool swp30_device::meg_jit::build(code &, meg_state &, const meg_state::op *, swp30_device &, bool)
 {
 	return false;
 }
 
 #else
 
-bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30_device &swp)
+bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *ops, swp30_device &swp, bool bake)
 {
+	fn_t &fn = cd.fn;
+	void *&buf = cd.buf;
+	size_t &buf_size = cd.buf_size;
+	u32 &d3 = cd.d3, &d2 = cd.d2;
 	fn = nullptr;
 	for (u32 pc = 0; pc != 0x180; pc++)
 		if (ops[pc].jump)
@@ -292,18 +346,66 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 			need_tval[k] = true;
 	}
 
+	// 3 命令遅れの書き込みを、書いた命令の場所で直に入れてよいレジスタを調べる。
+	// 読む命令の 1 つ前か 2 つ前（サンプルを跨いでも）に同じレジスタへの書き込みが無ければ、
+	// どの時点で読んでも見える値は変わらない。終わりの 3 命令（0x17d-0x17f）が書くレジスタは、
+	// 次のサンプルの頭で輪から入るので対象にしない
+	bool early_r[128] = {}, early_m[128] = {};
+	{
+		bool bad_r[128] = {}, bad_m[128] = {};
+		const auto reads = [&](const meg_state::op &o, bool m, u32 x) {
+			if (!x)
+				return false;
+			bool rd = false;
+			if (o.alu && (o.mmode == 2 || o.mmode == 3) && (o.m2_from_m != 0) == m && (m ? o.sm : o.sr) == x)
+				rd = true;
+			if (o.alu && !m && o.asel == 1 && o.sr == x)
+				rd = true;
+			if (o.alu && m && o.asel == 2 && o.sm == x)
+				rd = true;
+			if (!m && o.dr && o.dr_from_r && o.sr == x)
+				rd = true;
+			if (m && o.dm && o.dm_src == 7 && o.sm == x)
+				rd = true;
+			return rd;
+		};
+		for (u32 j = 0; j != 0x180; j++)
+			for (u32 back = 1; back <= 2; back++) {
+				const meg_state::op &w = ops[(j + 0x180 - back) % 0x180];
+				if (w.dr && reads(ops[j], false, w.dr))
+					bad_r[w.dr] = true;
+				if (w.dm && reads(ops[j], true, w.dm))
+					bad_m[w.dm] = true;
+			}
+		for (u32 k = 0x17d; k != 0x180; k++) {
+			if (ops[k].dr) bad_r[ops[k].dr] = true;
+			if (ops[k].dm) bad_m[ops[k].dm] = true;
+		}
+		static const bool early_on = [] {
+			const char *e = std::getenv("SMU2000_MEG_EARLY");
+			return !(e && e[0] == '0');
+		}();
+		for (u32 x = 1; x != 128; x++) {
+			early_r[x] = early_on && !bad_r[x];
+			early_m[x] = early_on && !bad_m[x];
+		}
+	}
+
 	assembler a;
-	const u8 MS = RBX, SWP = R12, P = R13, SC = R14, RAM = R15;
+	const u8 MS = RBX, SWP = R12, P = R13, SC = R14, RAM = R15, SEED = RSI, K_MAX = RDI, K_MIN = RBP;   // SEED: 乱数の種を回しているあいだ持つ
 	const auto M = [&](s32 disp) { return mem{MS, NOREG, 1, disp}; };
 
 	// 入口（Windows x64: rcx = ms, rdx = swp, r8 = リバーブ RAM）
-	a.push(RBX); a.push(R12); a.push(R13); a.push(R14); a.push(R15);
-	a.subrsp(48);                                    // 呼ぶ先の影 32 + 自分の置き場 16。rsp は 16 の倍数
+	a.push(RBX); a.push(R12); a.push(R13); a.push(R14); a.push(R15); a.push(RSI); a.push(RDI); a.push(RBP);
+	a.subrsp(56);                                    // 呼ぶ先の影 32 + 自分の置き場 16 + 揃え 8。rsp は 16 の倍数
 	a.mov64(MS, RCX);
 	a.mov64(SWP, RDX);
 	a.mov64(RAM, R8);
 	a.load64(P, M(o_p));
 	a.load32(SC, M(o_sample));
+	a.load32(SEED, mem{SWP, NOREG, 1, o_seed});
+	a.imm64(K_MAX, 0x7fffff);                            // pack24 の限界（即値を毎回積まないため）
+	a.imm64(K_MIN, u64(s64(-0x800000)));
 
 	// p を 24bit に詰める（meg_pack24）。入力 rax、出力 eax
 	const auto pack24 = [&]() {
@@ -314,23 +416,18 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 		a.add64(RAX, RCX);
 		a.sar64(RAX, 15);
 		// 1 つだけはみ出したときは限界に止め、ほかは 24bit で折り返す（meg_pack24 と同じ）
-		a.imm64(RCX, 0x800000);
-		a.cmp64(RAX, RCX);
-		a.imm64(RCX, 0x7fffff);
-		a.cmove64(RAX, RCX);
-		a.imm64(RCX, u64(s64(-0x800001)));
-		a.cmp64(RAX, RCX);
-		a.imm64(RCX, u64(s64(-0x800000)));
-		a.cmove64(RAX, RCX);
-		a.shl64(RAX, 40);
-		a.sar64(RAX, 40);
+		a.cmp64ri(RAX, 0x800000);
+		a.cmove64(RAX, K_MAX);
+		a.cmp64ri(RAX, u32(s32(-0x800001)));
+		a.cmove64(RAX, K_MIN);
+		a.shl32(RAX, 8);
+		a.sar32(RAX, 8);
 	};
 	// 乱数を 1 つ引く（swp30_device::rand）。出力 eax
 	const auto rnd = [&]() {
-		a.load32(RAX, mem{SWP, NOREG, 1, o_seed});
-		a.imul32i(RAX, RAX, 1664525);
+		a.imul32i(RAX, SEED, 1664525);
 		a.add32i(RAX, 1013904223);
-		a.store32(mem{SWP, NOREG, 1, o_seed}, RAX);
+		a.mov32(SEED, RAX);
 		a.rol32(RAX, 16);
 	};
 	// p に雑音を足して詰める（dm の 6 番、dr の p）。出力 eax
@@ -376,11 +473,11 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 		} else {
 			const meg_state::op &w = ops[k - 3];
 			const u32 s = slot3(k);
-			if (w.dm) {
+			if (w.dm && !early_m[w.dm]) {
 				a.load32(RCX, M(o_mw_value + 4 * s));
 				a.store32(M(o_m + 4 * w.dm), RCX);
 			}
-			if (w.dr) {
+			if (w.dr && !early_r[w.dr]) {
 				a.load32(RCX, M(o_rw_value + 4 * s));
 				a.store32(M(o_r + 4 * w.dr), RCX);
 			}
@@ -419,7 +516,27 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 		}
 
 		// ---- ALU ----
-		if (o.alu) {
+		// bake のときは定数（と、そこから決まる m1）を焼き込む。係数 0 の掛け算は省き、
+		// 「p = 0 * x + p」のように p が変わらない命令は丸ごと省く（結果はビット単位で同じ）
+		bool alu_skip = false;
+		if (o.alu && bake && !o.m1_from_t && o.mmode != 3) {
+			s64 c = ms.m_const[k];
+			if (o.m1_expand)
+				c = meg_state::m1_expand(s16(c));
+			const bool m_zero = o.mmode == 0 || c == 0;
+			if (m_zero && o.asel == 0 && o.rop == 0 && o.shift == 0 && o.clamp == 0 && !o.latch)
+				alu_skip = true;                                 // p はもう 42bit に収まっている
+			else if (m_zero)
+				a.xor32(RAX, RAX);
+			else if (o.mmode == 1)
+				a.imm64(RAX, u64(c << (8 + 15)));
+			else {
+				a.loads32(RAX, o.m2_from_m ? M(o_m + 4 * o.sm) : M(o_r + 4 * o.sr));
+				a.imul64i(RAX, RAX, u32(s32(c)));
+			}
+		}
+		if (o.alu && !alu_skip) {
+			if (!(bake && !o.m1_from_t && o.mmode != 3)) {
 			if (o.m1_from_t)
 				a.loads16(RAX, M(o_t + 2 * o.t));
 			else
@@ -441,6 +558,7 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 				a.loads32(RAX, o.m2_from_m ? M(o_m + 4 * o.sm) : M(o_r + 4 * o.sr));
 				a.shl64(RAX, 15);
 				break;
+			}
 			}
 			switch (o.asel) {
 			case 0: a.mov64(RCX, P); break;
@@ -526,7 +644,10 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 				a.load32(RAX, M(o_m + 4 * o.sm));
 				break;
 			}
-			a.store32(M(o_mw_value + 4 * slot3(k)), RAX);
+			if (k < 0x17d && early_m[o.dm])
+				a.store32(M(o_m + 4 * o.dm), RAX);
+			else
+				a.store32(M(o_mw_value + 4 * slot3(k)), RAX);
 		}
 		if (k >= 0x17d)
 			a.store8i(M(o_mw_reg + slot3(k)), o.dm);
@@ -537,7 +658,10 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 				a.load32(RAX, M(o_r + 4 * o.sr));
 			else
 				p_packed(!o.no_noise);
-			a.store32(M(o_rw_value + 4 * slot3(k)), RAX);
+			if (k < 0x17d && early_r[o.dr])
+				a.store32(M(o_r + 4 * o.dr), RAX);
+			else
+				a.store32(M(o_rw_value + 4 * slot3(k)), RAX);
 		}
 		if (k >= 0x17d)
 			a.store8i(M(o_rw_reg + slot3(k)), o.dr);
@@ -564,6 +688,8 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 		if (o.t_write) {
 			if (o.t_from_p)
 				a.loadu16(RAX, M(o_t_value + 2 * slot2(k)));
+			else if (bake)
+				a.imm32(RAX, u16(ms.m_const[k]));
 			else
 				a.loadu16(RAX, M(o_const + 2 * s32(k)));
 			a.store16(M(o_t + 2 * o.t), RAX);
@@ -617,8 +743,9 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 
 	// 出口
 	a.store64(M(o_p), P);
-	a.addrsp(48);
-	a.pop(R15); a.pop(R14); a.pop(R13); a.pop(R12); a.pop(RBX);
+	a.store32(mem{SWP, NOREG, 1, o_seed}, SEED);
+	a.addrsp(56);
+	a.pop(RBP); a.pop(RDI); a.pop(RSI); a.pop(R15); a.pop(R14); a.pop(R13); a.pop(R12); a.pop(RBX);
 	a.ret();
 
 	if (a.code.size() > buf_size) {
