@@ -277,7 +277,11 @@ bool swp30_device::meg_jit_run()
 	meg_jit *j = m_jit.get();
 	if (!j || !j->fn || j->d3 != m_meg->m_delay_3 || j->d2 != m_meg->m_delay_2)
 		return false;
-	if (std::getenv("SMU2000_MEG_JIT_CHECK")) {
+	static const bool check = [] {
+		const char *e = std::getenv("SMU2000_MEG_JIT_CHECK");
+		return e && e[0] != '0';
+	}();
+	if (check) {
 		// DEBUG: run the block through the JIT, then through the interpreter from
 		// the same starting state, and report the first field that differs.
 		static int shown = 0;
@@ -899,7 +903,17 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 	const auto ldb   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 4095)  a.ldrb(rt, base, d);  else { a.add_off(T, base, d); a.ldrb(rt, T, 0); } };
 	const auto stb   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 4095)  a.strb(rt, base, d);  else { a.add_off(T, base, d); a.strb(rt, T, 0); } };
 	const auto ldh   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 8190)  a.ldrh(rt, base, d);  else { a.add_off(T, base, d); a.ldrh(rt, T, 0); } };
-	const auto ldh_s = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 8190)  a.ldrsh(rt, base, d); else { a.add_off(T, base, d); a.ldrsh(rt, T, 0); } };
+	const auto ldh_s = [&](u32 rt, u32 base, s32 d) {
+		if (d >= 0 && d <= 8190)
+			a.ldrsh(rt, base, d);
+		else {
+			a.add_off(T, base, d);
+			a.ldrsh(rt, T, 0);
+		}
+		// LDRSH Wt sign-extends to 32 bits; the MEG ALU consumes a signed
+		// 64-bit m1 value, so extend the result through the top half of Xt.
+		a.sxtw64(rt, rt);
+	};
 	const auto sth   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 8190)  a.strh(rt, base, d);  else { a.add_off(T, base, d); a.strh(rt, T, 0); } };
 	const auto ldw   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 16380) a.ldr_w(rt, base, d); else { a.add_off(T, base, d); a.ldr_w(rt, T, 0); } };
 	const auto ldw_s = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 16380) a.ldrsw(rt, base, d); else { a.add_off(T, base, d); a.ldrsw(rt, T, 0); } };

@@ -24,18 +24,24 @@ incompatible license. Have the ROMs and the MIDI ready locally.
 To check configurations one by one by hand:
 
 ```
-# arm64 (the native build; the SH2 JIT compiles in, the MEG JIT does not)
+# arm64 (the native build; both JITs compile in)
 make build/blocktime
 ./build/blocktime roms demo.mid 64 10 3
-SMU2000_SH2_JIT=0 ./build/blocktime ...   # SH2 interpreted
+SMU2000_SH2_JIT=0 ./build/blocktime ...   # MEG JIT only
+SMU2000_MEG_JIT=0 ./build/blocktime ...   # SH2 JIT only
+SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build/blocktime ...   # all interpreted
 
 # x86_64 (Rosetta; both JITs compile in. Built into its own directory)
 make BUILD=build-x64 ARCH=x86_64 build-x64/blocktime
 ./build-x64/blocktime roms demo.mid 64 10 3
 
-# JIT on/off switches (either build, where the JIT exists)
-SMU2000_SH2_JIT=0 ./build/blocktime ...       # SH2 interpreted
-SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # MEG interpreted
+# arm64 JIT on/off switches
+SMU2000_SH2_JIT=0 ./build/blocktime ...       # MEG JIT only
+SMU2000_MEG_JIT=0 ./build/blocktime ...       # SH2 JIT only
+
+# x86_64 JIT on/off switches
+SMU2000_SH2_JIT=0 ./build-x64/blocktime ...   # MEG JIT only
+SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # SH2 JIT only
 SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # all interpreted
 ```
 

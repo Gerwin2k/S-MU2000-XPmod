@@ -8,7 +8,7 @@
 # on multibyte characters inside parameter expansions.
 #
 # Configurations:
-#   * arm64 native: interpreter / SH2 JIT (the MEG JIT is still x86-64 only)
+#   * arm64 native: both JITs / MEG JIT only / SH2 JIT only / no JIT
 #   * x86_64 under Rosetta: both JITs / MEG JIT only / SH2 JIT only / no JIT
 #
 # Usage:
@@ -69,8 +69,10 @@ run_in() { # $1 = binary path, $2 = label, rest = env
 
 # ---- the matrix ---------------------------------------------------------------
 rows=""
-rows+="$(run_in ./build/blocktime          "arm64 native - interpreter" SMU2000_SH2_JIT=0)"$'\n'
-rows+="$(run_in ./build/blocktime          "arm64 native - SH2 JIT")"$'\n'
+rows+="$(run_in ./build/blocktime          "arm64 native - both JITs")"$'\n'
+rows+="$(run_in ./build/blocktime          "arm64 native - MEG JIT only" SMU2000_SH2_JIT=0)"$'\n'
+rows+="$(run_in ./build/blocktime          "arm64 native - SH2 JIT only" SMU2000_MEG_JIT=0)"$'\n'
+rows+="$(run_in ./build/blocktime          "arm64 native - interpreter" SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0)"$'\n'
 rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - both JITs")"$'\n'
 rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - MEG JIT only" SMU2000_SH2_JIT=0)"$'\n'
 rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - SH2 JIT only" SMU2000_MEG_JIT=0)"$'\n'
