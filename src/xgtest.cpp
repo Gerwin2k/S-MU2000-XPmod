@@ -11,6 +11,7 @@
 // 音は見ない。食い違いが 1 つでもあれば 1 を返す。
 #include "mu2000.h"
 #include "xg/model.h"
+#include "xg/ram.h"
 
 #include <cstdio>
 #include <cstring>
@@ -171,7 +172,8 @@ int main(int argc, char **argv)
 				}
 			}
 			for (const xg::param &p : xg::params()) {
-				if (p.where != xg::area::part)
+				// パートの一括ダンプは 00-28 の 41 バイトだけ。EQ（72-77）は入らない
+				if (p.where != xg::area::part || p.lo >= xg::ram::PART_XG_SIZE)
 					continue;
 				int a = 0, b = 0;
 				const bool in_dump = dumped.get(p, part, a);
@@ -303,6 +305,66 @@ int main(int argc, char **argv)
 		if (!pin_ok) {
 			bad++;
 			problems.push_back("読み返しと書き込みの行き違い");
+		}
+	}
+
+	// ---- 5. ワーク RAM から読んだ値が、問い合わせの返事と同じか（xg/ram.h）
+	//         画面は問い合わせずに RAM を読むので、番地の表が合っているかをここで見る
+	{
+		int n = 0, diff = 0;
+		// 既定のままだと 0 が多くて偶然合うので、少し散らしておく
+		const int RAM_PARTS[] = { 0, 9, 16, 25, 31 };   // RAM では 10 と 26 が口の先頭にある
+		for (int part : RAM_PARTS) {
+			g.send(xg::param_change(*xg::find("part.volume"), part, 37 + part));
+			g.send(xg::param_change(*xg::find("part.pan"), part, 20 + part));
+			g.send(xg::param_change(*xg::find("part.cutoff"), part, 90 - part));
+			g.send(xg::param_change(*xg::find("part.detune"), part, 0x5a + part));
+		}
+		g.send(xg::param_change(*xg::find("reverb.return"), 0, 0x33));
+		g.send(xg::param_change(*xg::find("chorus.pan"), 0, 0x21));
+		g.send(xg::param_change(*xg::find("variation.part"), 0, 3));
+		g.send(xg::param_change(*xg::find("insertion2.part"), 0, 7));
+		g.pump(200);
+		const std::vector<u8> &ramv = g.mu.nvram();
+		for (const xg::param &p : xg::params()) {
+			const int nparts = p.where == xg::area::part ? 5 : 1;
+			for (int k = 0; k < nparts; k++) {
+				const int part = p.where == xg::area::part ? RAM_PARTS[k] : 0;
+				u32 off = 0;
+				if (!xg::ram::locate(xg::address(p, part), off)) {
+					problems.push_back(label(p, part) + ": RAM の番地が表に無い");
+					diff++;
+					continue;
+				}
+				int v = 0;
+				for (int i = 0; i < p.size; i++)
+					v = (v << (p.enc == xg::coding::nibble ? 4 : 7)) | (ramv[off + i] & (p.enc == xg::coding::nibble ? 0x0f : 0x7f));
+				int asked = -1;
+				const bool ok = g.ask(p, part, asked);
+				n++;
+				if (!ok || asked != v) {
+					diff++;
+					problems.push_back(label(p, part) + ": RAM " + std::to_string(v) + " / 問い合わせ " +
+					                   (ok ? std::to_string(asked) : "無し"));
+				}
+			}
+		}
+		std::printf("RAM と問い合わせの一致: %d 個、食い違い %d\n", n, diff);
+		bad += diff;
+
+		// インサーションのパラメータ 1-10（2 バイトの 30-43）は、RAM では塊の +0x18 から 16bit の数。
+		// ディレイの時間のように 128 を超える値で確かめる。インサーション 3 を DELAY LCR にして Rch Delay を 1234 に
+		g.send({ 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x02, 0x00, 0x05, 0x00, 0xf7 });
+		g.pump(200);
+		g.send({ 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x02, 0x32, u8(1234 >> 7), u8(1234 & 0x7f), 0xf7 });
+		g.pump(200);
+		const std::vector<u8> &rv = g.mu.nvram();
+		const u32 at = xg::ram::INS_BLOCK[2] + xg::ram::INS_WIDE + 2;
+		const int wide = rv[at] << 8 | rv[at + 1];
+		std::printf("インサーションの 2 バイトのパラメータが RAM の 16bit の数に入るか: %s（%d）\n", wide == 1234 ? "合" : "違", wide);
+		if (wide != 1234) {
+			bad++;
+			problems.push_back("インサーションの 2 バイトのパラメータの RAM の位置");
 		}
 	}
 

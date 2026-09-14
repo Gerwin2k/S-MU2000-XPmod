@@ -32,6 +32,10 @@
 #include "ui/midi_out.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
+#include "ui/fx_editor.h"
+#include "ui/overview.h"
+#include "ui/pc_editor.h"
+#include "ui/pc_window.h"
 #include "ui/player.h"
 #include "ui/text.h"
 #include "ui/png.h"
@@ -45,6 +49,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 
 namespace {
 
@@ -64,6 +69,9 @@ using ui::engine;
 
 struct window_state {
 	ui::panel   panel;
+	ui::pc_window pc{ std::make_unique<ui::pc_editor>() };    // PC エディタ（F2 か右クリック）
+	ui::pc_window list{ std::make_unique<ui::overview>() };   // 一覧（F3 か右クリック）
+	ui::pc_window fx{ std::make_unique<ui::fx_editor>() };    // インサーションの設定（一覧でダブルクリック）
 	ui::bridge *br = nullptr;
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
@@ -89,6 +97,7 @@ struct window_state {
 	std::string in_keep, in_keep_b, out_keep, out_keep_b, out_keep_mu;
 	std::string last_error;            // 品書きから選んで開けなかったときの理由
 	u64 reported_drops = 0;            // 画面の糸が最後に知らせた、捨てた MIDI の量
+	bool keep_settings = false;        // gui.ini を書き換えない（--nomidi）
 
 
 	// 二重書き用
@@ -166,6 +175,8 @@ void load_settings(std::string &in_name, std::string &in_name_b,
 
 void save_settings()
 {
+	if (g_win.keep_settings)                 // --nomidi。覚えている口を消さない
+		return;
 	const std::string path = settings_path();
 	if (path.empty())
 		return;
@@ -209,6 +220,8 @@ enum : UINT {
 	ID_OUTMU_NONE = 3100, ID_OUTMU_BASE = 3101,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
 	ID_FACTORY = 3000,
+	ID_PC_EDITOR = 3001,
+	ID_OVERVIEW = 3002,
 };
 
 // 品書きは **W 版**で作る。ソースは UTF-8 なので、A 版に渡すと
@@ -257,6 +270,8 @@ void show_port_menu(HWND hwnd, POINT screen)
 	add_item(top, MF_POPUP, UINT_PTR(mo),  "MIDI THRU A（A で受けたものを外へ）");
 	add_item(top, MF_POPUP, UINT_PTR(mob), "MIDI THRU B（B で受けたものを外へ）");
 	AppendMenuW(top, MF_SEPARATOR, 0, nullptr);
+	add_item(top, MF_STRING, ID_OVERVIEW, "一覧を開く	F3");
+	add_item(top, MF_STRING, ID_PC_EDITOR, "エディタを開く	F2");
 	const bool ready = g_win.eng && g_win.eng->state.load() == 1;
 	add_item(top, MF_STRING | (ready ? 0 : MF_GRAYED), ID_FACTORY, "工場出荷状態に戻す...");
 
@@ -281,6 +296,27 @@ void show_card_menu(HWND hwnd, POINT screen)
 	DestroyMenu(m);
 }
 
+// MIDI ファイルを流す（品書きから選んだとき・窓に落とされたとき）。鳴っていれば止めて流し直す
+void play_midi_file(HWND hwnd, const std::string &path)
+{
+	if (!g_win.br)
+		return;
+	std::string err;
+	if (!g_win.play_file.start(path, *g_win.br, err)) {
+		const std::wstring w = ui::to_wide("開けない: " + err);
+		MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+		return;
+	}
+	std::printf("再生: %s（%.1f 秒）\n", path.c_str(), g_win.play_file.length());
+	std::fflush(stdout);
+}
+
+// 窓に落とされたファイル（エディタや一覧の窓から）。本体の窓は WM_DROPFILES で受ける
+void play_dropped_file(const std::wstring &path)
+{
+	play_midi_file(GetForegroundWindow(), ui::to_utf8(path.c_str()));
+}
+
 void choose_midi_file(HWND hwnd)
 {
 	wchar_t file[MAX_PATH] = {};
@@ -295,15 +331,7 @@ void choose_midi_file(HWND hwnd)
 	if (!GetOpenFileNameW(&o))
 		return;
 
-	std::string path = ui::to_utf8(file);
-	std::string err;
-	if (!g_win.play_file.start(path, *g_win.br, err)) {
-		const std::wstring w = ui::to_wide("開けない: " + err);
-		MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
-		return;
-	}
-	std::printf("再生: %s（%.1f 秒)\n", path.c_str(), g_win.play_file.length());
-	std::fflush(stdout);
+	play_midi_file(hwnd, ui::to_utf8(file));
 }
 
 // 覚えている設定を捨てて、電源を入れ直す
@@ -469,6 +497,13 @@ mu2000::button key_to_button(WPARAM vk, bool &ok)
 	return mu2000::button::count;
 }
 
+void open_window(HWND hwnd, ui::pc_window &w)
+{
+	std::string err;
+	if (!w.show(GetModuleHandleA(nullptr), err))
+		MessageBoxW(hwnd, ui::to_wide(err).c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+}
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
 	switch (msg) {
@@ -478,8 +513,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 	case WM_TIMER: {
 		// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む
-		if (g_win.br)
+		if (g_win.br) {
 			g_win.panel.tick(*g_win.br);
+			g_win.pc.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			g_win.list.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			g_win.fx.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			// 一覧でインサーションの欄をダブルクリックされたら、設定の窓を出す
+			if (ui::xgui::take_fx_request())
+				open_window(hwnd, g_win.fx);
+		}
 		InvalidateRect(hwnd, nullptr, FALSE);
 		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
 		static DWORD last = 0;
@@ -497,6 +539,17 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 				g_win.reported_drops = drops;
 			}
 		}
+		return 0;
+	}
+
+	case WM_DROPFILES: {
+		// 窓に落とされたファイルの 1 つ目を流す
+		const HDROP drop = HDROP(wp);
+		wchar_t path[MAX_PATH * 4] = {};
+		const bool got = DragQueryFileW(drop, 0, path, UINT(sizeof(path) / sizeof(path[0]))) > 0;
+		DragFinish(drop);
+		if (got)
+			play_midi_file(hwnd, ui::to_utf8(path));
 		return 0;
 	}
 
@@ -588,6 +641,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		else if (id == ID_FACTORY) choose_factory_reset(hwnd);
+		else if (id == ID_PC_EDITOR) open_window(hwnd, g_win.pc);
+		else if (id == ID_OVERVIEW) open_window(hwnd, g_win.list);
 		if (!g_win.last_error.empty()) {
 			const std::wstring w = ui::to_wide(g_win.last_error);
 			MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
@@ -634,6 +689,14 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 	case WM_KEYDOWN: {
 		if (lp & (1 << 30))                     // 押しっぱなしの繰り返しは無視
 			return 0;
+		if (wp == VK_F2) {                      // PC エディタ
+			open_window(hwnd, g_win.pc);
+			return 0;
+		}
+		if (wp == VK_F3) {                      // 一覧
+			open_window(hwnd, g_win.list);
+			return 0;
+		}
 		if (wp == VK_F5) {                      // 配置を読み直す
 			apply_layout(g_win.layout_path, false);
 			InvalidateRect(hwnd, nullptr, FALSE);
@@ -725,7 +788,10 @@ int main(int argc, char **argv)
 	bool exclusive = false;
 	const char *audio_dev = nullptr;
 	bool factory = false;
-	int win_w = 1400, win_h = 360;
+	bool open_editor = false;          // 起動したら PC エディタも出す
+	bool open_list = false;            // 起動したら一覧も出す
+	bool open_fx = false;              // 起動したらインサーションの設定の窓も出す
+	int win_w = 1000, win_h = 400;   // パネルの論理寸法（1000 × 400）と同じ比
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
 	bool boot_for_shot = false;
@@ -757,11 +823,19 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--midiout") && i + 1 < argc) mout_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout-b") && i + 1 < argc) moutb_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout-mu") && i + 1 < argc) moutmu_dev = std::atoi(argv[++i]);
-		else if (!std::strcmp(argv[i], "--nomidi")) { midi_dev = -1; midib_dev = -1; }
+		// 入口も出口も開かない。試しに動かすとき、覚えている THRU の先（実機）へ
+		// 流れないように。覚えている口は書き換えない
+		else if (!std::strcmp(argv[i], "--nomidi")) {
+			midi_dev = midib_dev = mout_dev = moutb_dev = moutmu_dev = -1;
+			g_win.keep_settings = true;
+		}
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
 		else if (!std::strcmp(argv[i], "--factory")) factory = true;
+		else if (!std::strcmp(argv[i], "--editor")) open_editor = true;
+		else if (!std::strcmp(argv[i], "--list-window")) open_list = true;
+		else if (!std::strcmp(argv[i], "--fx-window")) open_fx = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -774,7 +848,7 @@ int main(int argc, char **argv)
 			boot_for_shot = true;
 		}
 		else if (!std::strcmp(argv[i], "--size") && i + 1 < argc) {
-			if (std::sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) { win_w = 1400; win_h = 360; }
+			if (std::sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) { win_w = 1000; win_h = 400; }
 		}
 		else if (dir.empty()) dir = argv[i];
 	}
@@ -815,9 +889,12 @@ int main(int argc, char **argv)
 			" [--midiout 番号] [--midiout-b 番号] [--midiout-mu 番号]"
 			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid]\n"
 			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
+			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
+			"        [--list-window] 一覧の窓も開く（窓では F3 か右クリック）\n"
+			"        [--fx-window] インサーションの設定の窓も開く（一覧でインサーションの欄をダブルクリック）\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
-			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1400x440]\n");
+			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1000x400]\n");
 		return 1;
 	}
 
@@ -830,6 +907,8 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "%s\n", eng.message.c_str());
 		return 1;
 	}
+	// 一覧の窓で、音色の名前と楽器の絵を利用者の ROM から読む（xg/voices.h）
+	ui::xgui::set_voice_rom(eng.mu.program_rom());
 
 	// 絵だけ、ただし起動後の LCD が欲しい場合
 	if (!shot_path.empty()) {
@@ -891,6 +970,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	// MIDI ファイルを窓に落とせば流す（本体の窓も、エディタや一覧の窓も）
+	DragAcceptFiles(hwnd, TRUE);
+	ui::pc_window::set_drop_handler(play_dropped_file);
+
 	g_win.br   = &br;
 	g_win.eng  = &eng;
 	// 窓を出すときだけ、覚えている設定で起動する（--shot は毎回同じ絵にしたい）
@@ -916,6 +999,12 @@ int main(int argc, char **argv)
 
 	eng.publish();
 	ShowWindow(hwnd, SW_SHOW);
+	if (open_editor)
+		open_window(hwnd, g_win.pc);
+	if (open_fx)
+		open_window(hwnd, g_win.fx);
+	if (open_list)
+		open_window(hwnd, g_win.list);
 	UpdateWindow(hwnd);
 
 	// 起動は別スレッド。終わったら音を出し始める
@@ -1011,7 +1100,33 @@ int main(int argc, char **argv)
 		DispatchMessageA(&msg);
 	}
 
+	// PC の窓に閉じたと知らせる（一覧のミュートを外して受信チャンネルを戻すなど）。
+	// 送ったものは音声の糸が流すので、少し待ってから止める
+	if (g_win.br) {
+		g_win.list.shutdown(*g_win.br);
+		g_win.pc.shutdown(*g_win.br);
+		g_win.fx.shutdown(*g_win.br);
+		Sleep(100);
+	}
+
+	// **先に MIDI ファイルを止める。** 止めたときのオールノートオフは音声の糸が THRU から
+	// 外へ流すので、音を先に止めると外の機器（実機）に届かず鳴りっぱなしになる。
+	// 止めてから、音声の糸が流し終えるのを少し待つ
+	if (g_win.play_file.playing()) {
+		g_win.play_file.stop();
+		Sleep(150);
+	}
 	out.stop();
+	// 念のため、THRU の先へ直にもオールサウンドオフ・オールノートオフを送る。
+	// 音声の糸はもう止まっているので、ここから送っても取り合いにならない
+	for (ui::midi_out *thru : { &mout, &mout_b }) {
+		if (!thru->is_open())
+			continue;
+		for (int ch = 0; ch < 16; ch++) {
+			for (u8 v : { u8(0xb0 | ch), u8(120), u8(0), u8(0xb0 | ch), u8(123), u8(0) })
+				thru->send(v);
+		}
+	}
 	if (boot_thread.joinable())
 		boot_thread.join();
 	if (g_win.reboot.joinable())
@@ -1024,6 +1139,8 @@ int main(int argc, char **argv)
 	midi.close();
 	mout.close();
 	mout_mu.close();
+	midi_b.close();
+	mout_b.close();
 
 	if (out.produced())
 		std::printf("CPU %.1f%%、1 回の最悪 %.2f ms、間に合わなかった %llu 回\n",

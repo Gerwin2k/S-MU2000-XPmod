@@ -376,8 +376,10 @@ void engine::midi(const uint8_t *bytes, size_t n, int port)
 	port = port == 1 ? 1 : 0;
 	const status s = state();
 	if (s == status::ready) {
-		for (size_t i = 0; i < n; i++)
+		for (size_t i = 0; i < n; i++) {
 			m_mu->midi_in(bytes[i], port);
+			m_drv.watch(bytes[i], port);
+		}
 		return;
 	}
 	if (s == status::failed)
@@ -418,8 +420,10 @@ void engine::fill(float *left, float *right, int n)
 	m_drv.pump_wheel(*m_mu, m_bridge);
 
 	for (int port = 0; port < 2; port++) {
-		for (uint8_t b : m_pending[port])
+		for (uint8_t b : m_pending[port]) {
 			m_mu->midi_in(b, port);
+			m_drv.watch(b, port);
+		}
 		m_pending[port].clear();
 	}
 

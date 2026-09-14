@@ -13,6 +13,8 @@ constexpr const char *const MONO_POLY[]  = { "MONO", "POLY" };
 constexpr const char *const KEY_ASSIGN[] = { "SINGLE", "MULTI" };
 constexpr const char *const PART_MODE[]  = { "NORMAL", "DRUM", "DRUMS1", "DRUMS2", "DRUMS3", "DRUMS4" };
 constexpr const char *const CONNECT[]    = { "INSERTION", "SYSTEM" };
+constexpr const char *const EQ_TYPE[]    = { "FLAT", "JAZZ", "POPS", "ROCK", "CONCERT" };
+constexpr const char *const EQ_SHAPE[]   = { "SHELF", "PEAK" };
 
 // 番地は XG の決まりから。**マルチパートの 41 バイトは、firmware が返した一括ダンプと
 // 1 バイトずつ突き合わせて並びを確かめた**（doc/params.md）。範囲と読み返しは
@@ -48,6 +50,31 @@ const std::vector<param> TABLE = {
 	{ "insertion1.part",      "Ins1 Part",   area::effect, 0x03, 0x00, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
 	{ "insertion2.type",      "Ins2 Type",   area::effect, 0x03, 0x01, 0x00, 2, coding::byte7,  0,     0x3fff, -1, 0,     view::raw,    0,     nullptr },
 	{ "insertion2.part",      "Ins2 Part",   area::effect, 0x03, 0x01, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
+	{ "insertion3.type",      "Ins3 Type",   area::effect, 0x03, 0x02, 0x00, 2, coding::byte7,  0,     0x3fff, -1, 0,     view::raw,    0,     nullptr },
+	{ "insertion3.part",      "Ins3 Part",   area::effect, 0x03, 0x02, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
+	{ "insertion4.type",      "Ins4 Type",   area::effect, 0x03, 0x03, 0x00, 2, coding::byte7,  0,     0x3fff, -1, 0,     view::raw,    0,     nullptr },
+	{ "insertion4.part",      "Ins4 Part",   area::effect, 0x03, 0x03, 0x0c, 1, coding::byte7,  0,     31,   127, 127,   view::part_off, 0,   nullptr },
+
+	// マスター EQ（02 40 00-14）。範囲は firmware に 0 と 127 を書いて読み返した値。
+	// 初期値は MU2000 を起動した直後の値
+	{ "master_eq.type",       "EQ Type",     area::effect, 0x02, 0x40, 0x00, 1, coding::byte7,  0,    4,    -1, 0,    view::choice, 0,    EQ_TYPE },
+	{ "master_eq.gain1",      "EQ Gain1",    area::effect, 0x02, 0x40, 0x01, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "master_eq.freq1",      "EQ Freq1",    area::effect, 0x02, 0x40, 0x02, 1, coding::byte7,  4,    40,   -1, 12,   view::raw,    0,    nullptr },
+	{ "master_eq.q1",         "EQ Q1",       area::effect, 0x02, 0x40, 0x03, 1, coding::byte7,  1,    120,  -1, 7,    view::raw,    0,    nullptr },
+	{ "master_eq.shape1",     "EQ Shape1",   area::effect, 0x02, 0x40, 0x04, 1, coding::byte7,  0,    1,    -1, 0,    view::choice, 0,    EQ_SHAPE },
+	{ "master_eq.gain2",      "EQ Gain2",    area::effect, 0x02, 0x40, 0x05, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "master_eq.freq2",      "EQ Freq2",    area::effect, 0x02, 0x40, 0x06, 1, coding::byte7,  14,   54,   -1, 28,   view::raw,    0,    nullptr },
+	{ "master_eq.q2",         "EQ Q2",       area::effect, 0x02, 0x40, 0x07, 1, coding::byte7,  1,    120,  -1, 7,    view::raw,    0,    nullptr },
+	{ "master_eq.gain3",      "EQ Gain3",    area::effect, 0x02, 0x40, 0x09, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "master_eq.freq3",      "EQ Freq3",    area::effect, 0x02, 0x40, 0x0a, 1, coding::byte7,  14,   54,   -1, 34,   view::raw,    0,    nullptr },
+	{ "master_eq.q3",         "EQ Q3",       area::effect, 0x02, 0x40, 0x0b, 1, coding::byte7,  1,    120,  -1, 7,    view::raw,    0,    nullptr },
+	{ "master_eq.gain4",      "EQ Gain4",    area::effect, 0x02, 0x40, 0x0d, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "master_eq.freq4",      "EQ Freq4",    area::effect, 0x02, 0x40, 0x0e, 1, coding::byte7,  14,   54,   -1, 46,   view::raw,    0,    nullptr },
+	{ "master_eq.q4",         "EQ Q4",       area::effect, 0x02, 0x40, 0x0f, 1, coding::byte7,  1,    120,  -1, 7,    view::raw,    0,    nullptr },
+	{ "master_eq.gain5",      "EQ Gain5",    area::effect, 0x02, 0x40, 0x11, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "master_eq.freq5",      "EQ Freq5",    area::effect, 0x02, 0x40, 0x12, 1, coding::byte7,  28,   58,   -1, 52,   view::raw,    0,    nullptr },
+	{ "master_eq.q5",         "EQ Q5",       area::effect, 0x02, 0x40, 0x13, 1, coding::byte7,  1,    120,  -1, 7,    view::raw,    0,    nullptr },
+	{ "master_eq.shape5",     "EQ Shape5",   area::effect, 0x02, 0x40, 0x14, 1, coding::byte7,  0,    1,    -1, 0,    view::choice, 0,    EQ_SHAPE },
 
 	// マルチパート（08 pp 00-28、41 バイト）
 	{ "part.element_reserve", "Elem Rsv",    area::part, 0x08, 0, 0x00, 1, coding::byte7,  0,    32,   -1, 2,    view::raw,    0,    nullptr },
@@ -90,6 +117,12 @@ const std::vector<param> TABLE = {
 	{ "part.bend_lfo_pmod",   "PB LFO PM",   area::part, 0x08, 0, 0x26, 1, coding::byte7,  0,    127,  -1, 0,    view::raw,    0,    nullptr },
 	{ "part.bend_lfo_fmod",   "PB LFO FM",   area::part, 0x08, 0, 0x27, 1, coding::byte7,  0,    127,  -1, 0,    view::raw,    0,    nullptr },
 	{ "part.bend_lfo_amod",   "PB LFO AM",   area::part, 0x08, 0, 0x28, 1, coding::byte7,  0,    127,  -1, 0,    view::raw,    0,    nullptr },
+	// パートの EQ（08 pp 72-77）。周波数の範囲は firmware が切り詰めた値。ゲインは firmware が
+	// 0-127 をそのまま受けるが、XG の決まりの ±12dB（52-76）に留める
+	{ "part.eq_bass_gain",    "EQ Bass G",   area::part, 0x08, 0, 0x72, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "part.eq_treble_gain",  "EQ Treb G",   area::part, 0x08, 0, 0x73, 1, coding::byte7,  52,   76,   -1, 64,   view::center, 64,   nullptr },
+	{ "part.eq_bass_freq",    "EQ Bass F",   area::part, 0x08, 0, 0x76, 1, coding::byte7,  4,    40,   -1, 12,   view::raw,    0,    nullptr },
+	{ "part.eq_treble_freq",  "EQ Treb F",   area::part, 0x08, 0, 0x77, 1, coding::byte7,  28,   58,   -1, 54,   view::raw,    0,    nullptr },
 };
 
 u8 checksum(const u8 *p, size_t n)
@@ -286,6 +319,32 @@ bool model::get(const param &p, int part, int &value) const
 	}
 	value = v;
 	return true;
+}
+
+bool model::get_raw(u32 addr, int size, int &value) const
+{
+	int v = 0;
+	for (int i = 0; i < size; i++) {
+		const auto it = m_bytes.find(addr + u32(i));
+		if (it == m_bytes.end())
+			return false;
+		v = v << 7 | (it->second & 0x7f);
+	}
+	value = v;
+	return true;
+}
+
+std::vector<u8> model::set_raw(u32 addr, int size, int value)
+{
+	std::vector<u8> m = { 0xf0, 0x43, 0x10, 0x4c, u8(addr >> 14), u8((addr >> 7) & 0x7f), u8(addr & 0x7f) };
+	for (int i = 0; i < size; i++) {
+		const u8 b = u8((value >> (7 * (size - 1 - i))) & 0x7f);
+		m_bytes[addr + u32(i)] = b;
+		m_pinned[addr + u32(i)] = m_now;
+		m.push_back(b);
+	}
+	m.push_back(0xf7);
+	return m;
 }
 
 bool applies_on_program(const param &p)

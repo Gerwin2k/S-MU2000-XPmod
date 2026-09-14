@@ -62,6 +62,7 @@ BUILD := build
 SRCS := \
 	src/compat/compat.cpp \
 	src/mame/sound/swp30.cpp \
+	src/mame/sound/swp30_jit.cpp \
 	src/mame/video/hd44780.cpp \
 	src/mame/machine/sci4.cpp \
 	src/mame/cpu/sh.cpp \
@@ -114,6 +115,13 @@ $(BUILD)/xgtest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/xg/model.o $(B
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
+# インサーションのパラメータの表（src/xg/fx_params.h）を firmware の LCD から作る（doc/pc-editor.md）。
+#   build/fxsweep.exe ../MU2000/roms > fxsweep.txt
+#   python tools/fxsweep/make_fx_params.py fxsweep.txt src/xg/fx_params.h
+$(BUILD)/fxsweep$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/tools/fxsweep/fxsweep.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
 $(BUILD)/render$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/render.o
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -140,9 +148,26 @@ UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp 
            src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp src/xg/model.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 
-$(BUILD)/gui$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(BUILD)/src/gui.o
+# PC エディタ（doc/pc-editor.md）。Dear ImGui（MIT）を third_party/imgui に取り込んである。
+# 描画は Direct3D 11。ゲームパッドは使わないので XInput は外す
+IMGUI_DIR  := third_party/imgui
+IMGUI_SRCS := $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp \
+              $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp \
+              $(IMGUI_DIR)/backends/imgui_impl_win32.cpp \
+              $(IMGUI_DIR)/backends/imgui_impl_dx11.cpp
+PC_SRCS    := src/ui/pc_editor.cpp src/ui/pc_window.cpp src/ui/xg_ui.cpp src/ui/overview.cpp src/ui/fx_editor.cpp src/ui/fx_help.cpp
+PC_OBJS    := $(IMGUI_SRCS:%.cpp=$(BUILD)/imgui/%.o) $(PC_SRCS:%.cpp=$(BUILD)/imgui/%.o)
+IMGUI_FLAGS := -I $(IMGUI_DIR) -DIMGUI_IMPL_WIN32_DISABLE_GAMEPAD
+
+$(BUILD)/imgui/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32
+	$(CXX) $(CXXFLAGS) $(IMGUI_FLAGS) -c -o $@ $<
+
+$(BUILD)/src/gui.o: CXXFLAGS += $(IMGUI_FLAGS)
+
+$(BUILD)/gui$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(PC_OBJS) $(BUILD)/src/gui.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32 -lshell32 	       -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -limm32
 
 # midisend は MIDI ファイルを実時間で MIDI 出力へ流す（live の試験用）
 $(BUILD)/midisend$(EXE): $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o

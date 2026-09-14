@@ -323,6 +323,10 @@ private:
 			u8  memop, mem_use_index;
 			u8  lfo, offset_index;
 			u32 addr_mask, addr_base;   // resolve_address() を解いたもの
+			u8  latch;                // bit 0x20: 結果の符号とゼロを覚える
+			u8  jump;                 // bit 0x3f: 条件つきで先へ飛ぶ（ALU もレジスタも使わない）
+			u8  cond;                 // bit 0x18-0x1f
+			u16 target;               // 飛び先の番地
 		};
 		void build_ops(op *ops) const;
 		void run_program(const op *ops);
@@ -389,6 +393,7 @@ private:
 		static void call_revram_decode(void *ms);
 
 		void step();
+		void flush_writes();
 		void reset();
 	};
 
@@ -425,6 +430,19 @@ private:
 	// S-MU2000: 判定を済ませた命令表。保存しないので、読み戻したら作り直す
 	std::array<meg_state::op, 0x180> m_meg_ops = {};
 	bool m_meg_ops_stale = true;
+	// S-MU2000: MEG の分岐の状態（doc/upstream.md の 11）。飛び越しは 1 サンプルの中で終わり、
+	// 覚えた符号も次の比較で上書きされるので、状態の保存には入れない
+	bool m_meg_flag_n = false, m_meg_flag_z = false;
+	u16  m_meg_skip_to = 0;
+
+	// S-MU2000: MEG のプログラムを機械語にしたもの（swp30_jit.cpp）。命令表と同じく保存しない。
+	// 環境変数 SMU2000_MEG_JIT=0 で使わない（解釈実行に戻す）
+	struct meg_jit;
+	static void meg_jit_delete(meg_jit *j);
+	static bool meg_jit_enabled();
+	void meg_jit_rebuild();
+	bool meg_jit_run();
+	std::unique_ptr<meg_jit, void (*)(meg_jit *)> m_jit{nullptr, &meg_jit_delete};
 
 	u32 m_sample_counter = 0;
 	u32 m_wave_adr = 0, m_wave_size = 0, m_wave_val = 0, m_revram_adr = 0, m_revram_data = 0;

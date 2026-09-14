@@ -430,7 +430,9 @@ void swp30_device::streaming_block::read_16(memory_access<25, 2, -2, ENDIANNESS_
 		// 32103210 32103210 32103210
 		// bbbbaaaa ddddcccc ........
 		u32 l0 = wave.read_dword(adr);
-		u32 l1 = wave.read_dword(adr);
+		// S-MU2000: MAME は l1 も adr から読んでいて、後ろの 2 つが前の 2 つの写しになっていた
+		// （doc/upstream.md の 10）
+		u32 l1 = wave.read_dword(adr+1);
 		val0 = l0;
 		val1 = l0 >> 16;
 		val2 = l1;
@@ -669,7 +671,18 @@ void swp30_device::streaming_block::read_8c(memory_access<25, 2, -2, ENDIANNESS_
 {
 	offs_t base_address = m_address & 0x1ffffff;
 	if(m_loop & 0x80000000) {
-		abort();
+		// S-MU2000: MAME はここで abort() して落ちる（MU100 でも同じ。doc/upstream.md の 7）。
+		//
+		// 圧縮したサンプルを逆向きに鳴らす声は ROM に無い。ここに来るのは、発音数がいっぱいのときに
+		// firmware が鳴っている声を取り上げて、次の音のレジスタを 1 つずつ書いている途中の 1 サンプル。
+		// スタンダードキットのタム（逆向きの 16bit サンプル）の start と loop を書いたあと、
+		// address をまだ書いていないと、前の音（圧縮）の address と逆向きの印が混ざる。
+		// 次の書き込みとキーオンで正しい状態に戻るので、その 1 サンプルは直前の値を保つ
+		val0 = m_dpcm_s0;
+		val1 = m_dpcm_s1;
+		val2 = m_dpcm_s2;
+		val3 = m_dpcm_s3;
+		return;
 	} else {
 		s32 spos =  m_dpcm_pos;
 		base_address += spos >> 2;
@@ -756,7 +769,11 @@ std::pair<s16, bool> swp30_device::streaming_block::step(memory_access<25, 2, -2
 				if(m_pos_dec >= 0x8000)
 					m_pos ++;
 				m_pos_dec &= 0x7fff;
-				m_dpcm_pos = 3;
+				// S-MU2000: MAME は 3 に決め打ちしていた（doc/upstream.md の 12）。
+				// 展開は m_pos+3 まで済んでいて、ループの後ろには先頭の 3 つの差分の写しがある。
+				// 1 回で 2 つ進んでループを跨ぐと、済んでいるのは先頭の 1 つ目までなので、
+				// 3 から始めると 2 つ目の差分を落として積算器がずれる。済んだ所の続きから展開する
+				m_dpcm_pos -= m_loop_size;
 			} else {
 				m_done = true;
 				m_last = result;
@@ -2295,6 +2312,26 @@ void swp30_device::revram_enable_w(u16 data)
 void swp30_device::revram_clear_w(u16 data)
 {
 	logerror("revram clear = %04x\n", data);
+
+	// S-MU2000: MAME は何もしていなかった（doc/upstream.md の 8）。
+	//
+	// firmware はエフェクトの種類を替えるたびに、enable にビットを立ててから clear に同じビットを
+	// 書く（0002・0004・0008 のように 1 ビットずつ）。ビット i は MEG のメモリ地図 m_map[i] の区画
+	// （先頭 = 下 8 ビット × 1024、長さ = 2 の (10 + 8-10 ビット) 乗）で、書いた時点の地図の区画を
+	// 0 にするものと読んだ。マスターとスレーブで地図が違っても、それぞれの区画に合う。
+	//
+	// 消さないと、前のエフェクトが残した遅延メモリの中身を新しいエフェクトのプログラムが読む。
+	// パフォーマンスを選ぶのと同時に鍵盤を弾くと（Performance 002 Stereo Grand など）、
+	// 残りを読んだ帰還の網が飽和して張り付き、全振幅のまま戻らなかった。実機は普通に鳴る
+	for(int i = 0; i != 8; i++) {
+		if(!BIT(data, i))
+			continue;
+		const u32 base = BIT(m_meg->m_map[i], 0, 8) << 10;
+		const u32 size = 1 << (10 + BIT(m_meg->m_map[i], 8, 3));
+		const u32 end = std::min<u32>(base + size, u32(m_reverb_ram.size()));
+		if(base < end)
+			std::fill(m_reverb_ram.begin() + base, m_reverb_ram.begin() + end, 0);
+	}
 }
 
 u16 swp30_device::revram_status_r()
@@ -3242,6 +3279,29 @@ static inline u32 meg_pack24(s64 p)
 	return u32(s32(q));
 }
 
+// S-MU2000: MEG の分岐（doc/upstream.md の 11）。
+//
+// MAME は「分岐は無い」としていて、bit 0x3f の立った命令を ALU の無い命令として
+// 読み流していた。LO-FI と DYNA FLT/FLANG/PHASE のプログラムにだけ現れる。並びから:
+//
+//   * bit 0x20 の立った命令は、結果（p）が負か、0 かを覚える
+//   * bit 0x3f の立った命令は、bit 0x18-0x1f の条件が合えば、bit 0x10-0x17 の番地
+//     （同じ 256 番地の中）まで、あいだの命令を何もしない命令にする
+//   * 条件: bit 3 が 0 なら必ず。1 なら bit 2 が 1 で負のとき、0 で負でないとき。
+//     bit 1 が立っていれば 0 のときも
+//
+// LO-FI では、振幅を ±m19 で止める 2 か所と、サンプリング周波数を落とす
+// サンプル＆ホールドの間引き、DYNA 系では包絡の最大値の追従と整流がこの形
+static inline bool meg_cond(u8 cond, bool n, bool z)
+{
+	if(!BIT(cond, 3))
+		return true;
+	bool c = BIT(cond, 2) ? n : !n;
+	if(BIT(cond, 1))
+		c = c || z;
+	return c;
+}
+
 void swp30_device::meg_state::step()
 {
 	// S-MU2000: debugger_instruction_hook は削除
@@ -3266,6 +3326,45 @@ void swp30_device::meg_state::step()
 	if(m_memr_active[m_delay_2]) {
 		m_ram_read = m_memr_value[m_delay_2];
 		m_memr_active[m_delay_2] = false;
+	}
+
+	// S-MU2000: 分岐で飛び越している命令は何もしない
+	if(m_swp->m_meg_skip_to) {
+		if(m_pc < m_swp->m_meg_skip_to) {
+			m_mw_reg[m_delay_3] = 0;
+			m_rw_reg[m_delay_3] = 0;
+			m_memw_active[m_delay_2] = false;
+			m_index_active[m_delay_3] = false;
+			m_t_value[m_delay_2] = s16(std::clamp<s64>(m_p >> (15+8), -0x8000, 0x7fff));
+			m_delay_3 = m_delay_3 == 2 ? 0 : m_delay_3 + 1;
+			m_delay_2 ^= 1;
+			m_pc ++;
+			m_icount --;
+			if(m_pc == 0x180)
+				m_pc = 0;
+			return;
+		}
+		m_swp->m_meg_skip_to = 0;
+	}
+	if(BIT(m_program[m_pc], 0x3f)) {
+		const u64 opc = m_program[m_pc];
+		if(meg_cond(BIT(opc, 0x18, 8), m_swp->m_meg_flag_n, m_swp->m_meg_flag_z)) {
+			const u16 target = (m_pc & ~0xff) | BIT(opc, 0x10, 8);
+			if(target > m_pc)
+				m_swp->m_meg_skip_to = target;
+		}
+		m_mw_reg[m_delay_3] = 0;
+		m_rw_reg[m_delay_3] = 0;
+		m_memw_active[m_delay_2] = false;
+		m_index_active[m_delay_3] = false;
+		m_t_value[m_delay_2] = s16(std::clamp<s64>(m_p >> (15+8), -0x8000, 0x7fff));
+		m_delay_3 = m_delay_3 == 2 ? 0 : m_delay_3 + 1;
+		m_delay_2 ^= 1;
+		m_pc ++;
+		m_icount --;
+		if(m_pc == 0x180)
+			m_pc = 0;
+		return;
 	}
 
 	// S-MU2000: 解いておいた形を使う。中身は decode_program() が入れている
@@ -3345,6 +3444,10 @@ void swp30_device::meg_state::step()
 		}
 
 		m_p = r;
+		if(BIT(m_program[m_pc], 0x20)) {
+			m_swp->m_meg_flag_n = r < 0;
+			m_swp->m_meg_flag_z = r == 0;
+		}
 	}
 
 	m_mw_reg[m_delay_3] = dm;
@@ -3460,6 +3563,32 @@ void swp30_device::meg_state::step()
 		m_pc = 0;
 }
 
+// S-MU2000: サンプルの切れ目で、遅れて入る m/r/index の書き込みを流し切る。
+//
+// 書き込みは 3 命令遅れるので、プログラムの最後の 3 命令（0x17d-0x17f）が
+// 書いたものは、そのままだと次のサンプルの 0x000-0x002 で入る。ところが
+// ミキサはその前に m20-m2f へ送りを書き、m20-m3f の出口を読む。TALK MOD は
+// インサーションの出口 m2c/m2d を 0x17e/0x17f で書くので、出口はミキサに
+// 読まれず、次のサンプルの頭で送りを出口の古い値で潰してしまい、音が全く
+// 出なかった（パフォーマンス 017 FeedbackEG など）。ヤマハがこう書いている
+// 以上、実機はサンプルの切れ目で書き込みが済んでからミキサとやり取りする
+// はず（切れ目に空きのクロックがあると見る）。doc/upstream.md の 9
+void swp30_device::meg_state::flush_writes()
+{
+	for(u32 i = 0; i != 3; i++) {
+		const u32 k = (m_delay_3 + i) % 3;
+		if(m_mw_reg[k])
+			m_m[m_mw_reg[k]] = m_mw_value[k];
+		if(m_rw_reg[k])
+			m_r[m_rw_reg[k]] = m_rw_value[k];
+		if(m_index_active[k])
+			m_ram_index = m_index_value[k];
+		m_mw_reg[k] = 0;
+		m_rw_reg[k] = 0;
+		m_index_active[k] = false;
+	}
+}
+
 // S-MU2000: 命令ごとの判定を、プログラムが変わったときに 1 回だけ済ませる。
 // step() が毎回やっていた分岐のうち、プログラムと番地の割り当て（m_map）
 // だけで決まるものをここで解く
@@ -3495,6 +3624,10 @@ void swp30_device::meg_state::build_ops(op *ops) const
 		o.mem_use_index = d.mem_use_index;
 		o.lfo          = pc >> 4;
 		o.offset_index = pc / 3;
+		o.latch  = BIT(m_program[pc], 0x20);
+		o.jump   = BIT(m_program[pc], 0x3f);
+		o.cond   = BIT(m_program[pc], 0x18, 8);
+		o.target = (pc & ~0xff) | BIT(m_program[pc], 0x10, 8);
 
 		// resolve_address() と同じ選び方。i == 7 で必ず止まるので「無し」は無い
 		const u16 key = (pc / 12) << 11;
@@ -3514,6 +3647,8 @@ void swp30_device::meg_state::run_program(const op *ops)
 	u32 d3 = m_delay_3, d2 = m_delay_2;
 	s64 p = m_p;
 	const u32 sample_counter = m_sample_counter;
+	bool flag_n = m_swp->m_meg_flag_n, flag_z = m_swp->m_meg_flag_z;
+	u32 skip_to = 0;
 
 	for(u32 pc = 0; pc != 0x180; pc++) {
 		const op &o = ops[pc];
@@ -3531,6 +3666,22 @@ void swp30_device::meg_state::run_program(const op *ops)
 		if(m_memr_active[d2]) {
 			m_ram_read = m_memr_value[d2];
 			m_memr_active[d2] = false;
+		}
+
+		// S-MU2000: 分岐（step() と同じ）。飛び越す命令と分岐の命令は何もしない
+		if(skip_to && pc >= skip_to)
+			skip_to = 0;
+		if(skip_to || o.jump) {
+			if(!skip_to && meg_cond(o.cond, flag_n, flag_z) && o.target > pc)
+				skip_to = o.target;
+			m_mw_reg[d3] = 0;
+			m_rw_reg[d3] = 0;
+			m_memw_active[d2] = false;
+			m_index_active[d3] = false;
+			m_t_value[d2] = s16(std::clamp<s64>(p >> (15+8), -0x8000, 0x7fff));
+			d3 = d3 == 2 ? 0 : d3 + 1;
+			d2 ^= 1;
+			continue;
 		}
 
 		if(o.alu) {
@@ -3573,6 +3724,10 @@ void swp30_device::meg_state::run_program(const op *ops)
 			default: r = std::min<s64>(r < 0 ? -r : r, 0x3fffffffff); break;
 			}
 			p = r;
+			if(o.latch) {
+				flag_n = r < 0;
+				flag_z = r == 0;
+			}
 		}
 
 		m_mw_reg[d3] = o.dm;
@@ -3643,6 +3798,8 @@ void swp30_device::meg_state::run_program(const op *ops)
 	m_p = p;
 	m_delay_3 = d3;
 	m_delay_2 = d2;
+	m_swp->m_meg_flag_n = flag_n;
+	m_swp->m_meg_flag_z = flag_z;
 	m_pc = 0;
 	m_icount -= 0x180;
 }
@@ -3659,6 +3816,7 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 		m_meg->build_ops(m_meg_ops.data());
 		m_meg_program_changed = false;
 		m_meg_ops_stale = false;
+		meg_jit_rebuild();
 	}
 
 	sample_step();
@@ -3669,9 +3827,11 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 	} else if(m_profile) {
 		// S-MU2000: MEG だけの時間を測る（blocktime が使う）
 		const auto t0 = std::chrono::steady_clock::now();
-		m_meg->run_program(m_meg_ops.data());
+		if(!meg_jit_run())
+			m_meg->run_program(m_meg_ops.data());
 		m_t_meg += u64(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
-	} else
+	} else if(!meg_jit_run())
+		// S-MU2000: 機械語にできていれば、そちらで回す（swp30_jit.cpp）
 		m_meg->run_program(m_meg_ops.data());
 
 	// sound_stream_update() がやっていたことをここで行う。
@@ -3725,6 +3885,8 @@ void swp30_device::dump_meg(const char *path)
 
 void swp30_device::sample_step()
 {
+	m_meg->flush_writes();
+
 	// S-MU2000: MEG の m レジスタ 0x20-0x3f を毎サンプル書き出す（--dump-dac）。
 	// **混ぜる前**なので、ここに出るのは MEG が 384 段回し終わった直後の姿、
 	// つまりエフェクトの出口。次の行の mixer_step が 0x20-0x2f を

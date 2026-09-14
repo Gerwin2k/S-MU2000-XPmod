@@ -55,6 +55,8 @@ public:
 	// 入りきらなければ丸ごと捨てて false
 	bool send(const u8 *bytes, size_t n) { return m_to_mu.put(bytes, n); }
 	bool send(const std::vector<u8> &m)  { return m.empty() || send(m.data(), m.size()); }
+	// 口 B（パート 17-32）へ。一覧の鍵盤から弾くときに使う。THRU には流さない
+	bool send_b(const u8 *bytes, size_t n) { return m_to_mu_b.put(bytes, n); }
 
 	// パラメータの層の問い合わせ（ダンプ要求）。send と同じく音源の口 A へ入るが、
 	// **外の MIDI THRU へは流さない**（画面が値を読みに行っているだけで、外の機器には
@@ -83,6 +85,18 @@ public:
 		}
 	}
 
+	void read_xg(xg_snapshot &out) const
+	{
+		for (;;) {
+			const unsigned a = m_xg_seq.load(std::memory_order_acquire);
+			if (a & 1)
+				continue;
+			std::memcpy(&out, &m_xg, sizeof(out));
+			if (m_xg_seq.load(std::memory_order_acquire) == a)
+				return;
+		}
+	}
+
 	// ---- 音源から
 
 	u64 buttons() const { return m_buttons.load(std::memory_order_relaxed); }
@@ -90,6 +104,7 @@ public:
 	// 音源側から。溜まっている MIDI を 1 バイトずつ
 	bool take_midi(u8 &v) { return m_to_mu.take(v); }
 	bool take_ask(u8 &v)  { return m_ask.take(v); }
+	bool take_midi_b(u8 &v) { return m_to_mu_b.take(v); }
 
 	// 音源の MIDI OUT から出たものを画面へ。書き手は音声の糸だけなので錠は取らない。
 	// 画面が読んでいなければ（VST3 の画面を閉じている等）溢れた分は捨てる
@@ -111,6 +126,14 @@ public:
 		const int step = (v > 0) ? 1 : -1;
 		m_wheel.fetch_sub(step, std::memory_order_relaxed);
 		return step;
+	}
+
+	// XG の値の写し（25ms ごと）。書き手は音声の糸だけ
+	void publish_xg(const xg_snapshot &s)
+	{
+		m_xg_seq.fetch_add(1, std::memory_order_release);
+		std::memcpy(&m_xg, &s, sizeof(m_xg));
+		m_xg_seq.fetch_add(1, std::memory_order_release);
 	}
 
 	void publish(const snapshot &s)
@@ -165,6 +188,7 @@ private:
 
 	ring                  m_to_mu;        // 画面・MIDI ファイル → 音源（THRU にも流す）
 	ring                  m_ask;          // パラメータの層の問い合わせ → 音源（THRU には流さない）
+	ring                  m_to_mu_b;      // 画面 → 音源の口 B（THRU には流さない）
 	ring                  m_from_mu;      // 音源の MIDI OUT → 画面
 	std::atomic<u64>      m_audio_ms{0};
 	u64                   m_clock_frac = 0;   // 音声の糸だけが触る
@@ -173,6 +197,8 @@ private:
 	std::atomic<float>    m_gain{1.0f};
 	std::atomic<unsigned> m_seq{0};
 	snapshot              m_snap;
+	std::atomic<unsigned> m_xg_seq{0};
+	xg_snapshot           m_xg;
 };
 
 } // namespace ui

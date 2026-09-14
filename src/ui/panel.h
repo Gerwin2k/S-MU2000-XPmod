@@ -107,9 +107,8 @@ public:
 	bool release(bridge &br);
 	bool wheel_at(int x, int y, int delta, bridge &br);
 
-	// 画面の糸のタイマーから、描く前に呼ぶ。音源の MIDI OUT から返ってきたものを
-	// パラメータの層に読ませ、見えている面の値を問い合わせる。
-	// 戻り値は「新しい値を読んだか」
+	// 画面の糸のタイマーから、描く前に呼ぶ。音声の糸が写したワーク RAM を
+	// パラメータの層に読ませる（問い合わせはしない）。戻り値は「新しい値を読んだか」
 	bool tick(bridge &br);
 
 	// 描く。status は下に小さく出す 1 行。無ければ空でよい
@@ -117,13 +116,16 @@ public:
 
 	const std::vector<spot> &spots() const { return m_spots; }
 
+	// パラメータの層の写し。PC エディタも同じものを読み書きする（tick が回している）
+	xg::model &xg() { return m_xg; }
+	const xg_snapshot &ram() const { return m_ram; }
+
 private:
 	RECT scale(double x, double y, double w, double h) const;
 	POINT at(double x, double y) const;
 	void build_spots();
 	void build_editor_spots();
 	void build_effect_spots();
-	void refresh_soon() { m_refresh_at = 0; }
 
 	void paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	                 const char *status) const;
@@ -165,7 +167,8 @@ private:
 	// 描くときはそこを読む。パネルや曲が変えた値もそのまま出る
 	int m_part = 0;
 	xg::model m_xg;
-	u64 m_refresh_at = 0;        // 次に見えている面を読み返す時刻（音源の時計）
+	xg_snapshot m_ram;           // 音声の糸が写した RAM（画面の糸だけが触る）
+	u64 m_ram_serial = 0;
 
 	HFONT m_font_label = nullptr, m_font_small = nullptr;
 	// 目盛りの番号用。バー 1 本ぶんの幅に 2 桁を収める
