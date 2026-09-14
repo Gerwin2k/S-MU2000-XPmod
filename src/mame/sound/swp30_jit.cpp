@@ -30,116 +30,15 @@
 #include <cstring>
 #include <vector>
 
+#if SMU2000_MEG_JIT
+#include "x64asm.h"
+#endif
+
 namespace {
 
 #if SMU2000_MEG_JIT
 
-// ---- 小さな x86-64 の組み立て器 ------------------------------------------------------
-
-enum : u8 { RAX = 0, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15, NOREG = 0xff };
-
-struct mem {
-	u8 base;
-	u8 index = NOREG;
-	u8 scale = 1;
-	s32 disp = 0;
-};
-
-class assembler
-{
-public:
-	std::vector<u8> code;
-
-	void byte(u8 b) { code.push_back(b); }
-	void d32(u32 v) { for (int i = 0; i < 4; i++) byte(u8(v >> (8 * i))); }
-	void d64(u64 v) { for (int i = 0; i < 8; i++) byte(u8(v >> (8 * i))); }
-
-	// 命令の本体。prefix（0 なら無し）、REX.W、命令バイト列、ModRM の reg 欄、相手
-	void rr(u8 prefix, bool w, std::initializer_list<u8> opc, u8 reg, u8 rm)
-	{
-		if (prefix) byte(prefix);
-		u8 rex = 0x40 | (w ? 8 : 0) | ((reg >> 3) & 1) << 2 | ((rm >> 3) & 1);
-		if (rex != 0x40) byte(rex);
-		for (u8 o : opc) byte(o);
-		byte(u8(0xc0 | ((reg & 7) << 3) | (rm & 7)));
-	}
-	void rm(u8 prefix, bool w, std::initializer_list<u8> opc, u8 reg, const mem &m)
-	{
-		if (prefix) byte(prefix);
-		const u8 x = m.index == NOREG ? 0 : (m.index >> 3) & 1;
-		u8 rex = 0x40 | (w ? 8 : 0) | ((reg >> 3) & 1) << 2 | x << 1 | ((m.base >> 3) & 1);
-		if (rex != 0x40) byte(rex);
-		for (u8 o : opc) byte(o);
-		// いつも disp32 の形にする（長さが決まっていて楽）
-		if (m.index == NOREG && (m.base & 7) != RSP) {
-			byte(u8(0x80 | ((reg & 7) << 3) | (m.base & 7)));
-		} else {
-			byte(u8(0x80 | ((reg & 7) << 3) | 4));
-			const u8 ss = m.scale == 1 ? 0 : m.scale == 2 ? 1 : m.scale == 4 ? 2 : 3;
-			const u8 idx = m.index == NOREG ? 4 : (m.index & 7);
-			byte(u8((ss << 6) | (idx << 3) | (m.base & 7)));
-		}
-		d32(u32(m.disp));
-	}
-
-	void mov64(u8 d, u8 s)            { rr(0, true, {0x8b}, d, s); }
-	void load64(u8 d, const mem &m)   { rm(0, true, {0x8b}, d, m); }
-	void store64(const mem &m, u8 s)  { rm(0, true, {0x89}, s, m); }
-	void load32(u8 d, const mem &m)   { rm(0, false, {0x8b}, d, m); }
-	void store32(const mem &m, u8 s)  { rm(0, false, {0x89}, s, m); }
-	void loads32(u8 d, const mem &m)  { rm(0, true, {0x63}, d, m); }          // movsxd
-	void loads16(u8 d, const mem &m)  { rm(0, true, {0x0f, 0xbf}, d, m); }    // movsx r64, m16
-	void loadu16(u8 d, const mem &m)  { rm(0, false, {0x0f, 0xb7}, d, m); }   // movzx r32, m16
-	void loadu8(u8 d, const mem &m)   { rm(0, false, {0x0f, 0xb6}, d, m); }   // movzx r32, m8
-	void store16(const mem &m, u8 s)  { rm(0x66, false, {0x89}, s, m); }
-	void store8i(const mem &m, u8 v)  { rm(0, false, {0xc6}, 0, m); byte(v); }
-	void imm64(u8 d, u64 v)
-	{
-		byte(u8(0x48 | ((d >> 3) & 1)));
-		byte(u8(0xb8 | (d & 7)));
-		d64(v);
-	}
-	void imm32(u8 d, u32 v)
-	{
-		if (d >= 8) byte(0x41);
-		byte(u8(0xb8 | (d & 7)));
-		d32(v);
-	}
-	void add64(u8 d, u8 s) { rr(0, true, {0x01}, s, d); }
-	void sub64(u8 d, u8 s) { rr(0, true, {0x29}, s, d); }
-	void and64(u8 d, u8 s) { rr(0, true, {0x21}, s, d); }
-	void cmp64(u8 a, u8 b) { rr(0, true, {0x39}, b, a); }          // cmp a, b
-	void test64(u8 a, u8 b) { rr(0, true, {0x85}, b, a); }
-	void test32(u8 a, u8 b) { rr(0, false, {0x85}, b, a); }
-	void xor32(u8 d, u8 s) { rr(0, false, {0x31}, s, d); }
-	void add32(u8 d, u8 s) { rr(0, false, {0x01}, s, d); }
-	void sub32(u8 d, u8 s) { rr(0, false, {0x29}, s, d); }
-	void imul64(u8 d, u8 s) { rr(0, true, {0x0f, 0xaf}, d, s); }
-	void imul32i(u8 d, u8 s, u32 v) { rr(0, false, {0x69}, d, s); d32(v); }
-	void add32i(u8 d, u32 v) { rr(0, false, {0x81}, 0, d); d32(v); }
-	void and32i(u8 d, u32 v) { rr(0, false, {0x81}, 4, d); d32(v); }
-	void shl64(u8 d, u8 n) { rr(0, true, {0xc1}, 4, d); byte(n); }
-	void sar64(u8 d, u8 n) { rr(0, true, {0xc1}, 7, d); byte(n); }
-	void shl32(u8 d, u8 n) { rr(0, false, {0xc1}, 4, d); byte(n); }
-	void sar32(u8 d, u8 n) { rr(0, false, {0xc1}, 7, d); byte(n); }
-	void rol32(u8 d, u8 n) { rr(0, false, {0xc1}, 0, d); byte(n); }
-	void neg64(u8 d) { rr(0, true, {0xf7}, 3, d); }
-	void cmovl64(u8 d, u8 s) { rr(0, true, {0x0f, 0x4c}, d, s); }
-	void cmovg64(u8 d, u8 s) { rr(0, true, {0x0f, 0x4f}, d, s); }
-	void cmovs64(u8 d, u8 s) { rr(0, true, {0x0f, 0x48}, d, s); }
-	void setl_mem(const mem &m) { rm(0, false, {0x0f, 0x9c}, 0, m); }
-	void sete_mem(const mem &m) { rm(0, false, {0x0f, 0x94}, 0, m); }
-	void call_reg(u8 r) { rr(0, false, {0xff}, 2, r); }
-	void push(u8 r) { if (r >= 8) byte(0x41); byte(u8(0x50 | (r & 7))); }
-	void pop(u8 r)  { if (r >= 8) byte(0x41); byte(u8(0x58 | (r & 7))); }
-	void subrsp(u32 v) { rr(0, true, {0x81}, 5, RSP); d32(v); }
-	void addrsp(u32 v) { rr(0, true, {0x81}, 0, RSP); d32(v); }
-	void ret() { byte(0xc3); }
-	// jz で先へ飛ぶ。飛び先は後で patch() で埋める
-	size_t jz_fwd() { byte(0x0f); byte(0x84); d32(0); return code.size(); }
-	void patch(size_t at) { const u32 rel = u32(code.size() - at); std::memcpy(&code[at - 4], &rel, 4); }
-	void call_abs(void *fn) { imm64(RAX, u64(uintptr_t(fn))); call_reg(RAX); }
-};
+using namespace x64asm;
 
 #endif
 
