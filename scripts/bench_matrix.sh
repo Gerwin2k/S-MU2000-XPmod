@@ -8,7 +8,7 @@
 # on multibyte characters inside parameter expansions.
 #
 # Configurations:
-#   * arm64 native (interpreter; the JITs emit x86-64 and cannot run here)
+#   * arm64 native: interpreter / SH2 JIT (the MEG JIT is still x86-64 only)
 #   * x86_64 under Rosetta: both JITs / MEG JIT only / SH2 JIT only / no JIT
 #
 # Usage:
@@ -69,7 +69,8 @@ run_in() { # $1 = binary path, $2 = label, rest = env
 
 # ---- the matrix ---------------------------------------------------------------
 rows=""
-rows+="$(run_in ./build/blocktime          "arm64 native (interpreter)")"$'\n'
+rows+="$(run_in ./build/blocktime          "arm64 native - interpreter" SMU2000_SH2_JIT=0)"$'\n'
+rows+="$(run_in ./build/blocktime          "arm64 native - SH2 JIT")"$'\n'
 rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - both JITs")"$'\n'
 rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - MEG JIT only" SMU2000_SH2_JIT=0)"$'\n'
 rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - SH2 JIT only" SMU2000_MEG_JIT=0)"$'\n'

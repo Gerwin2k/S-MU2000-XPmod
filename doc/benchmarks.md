@@ -24,16 +24,17 @@ incompatible license. Have the ROMs and the MIDI ready locally.
 To check configurations one by one by hand:
 
 ```
-# arm64 (the native build; the JITs never compile in here)
+# arm64 (the native build; the SH2 JIT compiles in, the MEG JIT does not)
 make build/blocktime
 ./build/blocktime roms demo.mid 64 10 3
+SMU2000_SH2_JIT=0 ./build/blocktime ...   # SH2 interpreted
 
-# x86_64 (Rosetta; the JITs compile in. Built into its own directory)
+# x86_64 (Rosetta; both JITs compile in. Built into its own directory)
 make BUILD=build-x64 ARCH=x86_64 build-x64/blocktime
 ./build-x64/blocktime roms demo.mid 64 10 3
 
-# JIT on/off switches (for the x86_64 build)
-SMU2000_SH2_JIT=0 ./build-x64/blocktime ...   # SH2 interpreted
+# JIT on/off switches (either build, where the JIT exists)
+SMU2000_SH2_JIT=0 ./build/blocktime ...       # SH2 interpreted
 SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # MEG interpreted
 SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # all interpreted
 ```
@@ -58,3 +59,18 @@ power and energy-saver settings before measuring.
 | x86_64 Rosetta - MEG JIT only | 0.734 | 31.74 | 50.6 | 2187 | 45 |
 | x86_64 Rosetta - SH2 JIT only | 0.527 | 1.90 | 36.3 | 131 | 27 |
 | x86_64 Rosetta - interpreter | 0.947 | 2.16 | 65.2 | 149 | 127 |
+
+## 2026-09-14 14:58 -- MacBookPro18,2 (Apple M1 Max)
+
+- macOS 27.0, uname arm64, 10 logical cores (8 performance + 2 efficiency), 32 GB RAM
+- Rosetta 2: yes; compiler: `Apple clang version 21.0.0 (clang-2100.3.34.2)`
+- source: `494c20a`; block = 256 frames, 10 s x 3 repeats, medians of runs
+- song: `demo.mid` (local only); ROM: `roms`
+
+| config | avg ms/block | worst ms | % of real time (avg) | % of real time (worst) | blocks overrun |
+|---|---|---|---|---|---|
+| arm64 native (interpreter) | 2.256 | 3.09 | 38.9 | 53 | 0 |
+| x86_64 Rosetta - both JITs | 1.167 | 56.62 | 20.1 | 975 | 10 |
+| x86_64 Rosetta - MEG JIT only | 2.946 | 58.62 | 50.8 | 1010 | 18 |
+| x86_64 Rosetta - SH2 JIT only | 2.114 | 4.73 | 36.4 | 82 | 0 |
+| x86_64 Rosetta - interpreter | 3.892 | 7.53 | 67.0 | 130 | 37 |
