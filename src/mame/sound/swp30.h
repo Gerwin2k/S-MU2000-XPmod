@@ -435,6 +435,8 @@ private:
 	};
 	std::array<std::array<mix_tap, 32>, 0x60> m_mix_taps = {};
 	std::array<u8, 0x60> m_mix_ntaps = {};
+	std::array<u8, 0x60> m_mix_active = {};   // S-MU2000: 振り分け先のある入力の番号（mixer_rebuild が詰める）
+	u8 m_mix_nactive = 0;
 	u64 m_mix_dirty[2] = { ~u64(0), ~u64(0) };   // 作り直す入力の印（0x00-0x3f、0x40-0x5f）
 	void mixer_rebuild();
 	void mixer_mark(int mix) { if(mix < 0x60) m_mix_dirty[mix >> 6] |= u64(1) << (mix & 63); }

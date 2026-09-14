@@ -392,7 +392,12 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	}
 
 	assembler a;
-	const u8 MS = RBX, SWP = R12, P = R13, SC = R14, RAM = R15, SEED = RSI, K_MAX = RDI, K_MIN = RBP;   // SEED: 乱数の種を回しているあいだ持つ
+	const u8 MS = RBX, SWP = R12, P = R13, SC = R14, RAM = R15, SEED = RSI, K_MAX = RDI, K_MIN = RBP;
+	const u8 P_MAX = R9, P_MIN = R10;                    // p の飽和の限界。r9 r10 は呼ぶ先で壊れるので、呼んだあと積み直す
+	const auto load_p_limits = [&]() {
+		a.imm64(P_MAX, 0x3fffffffff);
+		a.imm64(P_MIN, u64(s64(-0x4000000000)));
+	};   // SEED: 乱数の種を回しているあいだ持つ
 	const auto M = [&](s32 disp) { return mem{MS, NOREG, 1, disp}; };
 
 	// 入口（Windows x64: rcx = ms, rdx = swp, r8 = リバーブ RAM）
@@ -406,6 +411,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	a.load32(SEED, mem{SWP, NOREG, 1, o_seed});
 	a.imm64(K_MAX, 0x7fffff);                            // pack24 の限界（即値を毎回積まないため）
 	a.imm64(K_MIN, u64(s64(-0x800000)));
+	load_p_limits();
 
 	// p を 24bit に詰める（meg_pack24）。入力 rax、出力 eax
 	const auto pack24 = [&]() {
@@ -587,29 +593,25 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			switch (o.clamp) {
 			case 0: break;
 			case 1:
-				a.imm64(RCX, u64(s64(-0x4000000000)));
-				a.cmp64(RAX, RCX);
-				a.cmovl64(RAX, RCX);
-				a.imm64(RCX, 0x3fffffffff);
-				a.cmp64(RAX, RCX);
-				a.cmovg64(RAX, RCX);
+				a.cmp64(RAX, P_MIN);
+				a.cmovl64(RAX, P_MIN);
+				a.cmp64(RAX, P_MAX);
+				a.cmovg64(RAX, P_MAX);
 				break;
 			case 2:
 				a.xor32(RCX, RCX);
 				a.cmp64(RAX, RCX);
 				a.cmovl64(RAX, RCX);
-				a.imm64(RCX, 0x3fffffffff);
-				a.cmp64(RAX, RCX);
-				a.cmovg64(RAX, RCX);
+				a.cmp64(RAX, P_MAX);
+				a.cmovg64(RAX, P_MAX);
 				break;
 			default:
 				a.mov64(RDX, RAX);
 				a.neg64(RDX);
 				a.cmovs64(RDX, RAX);
 				a.mov64(RAX, RDX);
-				a.imm64(RCX, 0x3fffffffff);
-				a.cmp64(RAX, RCX);
-				a.cmovg64(RAX, RCX);
+				a.cmp64(RAX, P_MAX);
+				a.cmovg64(RAX, P_MAX);
 				break;
 			}
 			a.mov64(P, RAX);
@@ -628,6 +630,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.mov64(RCX, MS);
 				a.imm32(RDX, o.lfo);
 				a.call_abs(reinterpret_cast<void *>(&meg_jit::call_lfo));
+				load_p_limits();
 				break;
 			case 4:
 				a.load32(RAX, M(o_ram_read));

@@ -1761,7 +1761,11 @@ s32 swp30_device::volume_apply(s32 level, s32 sample)
 void swp30_device::awm2_step(std::array<s32, 0x40> &samples_per_chan)
 {
 	for(int chan = 0; chan != 0x40; chan++) {
-		peg_step(chan);
+		// S-MU2000: 着いている声（ほとんど全部）は印を立てるだけで済ませる。peg_step の頭と同じ
+		if(m_peg_cur[chan] == s32(util::sext(u32(m_pitch_offset[chan] & 0x3fff), 14)))
+			m_peg_reached[chan] = 1;
+		else
+			peg_step(chan);
 		if(!m_envelope[chan].active()) {
 			samples_per_chan[chan] = 0;
 			continue;
@@ -2909,6 +2913,11 @@ void swp30_device::mixer_rebuild()
 		m_mix_ntaps[mix] = u8(n);
 	}
 	m_mix_dirty[0] = m_mix_dirty[1] = 0;
+	// 振り分け先の無い入力は mixer_step で見ない
+	m_mix_nactive = 0;
+	for(int mix = 0; mix != 0x60; mix++)
+		if(m_mix_ntaps[mix])
+			m_mix_active[m_mix_nactive++] = u8(mix);
 }
 
 void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
@@ -2919,10 +2928,9 @@ void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 	std::array<s32, 0x20> mixer_out;
 	std::fill(mixer_out.begin(), mixer_out.end(), 0);
 
-	for(int mix = 0; mix != 0x60; mix++) {
+	for(int ai = 0; ai != m_mix_nactive; ai++) {
+		const int mix = m_mix_active[ai];
 		const int n = m_mix_ntaps[mix];
-		if(n == 0)
-			continue;
 
 		s32 input;
 		if(mix < 0x40)
