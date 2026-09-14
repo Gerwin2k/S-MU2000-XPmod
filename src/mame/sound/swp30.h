@@ -389,6 +389,7 @@ private:
 		static void call_revram_decode(void *ms);
 
 		void step();
+		void flush_writes();
 		void reset();
 	};
 

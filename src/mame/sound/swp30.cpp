@@ -2306,6 +2306,26 @@ void swp30_device::revram_enable_w(u16 data)
 void swp30_device::revram_clear_w(u16 data)
 {
 	logerror("revram clear = %04x\n", data);
+
+	// S-MU2000: MAME は何もしていなかった（doc/upstream.md の 8）。
+	//
+	// firmware はエフェクトの種類を替えるたびに、enable にビットを立ててから clear に同じビットを
+	// 書く（0002・0004・0008 のように 1 ビットずつ）。ビット i は MEG のメモリ地図 m_map[i] の区画
+	// （先頭 = 下 8 ビット × 1024、長さ = 2 の (10 + 8-10 ビット) 乗）で、書いた時点の地図の区画を
+	// 0 にするものと読んだ。マスターとスレーブで地図が違っても、それぞれの区画に合う。
+	//
+	// 消さないと、前のエフェクトが残した遅延メモリの中身を新しいエフェクトのプログラムが読む。
+	// パフォーマンスを選ぶのと同時に鍵盤を弾くと（Performance 002 Stereo Grand など）、
+	// 残りを読んだ帰還の網が飽和して張り付き、全振幅のまま戻らなかった。実機は普通に鳴る
+	for(int i = 0; i != 8; i++) {
+		if(!BIT(data, i))
+			continue;
+		const u32 base = BIT(m_meg->m_map[i], 0, 8) << 10;
+		const u32 size = 1 << (10 + BIT(m_meg->m_map[i], 8, 3));
+		const u32 end = std::min<u32>(base + size, u32(m_reverb_ram.size()));
+		if(base < end)
+			std::fill(m_reverb_ram.begin() + base, m_reverb_ram.begin() + end, 0);
+	}
 }
 
 u16 swp30_device::revram_status_r()
@@ -3471,6 +3491,32 @@ void swp30_device::meg_state::step()
 		m_pc = 0;
 }
 
+// S-MU2000: サンプルの切れ目で、遅れて入る m/r/index の書き込みを流し切る。
+//
+// 書き込みは 3 命令遅れるので、プログラムの最後の 3 命令（0x17d-0x17f）が
+// 書いたものは、そのままだと次のサンプルの 0x000-0x002 で入る。ところが
+// ミキサはその前に m20-m2f へ送りを書き、m20-m3f の出口を読む。TALK MOD は
+// インサーションの出口 m2c/m2d を 0x17e/0x17f で書くので、出口はミキサに
+// 読まれず、次のサンプルの頭で送りを出口の古い値で潰してしまい、音が全く
+// 出なかった（パフォーマンス 017 FeedbackEG など）。ヤマハがこう書いている
+// 以上、実機はサンプルの切れ目で書き込みが済んでからミキサとやり取りする
+// はず（切れ目に空きのクロックがあると見る）。doc/upstream.md の 9
+void swp30_device::meg_state::flush_writes()
+{
+	for(u32 i = 0; i != 3; i++) {
+		const u32 k = (m_delay_3 + i) % 3;
+		if(m_mw_reg[k])
+			m_m[m_mw_reg[k]] = m_mw_value[k];
+		if(m_rw_reg[k])
+			m_r[m_rw_reg[k]] = m_rw_value[k];
+		if(m_index_active[k])
+			m_ram_index = m_index_value[k];
+		m_mw_reg[k] = 0;
+		m_rw_reg[k] = 0;
+		m_index_active[k] = false;
+	}
+}
+
 // S-MU2000: 命令ごとの判定を、プログラムが変わったときに 1 回だけ済ませる。
 // step() が毎回やっていた分岐のうち、プログラムと番地の割り当て（m_map）
 // だけで決まるものをここで解く
@@ -3736,6 +3782,8 @@ void swp30_device::dump_meg(const char *path)
 
 void swp30_device::sample_step()
 {
+	m_meg->flush_writes();
+
 	// S-MU2000: MEG の m レジスタ 0x20-0x3f を毎サンプル書き出す（--dump-dac）。
 	// **混ぜる前**なので、ここに出るのは MEG が 384 段回し終わった直後の姿、
 	// つまりエフェクトの出口。次の行の mixer_step が 0x20-0x2f を
