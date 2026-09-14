@@ -102,7 +102,7 @@ $(BUILD)/panel.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/sr
 
 # gui は実機のフロントパネル風の画面を出す
 UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp \
-           src/ui/audio_out.cpp src/ui/midi_in.cpp src/ui/midi_out.cpp \
+           src/ui/audio_out.cpp src/ui/audio_in.cpp src/ui/midi_in.cpp src/ui/midi_out.cpp \
            src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp src/xg/model.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 

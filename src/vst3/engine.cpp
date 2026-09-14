@@ -353,6 +353,8 @@ void engine::set_output_rate(double rate)
 	m_cutoff = std::min(1.0, rate / NATIVE_RATE) * 0.955;
 	// 音源側は「必要な先の音」をその場で作れるので、変換に先読みの遅れは無い
 	m_latency = 0;
+	m_in_rs.configure(rate, NATIVE_RATE);
+	m_in_w = m_in_r = 0;
 	flush_resampler();
 }
 
@@ -367,6 +369,13 @@ void engine::flush_resampler()
 void engine::one_sample(float &l, float &r)
 {
 	s32 li = 0, ri = 0;
+	// A/D INPUT。溜めが空なら無音（入力の変換器の先読みの分だけ、頭が少し欠ける）
+	if (m_in_r != m_in_w) {
+		m_mu->set_audio_input(m_in_q[m_in_r * 2], m_in_q[m_in_r * 2 + 1]);
+		m_in_r = (m_in_r + 1) & IN_MASK;
+	} else {
+		m_mu->set_audio_input(0, 0);
+	}
 	m_mu->run_sample(li, ri);
 	const float k = 1.0f / float(mu2000::DAC_FULL_SCALE);
 	l = std::clamp(float(li) * k, -1.0f, 1.0f);
@@ -405,10 +414,43 @@ void engine::all_notes_off()
 }
 
 
-void engine::fill(float *left, float *right, int n)
+// ホストの周波数の入力を 44100 に直して溜める。溢れる分は捨てる
+void engine::push_input(const float *in_l, const float *in_r, int n)
+{
+	if (!in_l || n <= 0)
+		return;
+	if (!in_r)
+		in_r = in_l;
+	for (int at = 0; at < n;) {
+		const int k = std::min(1024, n - at);
+		m_in_stage.resize(size_t(k) * 2);
+		for (int i = 0; i < k; i++) {
+			m_in_stage[size_t(i) * 2]     = s16(std::lround(std::clamp(in_l[at + i], -1.0f, 1.0f) * 32767.0f));
+			m_in_stage[size_t(i) * 2 + 1] = s16(std::lround(std::clamp(in_r[at + i], -1.0f, 1.0f) * 32767.0f));
+		}
+		m_in_rs.push(m_in_stage.data(), k);
+		at += k;
+		const int out = m_in_rs.output_available();
+		if (out <= 0)
+			continue;
+		m_in_conv.resize(size_t(out) * 2);
+		m_in_rs.pull(m_in_conv.data(), out);
+		for (int i = 0; i < out; i++) {
+			const int next = (m_in_w + 1) & IN_MASK;
+			if (next == m_in_r)
+				break;
+			m_in_q[m_in_w * 2]     = s16(std::lround(std::clamp(m_in_conv[size_t(i) * 2], -1.0f, 1.0f) * 32767.0f));
+			m_in_q[m_in_w * 2 + 1] = s16(std::lround(std::clamp(m_in_conv[size_t(i) * 2 + 1], -1.0f, 1.0f) * 32767.0f));
+			m_in_w = next;
+		}
+	}
+}
+
+void engine::fill(float *left, float *right, int n, const float *in_l, const float *in_r)
 {
 	if (n <= 0)
 		return;
+	push_input(in_l, in_r, n);
 	if (state() != status::ready) {
 		std::memset(left,  0, size_t(n) * sizeof(float));
 		std::memset(right, 0, size_t(n) * sizeof(float));

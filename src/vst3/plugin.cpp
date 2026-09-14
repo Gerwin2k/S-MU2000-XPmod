@@ -207,7 +207,7 @@ public:
 
 	int32 PLUGIN_API getBusCount(MediaType type, BusDirection dir) override
 	{
-		if (type == kAudio) return dir == kOutput ? 1 : 0;
+		if (type == kAudio) return 1;          // 出力 1 つと、A/D INPUT の入力 1 つ
 		if (type == kEvent) return dir == kInput  ? kPorts : 0;
 		return 0;
 	}
@@ -222,6 +222,16 @@ public:
 			set_str(bus.name, "Stereo Out");
 			bus.busType = kMain;
 			bus.flags   = BusInfo::kDefaultActive;
+			return kResultOk;
+		}
+		// A/D INPUT。サンプリングで録る音。補助の入力（サイドチェーン）として出す
+		if (type == kAudio && dir == kInput && index == 0) {
+			bus.mediaType    = kAudio;
+			bus.direction    = kInput;
+			bus.channelCount = 2;
+			set_str(bus.name, "A/D Input");
+			bus.busType = kAux;
+			bus.flags   = 0;
 			return kResultOk;
 		}
 		if (type == kEvent && dir == kInput && index >= 0 && index < kPorts) {
@@ -332,10 +342,11 @@ public:
 
 	// ---- IAudioProcessor
 
-	tresult PLUGIN_API setBusArrangements(SpeakerArrangement *, int32 numIns,
+	tresult PLUGIN_API setBusArrangements(SpeakerArrangement *inputs, int32 numIns,
 	                                      SpeakerArrangement *outputs, int32 numOuts) override
 	{
-		if (numIns == 0 && numOuts == 1 && outputs[0] == SpeakerArr::kStereo)
+		if (numOuts == 1 && outputs[0] == SpeakerArr::kStereo &&
+		    (numIns == 0 || (numIns == 1 && inputs[0] == SpeakerArr::kStereo)))
 			return kResultTrue;
 		return kResultFalse;
 	}
@@ -343,7 +354,7 @@ public:
 	tresult PLUGIN_API getBusArrangement(BusDirection dir, int32 index,
 	                                     SpeakerArrangement &arr) override
 	{
-		if (dir == kOutput && index == 0) { arr = SpeakerArr::kStereo; return kResultOk; }
+		if (index == 0) { arr = SpeakerArr::kStereo; return kResultOk; }
 		return kInvalidArgument;
 	}
 
@@ -586,6 +597,11 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 	                        data.symbolicSampleSize == kSample32) ? &data.outputs[0] : nullptr;
 	float *left  = (out && out->numChannels > 0) ? out->channelBuffers32[0] : nullptr;
 	float *right = (out && out->numChannels > 1) ? out->channelBuffers32[1] : left;
+	// A/D INPUT（補助の入力）。繋がっていなければ無し
+	AudioBusBuffers *in = (data.numInputs > 0 && data.inputs &&
+	                       data.symbolicSampleSize == kSample32) ? &data.inputs[0] : nullptr;
+	const float *in_l = (in && in->numChannels > 0 && in->channelBuffers32) ? in->channelBuffers32[0] : nullptr;
+	const float *in_r = (in && in->numChannels > 1 && in->channelBuffers32) ? in->channelBuffers32[1] : in_l;
 
 	LARGE_INTEGER t0;
 	QueryPerformanceCounter(&t0);
@@ -694,7 +710,8 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 	for (const msg &m : m_msgs) {
 		const int32 at = std::clamp(m.off, done, n);
 		if (at > done && left) {
-			m_engine.fill(left + done, right + done, at - done);
+			m_engine.fill(left + done, right + done, at - done,
+			              in_l ? in_l + done : nullptr, in_r ? in_r + done : nullptr);
 			done = at;
 		} else if (at > done) {
 			done = at;
@@ -705,7 +722,8 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 			m_engine.midi(m.b, m.n, m.port);
 	}
 	if (left && done < n)
-		m_engine.fill(left + done, right + done, n - done);
+		m_engine.fill(left + done, right + done, n - done,
+		              in_l ? in_l + done : nullptr, in_r ? in_r + done : nullptr);
 
 	// 出力レベル。一気に変えると音が跳ねるので 1 サンプルずつ寄せる
 	if (left) {

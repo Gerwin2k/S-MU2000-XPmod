@@ -24,6 +24,7 @@
 #include "nvram.h"
 #include "smf.h"
 #include "ui/audio_out.h"
+#include "ui/audio_in.h"
 #include "ui/bridge.h"
 #include "ui/driver.h"
 #include "ui/midi_in.h"
@@ -66,6 +67,7 @@ struct engine {
 	// MIDI OUT。MU2000 が自分で送り出すもの（XG のダンプ要求への返事など）。
 	// これを loopMIDI 越しに外のエディタへ返すと、外から読み書きできる
 	ui::midi_out *mout_mu = nullptr;
+	ui::audio_in *ain = nullptr;      // A/D INPUT に入れる音（無ければ無音）
 
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
 	// THRU A / B の流量の上限。MIDI の輪で溢れたものを実機へ流さない（midi_guard.h）
@@ -189,6 +191,11 @@ struct engine {
 
 		for (u32 i = 0; i < n; i++) {
 			s32 l = 0, r = 0;
+			if (ain) {
+				s32 a1, a2;
+				ain->pop(a1, a2);
+				mu.set_audio_input(a1, a2);
+			}
 			mu.run_sample(l, r);
 			l = s32(l * g) * 32768 / mu2000::DAC_FULL_SCALE;
 			r = s32(r * g) * 32768 / mu2000::DAC_FULL_SCALE;
@@ -216,6 +223,8 @@ struct window_state {
 	ui::bridge *br = nullptr;
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
+	ui::audio_in  *ain = nullptr;      // A/D INPUT（録音デバイス）
+	std::string ain_name;              // 選んだ録音デバイスの名前。空なら使わない
 
 	std::string audio_name;            // 音の出口（名前の一部）。空なら既定
 	std::string layout_path;           // 読んでいる panel.txt。F5 で読み直す
@@ -285,7 +294,8 @@ std::string settings_path()
 void load_settings(std::string &in_name, std::string &in_name_b,
                    std::string &out_name, std::string &out_name_b,
                    std::string &audio_name, float *volume = nullptr,
-                   std::string *out_name_mu = nullptr, bool *fold_ports34 = nullptr)
+                   std::string *out_name_mu = nullptr, bool *fold_ports34 = nullptr,
+                   std::string *ain_name = nullptr)
 {
 	const std::string path = settings_path();
 	if (path.empty())
@@ -308,6 +318,7 @@ void load_settings(std::string &in_name, std::string &in_name_b,
 		if (key == "midi_out_b") out_name_b = val;
 		if (key == "midi_out_mu" && out_name_mu) *out_name_mu = val;
 		if (key == "audio_out")  audio_name = val;
+		if (key == "audio_in" && ain_name) *ain_name = val;
 		if (key == "ports34" && fold_ports34) *fold_ports34 = val != "drop";
 		if (key == "volume" && volume && !val.empty())
 			*volume = std::clamp(float(std::atof(val.c_str())), 0.0f, 1.0f);
@@ -334,6 +345,7 @@ void save_settings()
 	std::fprintf(f, "midi_out_b=%s\n", pick(g_win.out_name_b,  g_win.out_keep_b));
 	std::fprintf(f, "midi_out_mu=%s\n", pick(g_win.out_name_mu, g_win.out_keep_mu));
 	std::fprintf(f, "audio_out=%s\n", g_win.audio_name.c_str());
+	std::fprintf(f, "audio_in=%s\n", g_win.ain_name.c_str());
 	// パネルの VOLUME のつまみ。実機でも DAC の後ろのアナログのつまみで、
 	// firmware の RAM には入らないので、こちらで覚える
 	if (g_win.br)
@@ -361,6 +373,7 @@ enum : UINT {
 	ID_OUT_NONE = 1900, ID_OUT_BASE = 1901,
 	ID_OUTB_NONE = 2400, ID_OUTB_BASE = 2401,
 	ID_OUTMU_NONE = 3100, ID_OUTMU_BASE = 3101,
+	ID_AIN_NONE = 3200, ID_AIN_BASE = 3201,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901, ID_PORTS34_FOLD = 2902, ID_PORTS34_DROP = 2903,
 	ID_FACTORY = 3000,
 	ID_PC_EDITOR = 3001,
@@ -390,6 +403,54 @@ void fill_port_menu(HMENU m, const std::vector<std::string> &names, int now,
 		         id_base + UINT(i), names[i].c_str());
 }
 
+// A/D INPUT に入れる録音デバイス。選んでいる名前に印を付ける
+void fill_ain_menu(HMENU m, const std::vector<std::string> &names)
+{
+	add_item(m, MF_STRING | (g_win.ain_name.empty() ? MF_CHECKED : 0), ID_AIN_NONE, "使わない");
+	AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+	if (names.empty())
+		add_item(m, MF_STRING | MF_GRAYED, 0, "（録音デバイスが無い）");
+	for (size_t i = 0; i < names.size(); i++)
+		add_item(m, MF_STRING | (names[i] == g_win.ain_name ? MF_CHECKED : 0),
+		         ID_AIN_BASE + UINT(i), names[i].c_str());
+}
+
+void show_ain_menu(HWND hwnd, POINT screen)
+{
+	HMENU m = CreatePopupMenu();
+	add_item(m, MF_STRING | MF_GRAYED, 0, "A/D INPUT（サンプリングで録る音）");
+	AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+	fill_ain_menu(m, ui::audio_in::list());
+	TrackPopupMenu(m, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON, screen.x, screen.y, 0, hwnd, nullptr);
+	DestroyMenu(m);
+}
+
+// 録音デバイスを選ぶ。-1 は使わない
+void choose_ain(int dev)
+{
+	if (!g_win.ain)
+		return;
+	g_win.ain->stop();
+	g_win.last_error.clear();
+	if (dev < 0) {
+		g_win.ain_name.clear();
+	} else {
+		const auto names = ui::audio_in::list();
+		if (dev < int(names.size())) {
+			std::string err;
+			if (!g_win.ain->start(names[size_t(dev)], err)) {
+				g_win.last_error = err;
+				std::fprintf(stderr, "A/D INPUT: %s\n", err.c_str());
+			} else {
+				std::printf("A/D INPUT: %s（%s）\n", g_win.ain->device_name().c_str(), g_win.ain->format_line().c_str());
+				std::fflush(stdout);
+			}
+			g_win.ain_name = names[size_t(dev)];
+		}
+	}
+	save_settings();
+}
+
 void show_port_menu(HWND hwnd, POINT screen)
 {
 	HMENU top = CreatePopupMenu();
@@ -412,6 +473,9 @@ void show_port_menu(HWND hwnd, POINT screen)
 	add_item(top, MF_POPUP, UINT_PTR(mom), "MIDI OUT（MU2000 が送り出すもの）");
 	add_item(top, MF_POPUP, UINT_PTR(mo),  "MIDI THRU A（A で受けたものを外へ）");
 	add_item(top, MF_POPUP, UINT_PTR(mob), "MIDI THRU B（B で受けたものを外へ）");
+	HMENU mai = CreatePopupMenu();
+	fill_ain_menu(mai, ui::audio_in::list());
+	add_item(top, MF_POPUP, UINT_PTR(mai), "A/D INPUT（サンプリングで録る音）");
 	AppendMenuW(top, MF_SEPARATOR, 0, nullptr);
 	add_item(top, MF_STRING, ID_OVERVIEW, "一覧を開く	F3");
 	add_item(top, MF_STRING, ID_PC_EDITOR, "エディタを開く	F2");
@@ -752,6 +816,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			show_port_menu(hwnd, pt);
 			return 0;
 		}
+		// A/D INPUT のジャックは録音デバイス
+		if (g_win.panel.on_ad_input(mx, my)) {
+			POINT pt{ mx, my };
+			ClientToScreen(hwnd, &pt);
+			show_ain_menu(hwnd, pt);
+			return 0;
+		}
 		// カードの差し込み口は MIDI ファイル
 		if (g_win.panel.on_card_slot(mx, my)) {
 			POINT pt{ mx, my };
@@ -789,6 +860,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id >= ID_OUTB_BASE && id < ID_OUTB_BASE + 256) choose_out_b(int(id - ID_OUTB_BASE));
 		else if (id == ID_OUTMU_NONE)    choose_out_mu(-1);
 		else if (id >= ID_OUTMU_BASE && id < ID_OUTMU_BASE + 256) choose_out_mu(int(id - ID_OUTMU_BASE));
+		else if (id == ID_AIN_NONE)      choose_ain(-1);
+		else if (id >= ID_AIN_BASE && id < ID_AIN_BASE + 256) choose_ain(int(id - ID_AIN_BASE));
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		else if (id == ID_PORTS34_FOLD || id == ID_PORTS34_DROP) {
@@ -814,6 +887,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		ScreenToClient(hwnd, &pt);
 		if (LOWORD(lp) == HTCLIENT &&
 		    (g_win.panel.on_midi_jack(pt.x, pt.y) ||
+		     g_win.panel.on_ad_input(pt.x, pt.y) ||
 		     g_win.panel.on_card_slot(pt.x, pt.y))) {
 			SetCursor(LoadCursor(nullptr, IDC_HAND));
 			return TRUE;
@@ -1167,6 +1241,9 @@ int main(int argc, char **argv)
 	// 起動は別スレッド。終わったら音を出し始める
 	static ui::audio_out out;
 	g_win.out = &out;
+	static ui::audio_in ain;
+	g_win.ain = &ain;
+	eng.ain = &ain;
 	std::thread boot_thread([&] {
 		if (!eng.boot()) {
 			eng.state.store(2);
@@ -1178,7 +1255,9 @@ int main(int argc, char **argv)
 
 		// 前に選んだ口を名前で探す。--midi / --midiout があればそちらが勝つ
 		std::string want_in, want_in_b, want_out, want_out_b, want_audio, want_out_mu;
-		load_settings(want_in, want_in_b, want_out, want_out_b, want_audio, nullptr, &want_out_mu);
+		std::string want_ain;
+		load_settings(want_in, want_in_b, want_out, want_out_b, want_audio, nullptr, &want_out_mu, nullptr, &want_ain);
+		g_win.ain_name = want_ain;
 		// --audio があればそちらが勝つ。無ければ前に選んだもの
 		g_win.audio_name = audio_dev ? std::string(audio_dev) : want_audio;
 		if (midi_dev == -2)
@@ -1235,6 +1314,14 @@ int main(int argc, char **argv)
 		g_win.audio_name = out.device_name();
 		std::printf("音声の出口: %s\n%s\n", out.device_name().c_str(),
 		            out.format_line().c_str());
+		// A/D INPUT。前に選んだ録音デバイスがあれば開く（開けなくても名前は覚えておく）
+		if (!g_win.ain_name.empty()) {
+			std::string aerr;
+			if (ain.start(g_win.ain_name, aerr))
+				std::printf("A/D INPUT: %s（%s）\n", ain.device_name().c_str(), ain.format_line().c_str());
+			else
+				std::printf("A/D INPUT: なし（%s）\n", aerr.c_str());
+		}
 		save_settings();
 		// --play が付いていれば、鳴り始めたところで流し出す
 		if (!play_path.empty()) {
@@ -1298,6 +1385,7 @@ int main(int argc, char **argv)
 	mout_mu.close();
 	midi_b.close();
 	mout_b.close();
+	ain.stop();
 
 	if (out.produced())
 		std::printf("CPU %.1f%%、1 回の最悪 %.2f ms、間に合わなかった %llu 回\n",
