@@ -38,7 +38,10 @@
 #include <memory>
 
 struct sh2_device::jit {
-	using fn_t = void (*)(sh2_device *, internal_sh2_state *, const u8 *rom, u8 *ram);
+	// 入口の関数（Windows x64: rcx = cpu、rdx = 状態、r8 = ROM、r9 = RAM）。entry のブロックから回し始め、
+	// ブロックの終わりで次のブロックへ直に飛ぶ。icount が尽きるか、訳していない所・m_delay・割り込みの印に当たると戻る
+	using enter_t = void (*)(sh2_device *, internal_sh2_state *, const u8 *rom, u8 *ram);
+	using code_t = void *;
 
 	static constexpr u32 ROM_END   = 0x400000;   // ここより下だけ訳す
 	static constexpr int MAX_INSNS = 48;         // 1 ブロックの命令数の上限（遅延スロットは別）
@@ -46,7 +49,11 @@ struct sh2_device::jit {
 
 	void *buf = nullptr;
 	size_t used = 0;
-	std::array<std::unique_ptr<fn_t[]>, (ROM_END >> 12)> pages;
+	std::array<std::unique_ptr<code_t[]>, (ROM_END >> 12)> pages;
+	enter_t enter = nullptr;      // 置き場の頭に作る
+	void *next_block = nullptr;   // ブロックの終わりから飛ぶ先（置き場の頭に作る）
+	code_t entry = nullptr;       // enter が最初に飛ぶブロック
+	size_t base_used = 0;         // 入口と飛ぶ先の大きさ（捨てても残す）
 
 	~jit()
 	{
@@ -56,11 +63,11 @@ struct sh2_device::jit {
 #endif
 	}
 
-	fn_t *slot(u32 pc)
+	code_t *slot(u32 pc)
 	{
 		auto &p = pages[pc >> 12];
 		if (!p) {
-			p.reset(new fn_t[0x800]);
+			p.reset(new code_t[0x800]);
 			std::fill(p.get(), p.get() + 0x800, nullptr);
 		}
 		return &p[(pc & 0xfff) >> 1];
@@ -70,10 +77,11 @@ struct sh2_device::jit {
 	{
 		for (auto &p : pages)
 			p.reset();
-		used = 0;
+		used = base_used;
 	}
 
-	fn_t compile(sh2_device &cpu, u32 pc);
+	bool init(sh2_device &cpu);
+	code_t compile(sh2_device &cpu, u32 pc);
 };
 
 void sh2_device::jit_delete(jit *j)
@@ -167,15 +175,16 @@ bool sh2_device::jit_run()
 		return false;
 	if (!m_jit)
 		m_jit.reset(new jit);
-	jit::fn_t fn = *m_jit->slot(pc);
-	if (!fn) {
+	jit::code_t code = *m_jit->slot(pc);
+	if (!code) {
 		// 訳している途中で置き場が一杯になると全部捨てるので、置き場は訳した後に引き直す
-		fn = m_jit->compile(*this, pc);
-		if (!fn)
+		code = m_jit->compile(*this, pc);
+		if (!code)
 			return false;
-		*m_jit->slot(pc) = fn;
+		*m_jit->slot(pc) = code;
 	}
-	fn(this, m_sh2_state, m_program->hot_rom(), m_program->hot_ram());
+	m_jit->entry = code;
+	m_jit->enter(this, m_sh2_state, m_program->hot_rom(), m_program->hot_ram());
 	return true;
 }
 
@@ -232,21 +241,89 @@ kind classify(u16 op)
 
 #if !SMU2000_SH2_JIT
 
-sh2_device::jit::fn_t sh2_device::jit::compile(sh2_device &, u32)
+bool sh2_device::jit::init(sh2_device &)
+{
+	return false;
+}
+
+sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &, u32)
 {
 	return nullptr;
 }
 
 #else
 
-sh2_device::jit::fn_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
+// 置き場の頭に、入口（enter）とブロックの終わりから飛ぶ先（next_block）を作る
+bool sh2_device::jit::init(sh2_device &cpu)
 {
 	using namespace x64asm;
-	if (!buf) {
-		buf = VirtualAlloc(nullptr, BUF_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-		if (!buf)
-			return nullptr;
-	}
+	buf = VirtualAlloc(nullptr, BUF_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	if (!buf)
+		return false;
+	if (sizeof(pages[0]) != 8)
+		return false;
+	const internal_sh2_state *st = cpu.m_sh2_state;
+	const auto S = [st](const void *f) { return mem{ RSI, NOREG, 1, s32(intptr_t(f) - intptr_t(st)) }; };
+	const mem C_test { RBX, NOREG, 1, s32(intptr_t(&cpu.m_test_irq) - intptr_t(&cpu)) };
+
+	assembler a;
+	// enter: rbx rsi r12 r13 を保って、entry へ飛ぶ
+	a.push(RBX); a.push(RSI); a.push(R12); a.push(R13);
+	a.subrsp(40);                        // 影 32 + 詰め物 8。rsp は 16 の倍数になる
+	a.mov64(RBX, RCX);
+	a.mov64(RSI, RDX);
+	a.mov64(R12, R8);
+	a.mov64(R13, R9);
+	a.imm64(RAX, u64(uintptr_t(&entry)));
+	a.load64(RAX, mem{ RAX, NOREG, 1, 0 });
+	a.rr(0, false, {0xff}, 4, RAX);      // jmp rax
+
+	// next_block: jit_run が見ることを見て、次のブロックが訳してあればそこへ飛ぶ。無ければ戻る
+	const size_t next = a.code.size();
+	std::vector<size_t> to_exit;
+	a.cmp32i_mem(S(&st->icount), 0);
+	to_exit.push_back(a.jcc_fwd(0x8e));                     // jle
+	a.load32(RAX, S(&st->m_delay));
+	a.test32(RAX, RAX);
+	to_exit.push_back(a.jcc_fwd(0x85));
+	a.load32(RAX, C_test);
+	a.test32(RAX, RAX);
+	to_exit.push_back(a.jcc_fwd(0x85));
+	a.load32(RAX, S(&st->pc));
+	a.cmp32ri(RAX, ROM_END - 0x100);
+	to_exit.push_back(a.jcc_fwd(0x83));                     // jae
+	a.test32ri(RAX, 1);
+	to_exit.push_back(a.jcc_fwd(0x85));
+	a.mov32(RCX, RAX);
+	a.shr32(RCX, 12);
+	a.imm64(RDX, u64(uintptr_t(pages.data())));
+	a.load64(RDX, mem{ RDX, RCX, 8, 0 });
+	a.test64(RDX, RDX);
+	to_exit.push_back(a.jcc_fwd(0x84));
+	a.and32i(RAX, 0xfff);
+	a.shr32(RAX, 1);
+	a.load64(RAX, mem{ RDX, RAX, 8, 0 });
+	a.test64(RAX, RAX);
+	to_exit.push_back(a.jcc_fwd(0x84));
+	a.rr(0, false, {0xff}, 4, RAX);      // jmp rax
+	for (size_t p : to_exit)
+		a.patch(p);
+	a.addrsp(40);
+	a.pop(R13); a.pop(R12); a.pop(RSI); a.pop(RBX);
+	a.ret();
+
+	std::memcpy(buf, a.code.data(), a.code.size());
+	enter = reinterpret_cast<enter_t>(buf);
+	next_block = static_cast<u8 *>(buf) + next;
+	base_used = used = a.code.size();
+	return true;
+}
+
+sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
+{
+	using namespace x64asm;
+	if (!buf && !init(cpu))
+		return nullptr;
 
 	// 直に読み書きする領域（mem_bus の fast() と同じ）。番地を折り返さない設定のときだけ訳す
 	const mem_bus &bus = *cpu.m_program;
@@ -269,13 +346,7 @@ sh2_device::jit::fn_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		return nullptr;
 
 	assembler a;
-	// 入口（Windows x64: rcx = cpu、rdx = 状態、r8 = ROM、r9 = RAM）。rbx rsi r12 r13 は呼ばれる側が保つ
-	a.push(RBX); a.push(RSI); a.push(R12); a.push(R13);
-	a.subrsp(40);                        // 影 32 + 詰め物 8。rsp は 16 の倍数になる
-	a.mov64(RBX, RCX);
-	a.mov64(RSI, RDX);
-	a.mov64(R12, R8);
-	a.mov64(R13, R9);
+	// ブロックの中では rbx = cpu、rsi = 状態、r12 = ROM、r13 = RAM（enter が入れる）
 
 	std::vector<size_t> to_finish, to_ret;
 
@@ -681,9 +752,8 @@ sh2_device::jit::fn_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 	const size_t ret = a.code.size();
 	for (size_t p : to_ret)
 		a.patch_to(p, ret);
-	a.addrsp(40);
-	a.pop(R13); a.pop(R12); a.pop(RSI); a.pop(RBX);
-	a.ret();
+	a.imm64(RAX, u64(uintptr_t(next_block)));
+	a.rr(0, false, {0xff}, 4, RAX);      // jmp rax
 
 	if (used + a.code.size() > BUF_SIZE) {
 		flush();
@@ -693,7 +763,7 @@ sh2_device::jit::fn_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 	u8 *dst = static_cast<u8 *>(buf) + used;
 	std::memcpy(dst, a.code.data(), a.code.size());
 	used += a.code.size();
-	return reinterpret_cast<fn_t>(dst);
+	return dst;
 }
 
 #endif

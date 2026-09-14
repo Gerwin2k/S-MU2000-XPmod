@@ -1861,7 +1861,7 @@ void swp30_device::reset()
 
 
 	std::fill(m_mixer.begin(), m_mixer.end(), mixer_slot());
-	m_mix_dirty = true;
+	m_mix_dirty[0] = m_mix_dirty[1] = ~u64(0);
 
 	for(auto &s : m_streaming)
 		s.clear();
@@ -2640,7 +2640,7 @@ template<int Sel> u16 swp30_device::vol_r(offs_t offset)
 template<int Sel> void swp30_device::vol_w(offs_t offset, u16 data)
 {
 	m_mixer[(Sel & 0x40) | (offset >> 6)].vol[Sel & 3] = data;
-	m_mix_dirty = true;
+	mixer_mark((Sel & 0x40) | (offset >> 6));
 }
 
 template<int Sel> u16 swp30_device::route_r(offs_t offset)
@@ -2651,7 +2651,7 @@ template<int Sel> u16 swp30_device::route_r(offs_t offset)
 template<int Sel> void swp30_device::route_w(offs_t offset, u16 data)
 {
 	m_mixer[(Sel & 0x40) | (offset >> 6)].route[Sel & 3] = data;
-	m_mix_dirty = true;
+	mixer_mark((Sel & 0x40) | (offset >> 6));
 }
 
 u16 swp30_device::lfo_type_step_pitch_r(offs_t offset)
@@ -2828,8 +2828,9 @@ s32 swp30_device::mixer_att(s32 sample, s32 att)
 
 void swp30_device::mixer_rebuild()
 {
-	m_mix_dirty = false;
 	for(int mix = 0; mix != 0x60; mix++) {
+		if(!((m_mix_dirty[mix >> 6] >> (mix & 63)) & 1))
+			continue;
 		u64 route = (u64(m_mixer[mix].route[0]) << 32) | (u64(m_mixer[mix].route[1]) << 16) | m_mixer[mix].route[2];
 		const std::array<u16, 3> &vol = m_mixer[mix].vol;
 		auto &taps = m_mix_taps[mix];
@@ -2878,11 +2879,12 @@ void swp30_device::mixer_rebuild()
 		}
 		m_mix_ntaps[mix] = u8(n);
 	}
+	m_mix_dirty[0] = m_mix_dirty[1] = 0;
 }
 
 void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 {
-	if(m_mix_dirty)
+	if(m_mix_dirty[0] | m_mix_dirty[1])
 		mixer_rebuild();
 
 	std::array<s32, 0x20> mixer_out;
@@ -4054,7 +4056,7 @@ void swp30_device::state(state_io &s)
 	s.stdarr(m_envelope);
 	s.stdarr(m_lfo);
 	s.stdarr(m_mixer);
-	m_mix_dirty = true;
+	m_mix_dirty[0] = m_mix_dirty[1] = ~u64(0);
 	s.stdarr(m_melo);
 	s.stdarr(m_meli);
 	s.stdarr(m_adc);
