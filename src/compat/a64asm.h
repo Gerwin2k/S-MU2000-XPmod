@@ -34,7 +34,8 @@ enum : u8 {
 
 // 64-bit register numbers share the encoding; the instruction class selects
 // the width. X17 is the intra-procedure-call scratch (see mov_imm64_x17).
-enum : u8 { X0 = 0, X1 = 1, X2 = 2, X3 = 3, X16 = 16, X17 = 17, X19 = 19, X20 = 20, X21 = 21, X22 = 22, X29 = 29, X30 = 30, X31 = 31 };
+enum : u8 { X0 = 0, X1 = 1, X2 = 2, X3 = 3, X4 = 4, X5 = 5, X6 = 6, X7 = 7, X8 = 8, X9 = 9,
+             X16 = 16, X17 = 17, X19 = 19, X20 = 20, X21 = 21, X22 = 22, X23 = 23, X29 = 29, X30 = 30, X31 = 31 };
 
 // Condition codes for B.cond / CSET, plus the aliases CMP/HS and CMP/LO use.
 enum : u8 { EQ, NE, CS, HS = CS, CC, LO = CC, MI, PL, VS, VC, HI, LS, GE, LT, GT, LE, AL };
@@ -69,6 +70,23 @@ struct emitter {
 	// 64-bit forms, for pointer arithmetic on x registers
 	void add_imm64(u32 rd, u32 rn, u32 imm) { emit(0x91000000u | imm << 10 | rn << 5 | rd); }
 	void sub_imm64(u32 rd, u32 rn, u32 imm) { emit(0xD1000000u | imm << 10 | rn << 5 | rd); }
+
+	// Xd = Xn + an arbitrary byte offset. Struct fields sit past the 4095 the
+	// plain imm12 form reaches, so this also tries the imm12-shifted-left-by-12
+	// form and, failing that, materializes the offset in X16.
+	void add_off(u32 xd, u32 xn, u32 off)
+	{
+		if (off <= 0xfff) {
+			add_imm64(xd, xn, off);
+			return;
+		}
+		if ((off & 0xfff) == 0 && (off >> 12) <= 0xfff) {
+			emit(0x91000000u | 1u << 22 | (off >> 12) << 10 | xn << 5 | xd);
+			return;
+		}
+		mov_imm64(X16, off);
+		add_x(xd, xn, X16);
+	}
 
 	// ---- move wide (movn/movz/movk), 16-bit chunk at shift 16*hw ----
 	void movz(u32 rd, u32 imm16, u32 hw) { emit(0x52800000u | hw << 21 | imm16 << 5 | rd); }
@@ -120,6 +138,33 @@ struct emitter {
 
 	// insert low bits of Wn into Wd at bit 0 (used to merge a T bit into SR)
 	void bfi0(u32 rd, u32 rn) { emit(0x53000000u | 31 << 16 | rn << 5 | rd); }      // BFI Wd, Wn, #0, #1
+
+	// ---- 64-bit data processing (X registers) ----
+	// The MEG JIT keeps its 64-bit p accumulator and its clamps in x registers,
+	// so the arithmetic and the conditional selects need the X forms.
+	void add_x(u32 rd, u32 rn, u32 rm)  { emit(0x8B000000u | rm << 16 | rn << 5 | rd); }
+	void sub_x(u32 rd, u32 rn, u32 rm)  { emit(0xCB000000u | rm << 16 | rn << 5 | rd); }
+	void and_x(u32 rd, u32 rn, u32 rm)  { emit(0x8A000000u | rm << 16 | rn << 5 | rd); }
+	void orr_x(u32 rd, u32 rn, u32 rm)  { emit(0xAA000000u | rm << 16 | rn << 5 | rd); }
+	void eor_x(u32 rd, u32 rn, u32 rm)  { emit(0xCA000000u | rm << 16 | rn << 5 | rd); }
+	void neg_x(u32 rd, u32 rn)          { emit(0xCB0003E0u | rn << 16 | rd); }          // SUB Xd, XZR, Xn
+	void cmp_x(u32 rn, u32 rm)          { emit(0xEB00001Fu | rm << 16 | rn << 5); }      // SUBS XZR, Xn, Xm
+	void tst_x(u32 rn, u32 rm)          { emit(0xEA00001Fu | rm << 16 | rn << 5); }      // ANDS XZR, Xn, Xm
+	void mul_x(u32 rd, u32 rn, u32 rm)  { emit(0x9B007C00u | rm << 16 | rn << 5 | rd); }  // MADD, Ra = XZR
+	// 64-bit immediate shifts (UBFM/SBFM, same shape as the 32-bit helpers)
+	void lsl_imm_x(u32 rd, u32 rn, u32 amt) { emit(0xD3400000u | ((64 - amt) & 63) << 16 | (63 - amt) << 10 | rn << 5 | rd); }
+	void lsr_imm_x(u32 rd, u32 rn, u32 amt) { emit(0xD3400000u | amt << 16 | 63 << 10 | rn << 5 | rd); }
+	void asr_imm_x(u32 rd, u32 rn, u32 amt) { emit(0x93400000u | amt << 16 | 63 << 10 | rn << 5 | rd); }
+	void lslv_x(u32 rd, u32 rn, u32 rm) { emit(0x9AC02000u | rm << 16 | rn << 5 | rd); }
+	void lsrv_x(u32 rd, u32 rn, u32 rm) { emit(0x9AC02400u | rm << 16 | rn << 5 | rd); }
+	void asrv_x(u32 rd, u32 rn, u32 rm) { emit(0x9AC02800u | rm << 16 | rn << 5 | rd); }
+	// Conditional select. "cond" is the arm64 condition that picks Rn; CSNEG is
+	// what turns a value into its magnitude (cneg_x) and CSEL is the cmov shape.
+	void csel_x(u32 rd, u32 rn, u32 rm, u32 cond)  { emit(0x9A800000u | rm << 16 | cond << 12 | rn << 5 | rd); }
+	void csneg_x(u32 rd, u32 rn, u32 rm, u32 cond) { emit(0xDA800400u | rm << 16 | cond << 12 | rn << 5 | rd); }
+	// Xd = cond ? -Xn : Xn. CSNEG negates its *false* operand (Xm), so the alias
+	// CNEG - which negates its single source - inverts the condition.
+	void cneg_x(u32 rd, u32 rn, u32 cond) { csneg_x(rd, rn, rn, cond ^ 1); }
 
 	// ---- multiply / divide ----
 	// MADD/MSUB with Ra = WZR: the whole product, nothing added
@@ -197,6 +242,13 @@ struct emitter {
 		if (!ok) { emit(0); return; }                       // UDF: callers must pass encodable masks
 		emit(0x12000000u | nn << 22 | immr << 16 | imms << 10 | rn << 5 | rd);
 	}
+	void eor_imm(u32 rd, u32 rn, u32 v)
+	{
+		u32 nn, imms, immr;
+		const bool ok = encode_bitmask(v, nn, imms, immr);
+		if (!ok) { emit(0); return; }
+		emit(0x52000000u | nn << 22 | immr << 16 | imms << 10 | rn << 5 | rd);
+	}
 	void or_imm(u32 rd, u32 rn, u32 v)
 	{
 		u32 nn, imms, immr;
@@ -212,12 +264,60 @@ struct emitter {
 		if (!ok) { emit(0); return; }
 		emit(0x72000000u | nn << 22 | immr << 16 | imms << 10 | rn << 5 | WZR);
 	}
+	// TST Wn, Wm
+	void tst_reg(u32 rn, u32 rm) { emit(0x6A00001Fu | rm << 16 | rn << 5); }
+
+	// Immediate forms for constants that are known at emit time but not
+	// necessarily encodable (register values of the MEG program). X16 holds the
+	// constant when the immediate form does not apply.
+	void add_imm_any(u32 rd, u32 rn, u32 v)
+	{
+		if (v <= 0xfff) {
+			add_imm(rd, rn, v);
+			return;
+		}
+		if ((v & 0xfff) == 0 && (v >> 12) <= 0xfff) {
+			emit(0x11000000u | 1u << 22 | (v >> 12) << 10 | rn << 5 | rd);
+			return;
+		}
+		mov_imm32(X16, v);
+		add_reg(rd, rn, X16);
+	}
+	void and_imm_any(u32 rd, u32 rn, u32 v)
+	{
+		u32 nn, imms, immr;
+		if (encode_bitmask(v, nn, imms, immr)) { and_imm(rd, rn, v); return; }
+		mov_imm32(X16, v);
+		and_reg(rd, rn, X16);
+	}
+	void or_imm_any(u32 rd, u32 rn, u32 v)
+	{
+		u32 nn, imms, immr;
+		if (encode_bitmask(v, nn, imms, immr)) { or_imm(rd, rn, v); return; }
+		mov_imm32(X16, v);
+		orr_reg(rd, rn, X16);
+	}
+	void eor_imm_any(u32 rd, u32 rn, u32 v)
+	{
+		u32 nn, imms, immr;
+		if (encode_bitmask(v, nn, imms, immr)) { eor_imm(rd, rn, v); return; }
+		mov_imm32(X16, v);
+		eor_reg(rd, rn, X16);
+	}
+	void cmp_imm_any(u32 rn, u32 v)
+	{
+		if (v <= 0xfff || ((v & 0xfff) == 0 && (v >> 12) <= 0xfff)) { cmp_imm(rn, v); return; }
+		mov_imm32(X16, v);
+		cmp_reg(rn, X16);
+	}
 
 	// ---- memory: unsigned-offset (imm12) forms. Offsets are in BYTES; the
 	// helper divides by the access size as the encoding requires ----
 	void ldrb(u32 rt, u32 rn, u32 off = 0)  { emit(0x39400000u | off << 10 | rn << 5 | rt); }
 	void ldrh(u32 rt, u32 rn, u32 off = 0)  { emit(0x79400000u | off / 2 << 10 | rn << 5 | rt); }
+	void ldrsh(u32 rt, u32 rn, u32 off = 0) { emit(0x79C00000u | off / 2 << 10 | rn << 5 | rt); }   // signed halfword
 	void ldr_w(u32 rt, u32 rn, u32 off = 0) { emit(0xB9400000u | off / 4 << 10 | rn << 5 | rt); }
+	void ldrsw(u32 rt, u32 rn, u32 off = 0) { emit(0xB9800000u | off / 4 << 10 | rn << 5 | rt); }   // Xt = sext32(word)
 	void ldr_x(u32 rt, u32 rn, u32 off = 0) { emit(0xF9400000u | off / 8 << 10 | rn << 5 | rt); }
 	void strb(u32 rt, u32 rn, u32 off = 0)  { emit(0x39000000u | off << 10 | rn << 5 | rt); }
 	void strh(u32 rt, u32 rn, u32 off = 0)  { emit(0x79000000u | off / 2 << 10 | rn << 5 | rt); }
@@ -260,6 +360,8 @@ struct emitter {
 	// ---- byte order (big-endian data on a little-endian host) ----
 	void rev16(u32 rd, u32 rn) { emit(0x5AC00400u | rn << 5 | rd); }   // swap bytes within each 16-bit half
 	void rev32(u32 rd, u32 rn) { emit(0x5AC00800u | rn << 5 | rd); }   // full 32-bit byte reverse
+	// EXTR Wd, Wn, Wn, #amt = ROR Wd, Wn, #amt (no immediate rotate in arm64)
+	void ror_imm(u32 rd, u32 rn, u32 amt) { emit(0x13800000u | rn << 16 | amt << 10 | rn << 5 | rd); }
 
 	// ---- register-offset memory with index extend option ----
 	// option 2 = UXTW, 6 = SXTW; index is zero/sign-extended from the 32-bit
@@ -272,6 +374,18 @@ struct emitter {
 	void str_w_x(u32 rt, u32 xn, u32 wm, bool sxtw) { emit(0xB8200800u | (sxtw ? 6u : 2u) << 13 | wm << 16 | xn << 5 | rt); }
 	// LDR Xt, [Xn, Wm, UXTW #3]: pointer tables indexed by a 32-bit word offset
 	void ldr_x_uxtw3(u32 rt, u32 xn, u32 wm) { emit(0xF8600800u | 2u << 13 | 1u << 12 | wm << 16 | xn << 5 | rt); }
+
+	// ---- memory: register offset [Xn, Xm, LSL #log2(size)] ----
+	// option 011 with S = 1 scales the index by the access size, which is the
+	// shape the JITs use for a[i] (S = 0 would add the index unscaled).
+	void ldrb_sr(u32 rt, u32 rn, u32 xm)  { emit(0x38607800u | xm << 16 | rn << 5 | rt); }
+	void ldrh_sr(u32 rt, u32 rn, u32 xm)  { emit(0x78607800u | xm << 16 | rn << 5 | rt); }
+	void ldr_w_sr(u32 rt, u32 rn, u32 xm) { emit(0xB8607800u | xm << 16 | rn << 5 | rt); }
+	void ldr_x_sr(u32 rt, u32 rn, u32 xm) { emit(0xF8607800u | xm << 16 | rn << 5 | rt); }
+	void strb_sr(u32 rt, u32 rn, u32 xm)  { emit(0x38207800u | xm << 16 | rn << 5 | rt); }
+	void strh_sr(u32 rt, u32 rn, u32 xm)  { emit(0x78207800u | xm << 16 | rn << 5 | rt); }
+	void str_w_sr(u32 rt, u32 rn, u32 xm) { emit(0xB8207800u | xm << 16 | rn << 5 | rt); }
+	void str_x_sr(u32 rt, u32 rn, u32 xm) { emit(0xF8207800u | xm << 16 | rn << 5 | rt); }
 
 	// ---- stack pairs (Apple ABI prologue/epilogue shapes used by the JIT) ----
 	// imm7 is in BYTES and must be a multiple of 8; pre/post select the

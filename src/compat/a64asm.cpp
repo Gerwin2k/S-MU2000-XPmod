@@ -766,6 +766,180 @@ u64 a64::selftest()
 		CHECK32(12u);
 	}
 
+	// ---- 64-bit data processing (the MEG JIT's p accumulator lives here) ----
+	{
+		emitter a;                       // add_x / sub_x round trip through the upper word
+		a.mov_imm64(X1, u64(0x0123456789abcdefull));
+		a.mov_imm32(X2, 0x1111);
+		a.add_x(X0, X1, X2);
+		a.sub_x(X0, X0, X2);
+		a.ret();
+		CHECK64(0x0123456789abcdefull);
+	}
+	{
+		emitter a;                       // neg_x then mul_x
+		a.mov_imm32(X1, 9);
+		a.neg_x(X2, X1);
+		a.mov_imm32(X3, 7);
+		a.mul_x(X0, X2, X3);             // low 64 bits of (-9) * 7
+		a.ret();
+		CHECK64(u64(-63));
+	}
+	{
+		emitter a;                       // and_x / orr_x / eor_x
+		a.mov_imm64(X1, u64(0x00000000ffff0000ull));
+		a.mov_imm32(X2, 0x00ff00ff);
+		a.and_x(X3, X1, X2);
+		a.orr_x(X4, X3, X2);
+		a.eor_x(X0, X4, X1);
+		a.ret();
+		CHECK64((((0xffff0000ull & 0x00ff00ffull) | 0x00ff00ffull) ^ 0xffff0000ull));
+	}
+	{
+		emitter a;                       // 64-bit immediate shifts: lsr / asr / lsl
+		a.mov_imm64(X1, u64(0x0000000400000080ull));
+		a.lsr_imm_x(X2, X1, 8);          // 0x0000000004000000
+		a.lsl_imm_x(X3, X2, 4);          // 0x0000000040000000
+		a.mov_imm64(X4, u64(0x8000000000000000ull));
+		a.asr_imm_x(X5, X4, 62);         // -2^63 >> 62 = -2, sign-filled
+		a.add_x(X0, X3, X5);
+		a.ret();
+		CHECK64(0x0000000040000000ull + u64(-2));
+	}
+	{
+		emitter a;                       // 64-bit variable shifts: asrv fills, lsrv does not
+		a.mov_imm64(X1, u64(0x8000000000000100ull));
+		a.mov_imm32(X2, 8);
+		a.asrv_x(X3, X1, X2);
+		a.lsrv_x(X4, X1, X2);
+		a.eor_x(X0, X3, X4);
+		a.ret();
+		CHECK64(u64(s64(0x8000000000000100ull) >> 8) ^ (0x8000000000000100ull >> 8));
+	}
+	{
+		emitter a;                       // 64-bit variable lslv
+		a.mov_imm32(X1, 3);
+		a.mov_imm32(X2, 40);
+		a.lslv_x(X0, X1, X2);
+		a.ret();
+		CHECK64(3ull << 40);
+	}
+	{
+		emitter a;                       // cmp_x + csel_x, tst_x + csel_x
+		a.mov_imm32(X1, 3);
+		a.mov_imm32(X2, 9);
+		a.cmp_x(X1, X2);
+		a.csel_x(X3, X2, X1, LT);        // X1 < X2 -> X2
+		a.tst_x(X1, X1);
+		a.csel_x(X0, X1, X3, EQ);        // X1 != 0 -> X3
+		a.ret();
+		CHECK64(9u);
+	}
+	{
+		emitter a;                       // cneg_x takes the magnitude under a condition
+		a.mov_imm32(X1, 6);
+		a.neg_x(X2, X1);
+		a.cmp_x(X2, WZR);
+		a.cneg_x(X0, X2, LT);            // negative -> negate it back
+		a.ret();
+		CHECK64(6u);
+	}
+	{
+		emitter a;                       // eor_imm over a run of ones
+		a.mov_imm32(X1, 0x12345678);
+		a.eor_imm(X0, X1, 0x7ffffff);
+		a.ret();
+		CHECK32(0x12345678u ^ 0x7ffffffu);
+	}
+	{
+		emitter a;                       // ror_imm: 32-bit rotate (rol by 16 == ror by 16)
+		a.mov_imm32(W0, 0x12345678);
+		a.ror_imm(W0, W0, 16);
+		a.ret();
+		CHECK32(0x56781234u);
+	}
+	{
+		u8 scratch[16] = {};
+		scratch[0] = 0xcd; scratch[1] = 0xab;                       // 0xabcd as s16
+		scratch[4] = 0x78; scratch[5] = 0x56; scratch[6] = 0x34; scratch[7] = 0x12;
+		emitter a;                       // ldrsh + sxtw64 and ldrsw: both sign-extend to 64
+		a.ldrsh(W1, X0, 0);
+		a.sxtw64(X1, W1);
+		a.ldrsw(X2, X0, 4);
+		a.add_x(X0, X1, X2);
+		a.ret();
+		const s64 want = s64(s16(0xabcd)) + s64(0x12345678);
+		CHECK32S(u32(want), scratch);
+	}
+
+	// ---- immediate forms that need X16, and scaled register offsets ----------
+	{
+		emitter a;                       // tst_reg: Z set when the AND is zero
+		a.mov_imm32(W1, 0x0f0f0f0f);
+		a.mov_imm32(W2, 0xf0f0f0f0);
+		a.tst_reg(W1, W2);
+		a.cset(W0, EQ);
+		a.ret();
+		CHECK32(1);
+	}
+	{
+		emitter a;                       // add_imm_any: all three encoding paths
+		a.mov_imm32(W1, 0x1000);
+		a.add_imm_any(W2, W1, 0x2345);   // plain imm12
+		a.add_imm_any(W3, W2, 0x1000);   // imm12 shifted left by 12
+		a.add_imm_any(W4, W3, 0x3fc00);  // neither: materialized in X16
+		a.mov_reg(W0, W4);
+		a.ret();
+		CHECK32(0x1000u + 0x2345u + 0x1000u + 0x3fc00u);
+	}
+	{
+		emitter a;                       // logical immediate, encodable and not
+		a.mov_imm32(W1, 0x12345678);
+		a.and_imm_any(W2, W1, 0x3ff);
+		a.and_imm_any(W3, W2, 0xf0f0f0f0);   // alternating: only via X16
+		a.or_imm_any(W4, W3, 0x800);
+		a.or_imm_any(W5, W4, 0x0f0f0f0f);
+		a.eor_imm_any(W6, W5, 0x7ffffff);
+		a.eor_imm_any(W0, W6, 0xff00ff00);
+		a.ret();
+		CHECK32(((((0x12345678u & 0x3ffu) & 0xf0f0f0f0u) | 0x800u) | 0x0f0f0f0fu) ^ 0x7ffffffu ^ 0xff00ff00u);
+	}
+	{
+		emitter a;                       // cmp_imm_any: a constant past imm12
+		a.mov_imm32(W1, 0x3fc00);
+		a.cmp_imm_any(W1, 0x3fc00);
+		a.cset(W0, EQ);
+		a.ret();
+		CHECK32(1);
+	}
+	{
+		emitter a;                       // add_off: all three encoding paths
+		a.mov_imm32(X1, 0x1000);
+		a.add_off(X2, X1, 0x123);        // plain imm12
+		a.add_off(X3, X2, 0x2000);       // imm12 shifted left by 12
+		a.add_off(X4, X3, 5164);         // neither: materialized in X16
+		a.mov_x(X0, X4);
+		a.ret();
+		CHECK64(0x1000u + 0x123u + 0x2000u + 5164u);
+	}
+	{
+		u8 scratch[64] = {};
+		emitter a;                       // register offsets scaled by the access size
+		a.mov_imm32(W2, 5);
+		a.mov_imm32(W1, 0x11223344);
+		a.str_w_sr(W1, X0, X2);          // word at 20 (5 * 4)
+		a.mov_imm32(W1, 0x3344);
+		a.strh_sr(W1, X0, X2);           // halfword at 10 (5 * 2)
+		a.mov_imm32(W1, 0x5a);
+		a.strb_sr(W1, X0, X2);           // byte at 5
+		a.ldr_w_sr(W0, X0, X2);
+		a.ret();
+		CHECK32S(0x11223344u, scratch);
+		if (std::memcmp(scratch + 20, "\x44\x33\x22\x11", 4) != 0) { std::fprintf(stderr, "RAWFAIL %d\n", __LINE__); bad++; }
+		if (scratch[5] != 0x5a) { std::fprintf(stderr, "RAWFAIL %d\n", __LINE__); bad++; }
+		if (scratch[10] != 0x44 || scratch[11] != 0x33) { std::fprintf(stderr, "RAWFAIL %d\n", __LINE__); bad++; }
+	}
+
 	return bad;
 }
 
