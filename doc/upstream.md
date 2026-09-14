@@ -573,3 +573,18 @@ issue #8 の曲の ch2（V DT HARD）は 1/3 オクターブ帯で実機と ±1.
 パフォーマンスモードの 100 パフォーマンスと make test の曲の音は変わらない。
 
 こちらのコミット: `swp30.cpp` の `meg_state::step`・`build_ops`・`run_program`、`swp30_jit.cpp` の同じ所
+
+## 22. リバーブ RAM の地図の有効ビット（0x80e）が読めず、firmware が止まる（直した）
+
+**症状**: XG のエフェクトを AUTO PAN 2（0x47 0x01）にすると、その場で音が全部止まり、そのあとどの種類に替えても戻らない。
+
+firmware（MU2000 EX v2.01）は AUTO PAN 2 の表をリバーブ RAM へ直に書く関数（`0x07377a`）の頭で、
+SWP30 のレジスタ 0x80e（`100000 001110`、MEG/Reverb の地図の有効ビット）を読み、0 でなくなるまで回る
+（`0x073794`〜`0x07379c`）。MAME の `swp30_device::read16` には 0x80e の読み出しが無く、いつも 0 が返るので、
+firmware が回りっぱなしになる。
+
+直し方: 0x80e を読むと、最後に書いた値（`m_revram_enable`）を返す。firmware は直前に 00f4 などを書いているので、すぐ抜ける。
+
+直した後の AUTO PAN 2 の音量は実機と 3dB 以内（AUTO PAN は 0.1dB）。パフォーマンスと make test の音は変わらない。
+
+こちらのコミット: `swp30.cpp` の `read16`

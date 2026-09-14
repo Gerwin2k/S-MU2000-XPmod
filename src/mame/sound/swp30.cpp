@@ -2009,6 +2009,9 @@ u16 swp30_device::read16(offs_t addr)
 	case 0x74e: return meg_map_r<5>();
 	case 0x78e: return meg_map_r<6>();
 	case 0x7ce: return meg_map_r<7>();
+	// S-MU2000: 書いた値を読み返せる。AUTO PAN 2 は表をリバーブ RAM へ直に書く前に、
+	// ここが 0 でなくなるのを待つ（読めないと firmware が止まる。doc/upstream.md の 22）
+	case 0x80e: return m_revram_enable;
 	case 0x84e: return revram_status_r();
 	case 0x98e: return revram_data_r<1>();
 	case 0x98f: return revram_data_r<0>();
