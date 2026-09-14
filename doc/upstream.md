@@ -683,6 +683,6 @@ idx の値（LFO から作った番地）に入れ替わる。ロータの遅延
 | DUAL ROTR2 | -22.4dB（9.6） | +2.2dB（0.0） |
 
 （エミュと実機の共通の音量差はこの回 +2.3dB）。ほかの 114 種類とパフォーマンスモードの 100 パフォーマンスは変わらない。
-bit 0x3d と 0x3e が両方立つ命令を持つのは、今のところ DUAL ROTR だけ見つかっている。
+bit 0x3d と 0x3e が両方立つ命令は、116 種類のうち DUAL ROTR1/2 のほか DT/OD/AMP +RTRY、DT/OD/AMP +2RTRY、V-FLANGER、MULTI COMP にもある。そちらはその 2 命令の間にメモリへ書く命令が無いので、音は変わらない（WAV が同じ）。
 
 こちらのコミット: `swp30.cpp` の `meg_state::decode_program`
