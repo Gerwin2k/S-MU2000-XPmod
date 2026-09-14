@@ -1529,7 +1529,7 @@ u16 swp30_device::envelope_block::step(u32 sample_counter)
 			if(m_envelope_mode == DECAY1)
 				m_envelope_mode = DECAY2;
 
-			else if(m_release_glo & 0xff00)
+			else if(m_release_glo & 0x8000)   // S-MU2000: bit 15 が立っているときだけ（doc/upstream.md の 16）
 				m_envelope_mode = RELEASE;
 		}
 		break;
@@ -1584,7 +1584,10 @@ u16 swp30_device::envelope_block::release_glo_r() const
 void swp30_device::envelope_block::release_glo_w(u16 data)
 {
 	m_release_glo = data;
-	if(data & 0xff00)
+	// S-MU2000: MAME は release の速さが 0 でなければ release に入れていた。firmware は遅れて鳴らす層の
+	// キーオンの前に 0x01xx を書く（pc 0x12E3DE）が、実機ではその層は鳴り続ける。鍵を離すときに書く値は
+	// どれも bit 15 が立っている（0xA8〜0xF0）ので、bit 15 を「release せよ」の印とみる（doc/upstream.md の 16）
+	if(data & 0x8000)
 		m_envelope_mode = RELEASE;
 }
 
