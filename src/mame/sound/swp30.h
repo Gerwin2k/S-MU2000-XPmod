@@ -272,6 +272,7 @@ private:
 		s8 m_pitch_depth = 0;
 
 		void clear();
+		static u32 tri_state(u32 counter);
 		void keyon(swp30_device &swp);
 		u16 get_amplitude() const;
 		s16 get_pitch() const;

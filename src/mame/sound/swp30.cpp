@@ -740,17 +740,19 @@ std::pair<s16, bool> swp30_device::streaming_block::step(memory_access<25, 2, -2
 	// finetune becomes active (i.e. once the loop point is crossed), and
 	// the note jumps to the maximum pitch for the rest of its life.
 	// S-MU2000: ピッチ EG の今の値を、14bit で回り込ませて足す（doc/upstream.md の 13）
-	u32 pitch = ((m_pitch + pitch_offset) & 0x3fff) + pitch_lfo;
+	// S-MU2000: ピッチは 14bit の符号付き（1 オクターブ 1024、0x3eef = -0x111）。下の e の計算は
+	// 符号付きのまま成り立つ。MAME はループ点を越えたあとの範囲の制限だけ符号なし（0〜0x3fff）で
+	// かけていたので、0 に近いピッチ（元の鍵のまま鳴らす音）に LFO を掛けると、下へ振った分が 0 に、
+	// 0 のすぐ下の値を上へ振った分が 0x3fff に張り付き、ビブラートが片側だけになっていた（doc/upstream.md の 14）
+	s32 sp = s32(util::sext(u32((m_pitch + pitch_offset) & 0x3fff), 14)) + pitch_lfo;
 	if(m_finetune_active) {
 		s32 ft = (m_loop >> 24) & 0x7f;
 		if(ft & 0x40)
 			ft -= 0x80;
-		pitch += ft;
-		if(pitch & 0x80000000)
-			pitch = 0;
-		if(pitch & 0x4000)
-			pitch = 0x3fff;
+		sp = std::clamp(sp + ft, -0x2000, 0x1fff);
 	}
+	const u32 pitch = u32(sp);
+
 	u32 e = ((pitch >> 10) + 8) & 15;
 	u32 m = pitch & 0x3ff;
 	u32 step = (pitch_base[m] << 10) >> (15-e);
@@ -1649,13 +1651,25 @@ void swp30_device::lfo_block::clear()
 
 void swp30_device::lfo_block::keyon(swp30_device &swp)
 {
-	m_counter = swp.rand() & 0x3ffff;
+	// S-MU2000: MAME は乱数から始めていた。実機は同じ音を何度弾いてもビブラートとトレモロが
+	// 同じ形で始まる（doc/upstream.md の 15）。カウンタは 0 から始め、三角波は下の tri_state で
+	// 中央から上がり始める。乱数は MEG のディザと同じ数列なので、引く回数は変えない
+	swp.rand();
+	m_counter = 0;
 	switch(m_type) {
 	case 0: m_state = m_counter >> 6; break;
-	case 1: m_state = m_counter & 0x20000 ? (~m_counter >> 5) & 0xffe : (m_counter >> 5) & 0xffe; break;
+	case 1: m_state = tri_state(m_counter); break;
 	case 2: m_state = m_counter & 0x20000 ? 0xfff : 0; break;
 	case 3: m_state = swp.rand() & 0xfff; break;
 	}
+}
+
+// S-MU2000: 三角波。MAME の式はカウンタ 0 で一番下から始まるが、実機は中央（0x800）から上がり始める。
+// 1/4 周期（0x10000）ずらすと、ビブラートの深さ最大・遅れ 0 の Square Lead C5 で実機と 3 セント以内で重なる
+u32 swp30_device::lfo_block::tri_state(u32 counter)
+{
+	const u32 c = (counter + 0x10000) & 0x3ffff;
+	return c & 0x20000 ? (~c >> 5) & 0xffe : (c >> 5) & 0xffe;
 }
 
 void swp30_device::lfo_block::step(swp30_device &swp)
@@ -1666,7 +1680,7 @@ void swp30_device::lfo_block::step(swp30_device &swp)
 		m_counter += 0x40;
 	switch(m_type) {
 	case 0: m_state = m_counter >> 6; break;
-	case 1: m_state = m_counter & 0x20000 ? (~m_counter >> 5) & 0xffe : (m_counter >> 5) & 0xffe; break;
+	case 1: m_state = tri_state(m_counter); break;
 	case 2: m_state = m_counter & 0x20000 ? 0xfff : 0; break;
 	case 3: if((pc ^ m_counter) & 0x3fe00) m_state = swp.rand() & 0xfff; break;
 	}
