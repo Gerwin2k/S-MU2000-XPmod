@@ -137,8 +137,10 @@ public:
 
 	// スレーブの SWP30 を別スレッドで回すか。
 	// 2 個の SWP30 は 1 サンプルの中では互いに独立している（相手の出力は
-	// 前サンプルのものしか使わない）ので、並べて走らせても結果は変わらない
+	// 前サンプルのものしか使わない）ので、並べて走らせても結果は変わらない。
+	// 別スレッドで回す台数には上限がある（論理コア数の 1/4、SMU2000_THREADED_MAX）。超えた台は 1 本で回す
 	void set_threaded(bool on);
+	bool threaded() const { return m_slave_thread.joinable(); }
 
 	// 1 サンプル（44.1kHz 相当）ぶん進めて、DAC 出力を返す。
 	// 値は MAME 内部と同じ目盛りで、全振幅が DAC_FULL_SCALE。

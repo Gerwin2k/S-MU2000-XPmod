@@ -4,7 +4,9 @@
 
 #include "mu2000.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <immintrin.h>
@@ -66,6 +68,23 @@ mu2000::~mu2000()
 	set_threaded(false);
 }
 
+// スレーブを別スレッドで回す台数の上限。
+// 別スレッドは 1 サンプルごとに回して待つので、1 台で 2 コアを使う（書き出しは 2 割ほど速い）。
+// 1 つのプロセスで何台も動かす（DAW に何枚も挿す）とコアの取り合いになり、1 本で回すより遅くなる。
+// だから論理コア数の 1/4 台までにし、それを超えた台は 1 本で回す（出る音は同じ）。
+// SMU2000_THREADED_MAX で変えられる（0 なら全部 1 本）
+static std::atomic<int> g_threaded_instances{0};
+
+static int threaded_max()
+{
+	static const int n = [] {
+		if (const char *e = std::getenv("SMU2000_THREADED_MAX"))
+			return std::max(0, std::atoi(e));
+		return std::max(1, int(std::thread::hardware_concurrency() / 4));
+	}();
+	return n;
+}
+
 // スレーブを別スレッドで回す。1 サンプルの中では 2 個の SWP30 は
 // 互いに独立しているので、並べて走らせても出る音は変わらない
 void mu2000::set_threaded(bool on)
@@ -79,7 +98,12 @@ void mu2000::set_threaded(bool on)
 		m_slave_go.notify_one();
 		m_slave_thread.join();
 		m_slave_quit = false;
+		g_threaded_instances--;
 		return;
+	}
+	if (++g_threaded_instances > threaded_max()) {
+		g_threaded_instances--;
+		return;                  // 上限を超えたので 1 本で回す
 	}
 	m_slave_thread = std::thread([this] { slave_loop(); });
 }
