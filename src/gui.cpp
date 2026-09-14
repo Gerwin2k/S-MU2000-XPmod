@@ -435,7 +435,7 @@ void show_card_menu(HWND hwnd, POINT screen)
 		stop += "（" + g_win.play_file.name() + "）";
 	add_item(m, MF_STRING | (on ? 0 : MF_GRAYED), ID_STOP_FILE, stop.c_str());
 	AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-	// MU2000 の口は A・B の 2 つ。3〜4 口の MIDI ファイルの口 3・4 をどうするか
+	// エミュの口は A・B の 2 つ（実機の C・D は未対応）。3〜4 口の MIDI ファイルの口 3・4 をどうするか
 	const bool fold = g_win.play_file.fold_extra_ports();
 	add_item(m, MF_STRING | (fold ? MF_CHECKED : 0), ID_PORTS34_FOLD, "口 3・4 を A・B に重ねて鳴らす");
 	add_item(m, MF_STRING | (fold ? 0 : MF_CHECKED), ID_PORTS34_DROP, "口 3・4 は鳴らさない");
@@ -457,7 +457,7 @@ void play_midi_file(HWND hwnd, const std::string &path)
 	}
 	std::printf("再生: %s（%.1f 秒）\n", path.c_str(), g_win.play_file.length());
 	if (g_win.play_file.ports_used() > 2)
-		std::printf("  この曲は %d 口ぶん。MU2000 は 2 口なので、口 3 以降は%s\n", g_win.play_file.ports_used(),
+		std::printf("  この曲は %d 口ぶん。C・D は未対応なので、口 3 以降は%s\n", g_win.play_file.ports_used(),
 		            g_win.play_file.fold_extra_ports() ? " A・B に重ねて鳴らす" : "鳴らさない");
 	std::fflush(stdout);
 }

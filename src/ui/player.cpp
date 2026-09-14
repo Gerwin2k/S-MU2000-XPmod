@@ -80,7 +80,7 @@ void player::run(bridge &br)
 		m_pos.store(sec, std::memory_order_relaxed);
 
 		// 来ている分をまとめて送る。トラックの出し先（SMF のポート指定）が 0 なら口 A、1 なら口 B。
-		// MU2000 の口は 2 つなので、口 3・4 は選んだ扱いに従う（A・B に重ねるか、鳴らさない）
+		// エミュは A・B の 2 口しか持たない（実機の C・D は未対応）ので、口 3・4 は選んだ扱いに従う（A・B に重ねるか、鳴らさない）
 		const bool fold = m_fold.load(std::memory_order_relaxed);
 		while (at < m_events.size() && m_events[at].time <= sec) {
 			const smf::event &e = m_events[at];
