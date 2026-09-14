@@ -3266,14 +3266,14 @@ template<int Sel> void swp30_device::meg_lfo_w(offs_t offset, u16 data)
 	if((offset >> 6)*2 + Sel >= 0x18) {
 		logerror("nolfo[%02x] = %04x\n", (offset >> 6)*2 + Sel, data);
 	}
+	// S-MU2000: 解いた命令表も JIT も LFO の値を実行時に読むので、作り直させない。
+	// firmware はコーラスなどの揺れの速さを鳴らしている最中にも書くので、作り直すと遅い版で回る時間が長くなる
 	m_meg->lfo_w((offset >> 6)*2 + Sel, data);
-	m_meg_program_changed = true;
 }
 
 void swp30_device::meg_lfo_commit_w(u16)
 {
 	m_meg->lfo_commit_w();
-	m_meg_program_changed = true;
 }
 
 void swp30_device::meg_state::lfo_step()
