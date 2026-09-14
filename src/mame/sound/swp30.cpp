@@ -649,13 +649,13 @@ void swp30_device::streaming_block::dpcm_step(u8 input)
 		acc -= s32((s64(acc) * 3) >> 7);
 	s32 sample = acc + (delta << scale);
 
-	if(sample < -0x8000) {
+	// S-MU2000: MAME は上限に当たると差分を 0 にしていた。そうすると次のサンプルから波形が崩れ、
+	// ループのたびに雑音が出る（XG の Flute の高い音、doc/upstream.md の 17）。上限で切り詰めるだけにする。
+	// 案は MUXG2K の hockinsk さん（issue #3）
+	if(sample < -0x8000)
 		sample = -0x8000;
-		delta = 0;
-	} else if(sample > limit) {
+	else if(sample > limit)
 		sample = limit;
-		delta = 0;
-	}
 	m_dpcm_s3 = sample;
 
 	switch(mode) {
