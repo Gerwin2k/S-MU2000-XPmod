@@ -391,6 +391,16 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		}
 	}
 
+	// 前倒しで書いた書き込みでも、輪の枠の最後の値になるもの（同じ枠へ後で書く命令が無いもの）は枠にも書く。
+	// 読まれはしないが、状態の保存の中身を解釈実行と同じにしておく
+	bool last_slot_r[0x180] = {}, last_slot_m[0x180] = {};
+	for (u32 c = 0; c != 3; c++) {
+		for (int k = 0x17f; k >= 0; k--)
+			if (u32(k) % 3 == c && ops[k].dr) { last_slot_r[k] = true; break; }
+		for (int k = 0x17f; k >= 0; k--)
+			if (u32(k) % 3 == c && ops[k].dm) { last_slot_m[k] = true; break; }
+	}
+
 	assembler a;
 	const u8 MS = RBX, SWP = R12, P = R13, SC = R14, RAM = R15, SEED = RSI, K_MAX = RDI, K_MIN = RBP;
 	const u8 P_MAX = R9, P_MIN = R10;                    // p の飽和の限界。r9 r10 は呼ぶ先で壊れるので、呼んだあと積み直す
@@ -647,9 +657,11 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.load32(RAX, M(o_m + 4 * o.sm));
 				break;
 			}
-			if (k < 0x17d && early_m[o.dm])
+			if (k < 0x17d && early_m[o.dm]) {
 				a.store32(M(o_m + 4 * o.dm), RAX);
-			else
+				if (last_slot_m[k])
+					a.store32(M(o_mw_value + 4 * slot3(k)), RAX);
+			} else
 				a.store32(M(o_mw_value + 4 * slot3(k)), RAX);
 		}
 		if (k >= 0x17d)
@@ -661,9 +673,11 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.load32(RAX, M(o_r + 4 * o.sr));
 			else
 				p_packed(!o.no_noise);
-			if (k < 0x17d && early_r[o.dr])
+			if (k < 0x17d && early_r[o.dr]) {
 				a.store32(M(o_r + 4 * o.dr), RAX);
-			else
+				if (last_slot_r[k])
+					a.store32(M(o_rw_value + 4 * slot3(k)), RAX);
+			} else
 				a.store32(M(o_rw_value + 4 * slot3(k)), RAX);
 		}
 		if (k >= 0x17d)
