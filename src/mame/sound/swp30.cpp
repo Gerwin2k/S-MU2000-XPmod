@@ -3275,6 +3275,29 @@ static inline u32 meg_pack24(s64 p)
 	return u32(s32(q));
 }
 
+// S-MU2000: MEG の分岐（doc/upstream.md の 11）。
+//
+// MAME は「分岐は無い」としていて、bit 0x3f の立った命令を ALU の無い命令として
+// 読み流していた。LO-FI と DYNA FLT/FLANG/PHASE のプログラムにだけ現れる。並びから:
+//
+//   * bit 0x20 の立った命令は、結果（p）が負か、0 かを覚える
+//   * bit 0x3f の立った命令は、bit 0x18-0x1f の条件が合えば、bit 0x10-0x17 の番地
+//     （同じ 256 番地の中）まで、あいだの命令を何もしない命令にする
+//   * 条件: bit 3 が 0 なら必ず。1 なら bit 2 が 1 で負のとき、0 で負でないとき。
+//     bit 1 が立っていれば 0 のときも
+//
+// LO-FI では、振幅を ±m19 で止める 2 か所と、サンプリング周波数を落とす
+// サンプル＆ホールドの間引き、DYNA 系では包絡の最大値の追従と整流がこの形
+static inline bool meg_cond(u8 cond, bool n, bool z)
+{
+	if(!BIT(cond, 3))
+		return true;
+	bool c = BIT(cond, 2) ? n : !n;
+	if(BIT(cond, 1))
+		c = c || z;
+	return c;
+}
+
 void swp30_device::meg_state::step()
 {
 	// S-MU2000: debugger_instruction_hook は削除
@@ -3299,6 +3322,45 @@ void swp30_device::meg_state::step()
 	if(m_memr_active[m_delay_2]) {
 		m_ram_read = m_memr_value[m_delay_2];
 		m_memr_active[m_delay_2] = false;
+	}
+
+	// S-MU2000: 分岐で飛び越している命令は何もしない
+	if(m_swp->m_meg_skip_to) {
+		if(m_pc < m_swp->m_meg_skip_to) {
+			m_mw_reg[m_delay_3] = 0;
+			m_rw_reg[m_delay_3] = 0;
+			m_memw_active[m_delay_2] = false;
+			m_index_active[m_delay_3] = false;
+			m_t_value[m_delay_2] = s16(std::clamp<s64>(m_p >> (15+8), -0x8000, 0x7fff));
+			m_delay_3 = m_delay_3 == 2 ? 0 : m_delay_3 + 1;
+			m_delay_2 ^= 1;
+			m_pc ++;
+			m_icount --;
+			if(m_pc == 0x180)
+				m_pc = 0;
+			return;
+		}
+		m_swp->m_meg_skip_to = 0;
+	}
+	if(BIT(m_program[m_pc], 0x3f)) {
+		const u64 opc = m_program[m_pc];
+		if(meg_cond(BIT(opc, 0x18, 8), m_swp->m_meg_flag_n, m_swp->m_meg_flag_z)) {
+			const u16 target = (m_pc & ~0xff) | BIT(opc, 0x10, 8);
+			if(target > m_pc)
+				m_swp->m_meg_skip_to = target;
+		}
+		m_mw_reg[m_delay_3] = 0;
+		m_rw_reg[m_delay_3] = 0;
+		m_memw_active[m_delay_2] = false;
+		m_index_active[m_delay_3] = false;
+		m_t_value[m_delay_2] = s16(std::clamp<s64>(m_p >> (15+8), -0x8000, 0x7fff));
+		m_delay_3 = m_delay_3 == 2 ? 0 : m_delay_3 + 1;
+		m_delay_2 ^= 1;
+		m_pc ++;
+		m_icount --;
+		if(m_pc == 0x180)
+			m_pc = 0;
+		return;
 	}
 
 	// S-MU2000: 解いておいた形を使う。中身は decode_program() が入れている
@@ -3378,6 +3440,10 @@ void swp30_device::meg_state::step()
 		}
 
 		m_p = r;
+		if(BIT(m_program[m_pc], 0x20)) {
+			m_swp->m_meg_flag_n = r < 0;
+			m_swp->m_meg_flag_z = r == 0;
+		}
 	}
 
 	m_mw_reg[m_delay_3] = dm;
@@ -3554,6 +3620,10 @@ void swp30_device::meg_state::build_ops(op *ops) const
 		o.mem_use_index = d.mem_use_index;
 		o.lfo          = pc >> 4;
 		o.offset_index = pc / 3;
+		o.latch  = BIT(m_program[pc], 0x20);
+		o.jump   = BIT(m_program[pc], 0x3f);
+		o.cond   = BIT(m_program[pc], 0x18, 8);
+		o.target = (pc & ~0xff) | BIT(m_program[pc], 0x10, 8);
 
 		// resolve_address() と同じ選び方。i == 7 で必ず止まるので「無し」は無い
 		const u16 key = (pc / 12) << 11;
@@ -3573,6 +3643,8 @@ void swp30_device::meg_state::run_program(const op *ops)
 	u32 d3 = m_delay_3, d2 = m_delay_2;
 	s64 p = m_p;
 	const u32 sample_counter = m_sample_counter;
+	bool flag_n = m_swp->m_meg_flag_n, flag_z = m_swp->m_meg_flag_z;
+	u32 skip_to = 0;
 
 	for(u32 pc = 0; pc != 0x180; pc++) {
 		const op &o = ops[pc];
@@ -3590,6 +3662,22 @@ void swp30_device::meg_state::run_program(const op *ops)
 		if(m_memr_active[d2]) {
 			m_ram_read = m_memr_value[d2];
 			m_memr_active[d2] = false;
+		}
+
+		// S-MU2000: 分岐（step() と同じ）。飛び越す命令と分岐の命令は何もしない
+		if(skip_to && pc >= skip_to)
+			skip_to = 0;
+		if(skip_to || o.jump) {
+			if(!skip_to && meg_cond(o.cond, flag_n, flag_z) && o.target > pc)
+				skip_to = o.target;
+			m_mw_reg[d3] = 0;
+			m_rw_reg[d3] = 0;
+			m_memw_active[d2] = false;
+			m_index_active[d3] = false;
+			m_t_value[d2] = s16(std::clamp<s64>(p >> (15+8), -0x8000, 0x7fff));
+			d3 = d3 == 2 ? 0 : d3 + 1;
+			d2 ^= 1;
+			continue;
 		}
 
 		if(o.alu) {
@@ -3632,6 +3720,10 @@ void swp30_device::meg_state::run_program(const op *ops)
 			default: r = std::min<s64>(r < 0 ? -r : r, 0x3fffffffff); break;
 			}
 			p = r;
+			if(o.latch) {
+				flag_n = r < 0;
+				flag_z = r == 0;
+			}
 		}
 
 		m_mw_reg[d3] = o.dm;
@@ -3702,6 +3794,8 @@ void swp30_device::meg_state::run_program(const op *ops)
 	m_p = p;
 	m_delay_3 = d3;
 	m_delay_2 = d2;
+	m_swp->m_meg_flag_n = flag_n;
+	m_swp->m_meg_flag_z = flag_z;
 	m_pc = 0;
 	m_icount -= 0x180;
 }
