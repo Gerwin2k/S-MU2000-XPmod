@@ -66,6 +66,34 @@ void emit_revram_encode(assembler &a)
 	a.or32(RAX, RDX);
 }
 
+// meg_state::m1_expand と同じことをする。入力 eax（下の 16bit が s16）、出力 rax（0〜0x7ffc）。rcx を壊す
+void emit_m1_expand(assembler &a)
+{
+	a.test32ri(RAX, 0x8000);
+	const size_t neg = a.jcc_fwd(0x85);
+	a.mov32(RCX, RAX);
+	a.shr32(RCX, 12);
+	a.and32i(RCX, 7);                                    // s
+	a.and32i(RAX, 0xfff);
+	a.or32ri(RAX, 0x1000);
+	a.cmp32ri(RCX, 5);
+	const size_t done1 = a.jcc_fwd(0x84);                // s == 5
+	const size_t less = a.jcc_fwd(0x82);                 // s < 5（jb）
+	a.sub32ri(RCX, 5);
+	a.shl32cl(RAX);
+	const size_t done2 = a.jmp_fwd();
+	a.patch(less);
+	a.neg32(RCX);
+	a.add32ri(RCX, 5);
+	a.shr32cl(RAX);
+	const size_t done3 = a.jmp_fwd();
+	a.patch(neg);
+	a.xor32(RAX, RAX);
+	a.patch(done1);
+	a.patch(done2);
+	a.patch(done3);
+}
+
 // meg_state::revram_decode と同じことをする。入力 eax（u16）、出力 eax。rcx rdx r8 を壊す
 void emit_revram_decode(assembler &a)
 {
@@ -112,8 +140,6 @@ struct swp30_device::meg_jit {
 
 #if SMU2000_MEG_JIT
 	static u32 call_lfo(meg_state *ms, u32 lfo) { return ms->get_lfo(int(lfo)); }
-	static s64 call_expand(s64 v) { return ms_expand(s16(v)); }
-	static s64 ms_expand(s16 v) { return meg_state::m1_expand(v); }
 #endif
 
 	bool build(meg_state &ms, const meg_state::op *ops, swp30_device &swp);
@@ -166,10 +192,10 @@ u64 swp30_device::meg_jit_selftest()
 {
 #if SMU2000_MEG_JIT
 	u64 bad = 0;
-	for (int which = 0; which < 2; which++) {
+	for (int which = 0; which < 3; which++) {
 		assembler a;
 		a.mov32(RAX, RCX);
-		if (which == 0) emit_revram_encode(a); else emit_revram_decode(a);
+		if (which == 0) emit_revram_encode(a); else if (which == 1) emit_revram_decode(a); else emit_m1_expand(a);
 		a.ret();
 		void *buf = VirtualAlloc(nullptr, a.code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 		if (!buf)
@@ -183,9 +209,15 @@ u64 swp30_device::meg_jit_selftest()
 			for (u32 v : { 0xffffffffu, 0x80000000u, 0xf8000001u })
 				if ((fn(v) & 0xffff) != meg_state::revram_encode(v))
 					bad++;
-		} else {
+		} else if (which == 1) {
 			for (u32 v = 0; v < 0x10000; v++)
 				if (fn(v) != meg_state::revram_decode(u16(v)))
+					bad++;
+		} else {
+			// 呼ぶ側は loads16 で 64bit に符号拡張した値を渡す。出力は 64bit のまま使う
+			const auto fn64 = reinterpret_cast<s64 (*)(s64)>(buf);
+			for (s32 v = -0x8000; v < 0x8000; v++)
+				if (fn64(v) != s64(meg_state::m1_expand(s16(v))))
 					bad++;
 		}
 		VirtualFree(buf, 0, MEM_RELEASE);
@@ -382,10 +414,8 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 				a.loads16(RAX, M(o_t + 2 * o.t));
 			else
 				a.loads16(RAX, M(o_const + 2 * s32(k)));
-			if (o.m1_expand) {
-				a.mov64(RCX, RAX);
-				a.call_abs(reinterpret_cast<void *>(&meg_jit::call_expand));
-			}
+			if (o.m1_expand)
+				emit_m1_expand(a);                           // meg_state::m1_expand を機械語で
 			switch (o.mmode) {
 			case 1:
 				a.shl64(RAX, 8 + 15);
