@@ -3816,6 +3816,7 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 		m_meg->build_ops(m_meg_ops.data());
 		m_meg_program_changed = false;
 		m_meg_ops_stale = false;
+		meg_jit_rebuild();
 	}
 
 	sample_step();
@@ -3826,9 +3827,11 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 	} else if(m_profile) {
 		// S-MU2000: MEG だけの時間を測る（blocktime が使う）
 		const auto t0 = std::chrono::steady_clock::now();
-		m_meg->run_program(m_meg_ops.data());
+		if(!meg_jit_run())
+			m_meg->run_program(m_meg_ops.data());
 		m_t_meg += u64(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
-	} else
+	} else if(!meg_jit_run())
+		// S-MU2000: 機械語にできていれば、そちらで回す（swp30_jit.cpp）
 		m_meg->run_program(m_meg_ops.data());
 
 	// sound_stream_update() がやっていたことをここで行う。

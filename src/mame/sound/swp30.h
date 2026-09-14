@@ -435,6 +435,15 @@ private:
 	bool m_meg_flag_n = false, m_meg_flag_z = false;
 	u16  m_meg_skip_to = 0;
 
+	// S-MU2000: MEG のプログラムを機械語にしたもの（swp30_jit.cpp）。命令表と同じく保存しない。
+	// 環境変数 SMU2000_MEG_JIT=0 で使わない（解釈実行に戻す）
+	struct meg_jit;
+	static void meg_jit_delete(meg_jit *j);
+	static bool meg_jit_enabled();
+	void meg_jit_rebuild();
+	bool meg_jit_run();
+	std::unique_ptr<meg_jit, void (*)(meg_jit *)> m_jit{nullptr, &meg_jit_delete};
+
 	u32 m_sample_counter = 0;
 	u32 m_wave_adr = 0, m_wave_size = 0, m_wave_val = 0, m_revram_adr = 0, m_revram_data = 0;
 	u16 m_wave_access = 0, m_revram_enable = 0;
