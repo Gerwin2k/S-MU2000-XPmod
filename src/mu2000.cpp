@@ -784,7 +784,8 @@ namespace {
 
 // 保存の形。中身の並びを変えたら上げる
 constexpr u32 STATE_MAGIC   = 0x554d3253;   // "S2MU"
-constexpr u32 STATE_VERSION = 2;   // 2: MIDI の入口が A/B の 2 口になった
+constexpr u32 STATE_VERSION = 3;   // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG
+constexpr u32 STATE_VERSION_OLDEST = 2;
 
 } // namespace
 
@@ -841,6 +842,7 @@ std::vector<u8> mu2000::save_state() const
 	u32 magic = STATE_MAGIC, ver = STATE_VERSION;
 	s.v(magic);
 	s.v(ver);
+	s.set_version(ver);
 	const_cast<mu2000 *>(this)->state(s);
 	return out;
 }
@@ -855,10 +857,11 @@ bool mu2000::load_state(const u8 *p, size_t n, std::string &err)
 		err = "これは S-MU2000 の状態ではない";
 		return false;
 	}
-	if (ver != STATE_VERSION) {
+	if (ver < STATE_VERSION_OLDEST || ver > STATE_VERSION) {
 		err = "状態の形が違う（この版では読めない）";
 		return false;
 	}
+	s.set_version(ver);
 	state(s);
 	if (!s.ok()) {
 		err = s.error();

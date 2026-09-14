@@ -120,7 +120,7 @@ private:
 
 		void clear();
 		void keyon();
-		std::pair<s16, bool> step(memory_access<25, 2, -2, ENDIANNESS_LITTLE>::cache &wave, s32 pitch_lfo);
+		std::pair<s16, bool> step(memory_access<25, 2, -2, ENDIANNESS_LITTLE>::cache &wave, s32 pitch_lfo, u16 pitch_offset);
 
 		void start_h_w(u16 data);
 		void start_l_w(u16 data);
@@ -412,6 +412,13 @@ private:
 	sound_buffer m_buf;
 
 	std::array<streaming_block, 0x40> m_streaming = {};
+	// S-MU2000: チップの中のピッチ EG（doc/upstream.md の 13）。スロット 0x10（目標）、0x0B（速さ）、
+	// 今の値、着いた印。streaming_block の並びを変えないよう外に置く（状態の版 2 を読めるように）
+	std::array<u16, 0x40> m_pitch_offset = {};
+	std::array<u16, 0x40> m_peg_rate = {};
+	std::array<s32, 0x40> m_peg_cur = {};
+	std::array<u8,  0x40> m_peg_reached = {};
+	void peg_step(int chan);
 	std::array<filter_block,    0x40> m_filter = {};
 	std::array<iir1_block,      0x40> m_iir1 = {};
 	std::array<envelope_block,  0x40> m_envelope = {};
@@ -466,6 +473,10 @@ private:
 	void address_l_w(offs_t offset, u16 data);
 	u16 pitch_r(offs_t offset);
 	void pitch_w(offs_t offset, u16 data);
+	u16 pitch_offset_r(offs_t offset);
+	void pitch_offset_w(offs_t offset, u16 data);
+	u16 peg_rate_r(offs_t offset);
+	void peg_rate_w(offs_t offset, u16 data);
 
 
 	// Filter block trampolines
