@@ -79,6 +79,7 @@ SRCS := \
 	src/mame/machine/sci4.cpp \
 	src/mame/cpu/sh.cpp \
 	src/mame/cpu/sh2.cpp 	src/mame/cpu/sh2_jit.cpp \
+	src/compat/a64asm.cpp \
 	src/mame/cpu/sh7042.cpp \
 	src/mame/cpu/sh_adc.cpp \
 	src/mame/cpu/sh_bsc.cpp \
