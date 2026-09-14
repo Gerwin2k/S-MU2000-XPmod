@@ -160,6 +160,42 @@ int main(int argc, char **argv)
 	if (!loud) bad++;
 	if (!pitch) bad++;
 
+	// A/D パート。既定の音量は 0 で、入力は聞こえない。音量を上げると A/D INPUT がそのまま鳴る
+	// （スレーブの MELI 6/7 を firmware がミキサに通す）
+	g.press(B::exit);
+	g.press(B::exit);
+	g.press(B::exit);
+	auto level_440 = [&](double &rms_out) {
+		g.out.clear();
+		g.sine_amp = 8000;
+		g.pump(200);
+		g.collect = true;
+		g.pump(500);
+		g.collect = false;
+		g.sine_amp = 0;
+		double sum = 0;
+		for (double v : g.out)
+			sum += v * v;
+		rms_out = std::sqrt(sum / std::max<size_t>(1, g.out.size()));
+		return tone(g.out, 440);
+	};
+	double rms_off = 0, rms_on = 0;
+	const double ad_off = level_440(rms_off);
+	for (int part = 0; part < 2; part++) {
+		const u8 msg[] = { 0xf0, 0x43, 0x10, 0x4c, 0x10, u8(part), 0x0b, 100, 0xf7 };
+		for (u8 b : msg)
+			g.mu.midi_in(b, 0);
+	}
+	g.pump(300);
+	const double ad_on = level_440(rms_on);
+	const bool off_ok = rms_off < 0.001;
+	const bool on_ok = rms_on > 0.05 && ad_on > 10 * std::max(tone(g.out, 330), tone(g.out, 587));
+	std::printf("%s A/D パートの音量 0 では無音      rms %.5f\n", off_ok ? "合" : "NG", rms_off);
+	std::printf("%s A/D パートの音量 100 で入力が鳴る rms %.4f / 440Hz %.5f\n", on_ok ? "合" : "NG", rms_on, ad_on);
+	(void)ad_off;
+	if (!off_ok) bad++;
+	if (!on_ok) bad++;
+
 	std::printf("サンプリング: 食い違い %d\n", bad);
 	return bad ? 1 : 0;
 }

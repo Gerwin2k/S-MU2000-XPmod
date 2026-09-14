@@ -150,7 +150,8 @@ public:
 	void run_sample(s32 &left, s32 &right);
 
 	// A/D INPUT に入れる音。次の run_sample の 1 サンプルぶんで、16bit の目盛り（±32768 が全振幅）。
-	// 左が AD1、右が AD2。今はサンプリングの録音にだけ使う（録るのは AD1。入力の切り替えはまだ無い）
+	// 左が AD1、右が AD2。A/D パート（スレーブの MELI 6/7）と、サンプリングの録音（録るのは AD1。
+	// 入力の切り替えはまだ無い）に使う
 	void set_audio_input(s32 ad1, s32 ad2) { m_ad_in[0] = ad1; m_ad_in[1] = ad2; }
 
 	sh7043a_device &cpu()  { return *m_cpu; }
