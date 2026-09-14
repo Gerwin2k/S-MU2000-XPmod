@@ -74,3 +74,19 @@ power and energy-saver settings before measuring.
 | x86_64 Rosetta - MEG JIT only | 2.946 | 58.62 | 50.8 | 1010 | 18 |
 | x86_64 Rosetta - SH2 JIT only | 2.114 | 4.73 | 36.4 | 82 | 0 |
 | x86_64 Rosetta - interpreter | 3.892 | 7.53 | 67.0 | 130 | 37 |
+
+## 2026-09-14 19:32 -- MacBookPro18,2 (Apple M1 Max)
+
+- macOS 27.0, uname arm64, 10 logical cores (8 performance + 2 efficiency), 32 GB RAM
+- Rosetta 2: yes; compiler: `Apple clang version 21.0.0 (clang-2100.3.34.2)`
+- source: `0a0f98b`; block = 256 frames, 10 s x 3 repeats, medians of runs
+- song: `demo.mid` (local only); ROM: `roms`
+
+| config | avg ms/block | worst ms | % of real time (avg) | % of real time (worst) | blocks overrun |
+|---|---|---|---|---|---|
+| arm64 native - interpreter | 2.311 | 3.20 | 39.8 | 55 | 0 |
+| arm64 native - SH2 JIT | 1.360 | 2.33 | 23.4 | 40 | 0 |
+| x86_64 Rosetta - both JITs | 1.391 | 60.06 | 24.0 | 1035 | 10 |
+| x86_64 Rosetta - MEG JIT only | 3.139 | 60.81 | 54.1 | 1048 | 14 |
+| x86_64 Rosetta - SH2 JIT only | 2.242 | 4.72 | 38.6 | 81 | 0 |
+| x86_64 Rosetta - interpreter | 4.049 | 7.96 | 69.7 | 137 | 49 |
