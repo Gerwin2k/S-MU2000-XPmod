@@ -138,7 +138,8 @@ public:
 	// スレーブの SWP30 を別スレッドで回すか。
 	// 2 個の SWP30 は 1 サンプルの中では互いに独立している（相手の出力は
 	// 前サンプルのものしか使わない）ので、並べて走らせても結果は変わらない。
-	// 別スレッドで回す台数には上限がある（論理コア数の 1/4、SMU2000_THREADED_MAX）。超えた台は 1 本で回す
+	// 別スレッドにするのは、動いている台数が論理コア数の 1/4 以下のときだけ（SMU2000_THREADED_MAX）。
+	// 台数が増えたら run_sample の中で 1 本に戻し、減ったらまた別スレッドにする
 	void set_threaded(bool on);
 	bool threaded() const { return m_slave_thread.joinable(); }
 
@@ -252,10 +253,13 @@ private:
 	// スレーブ用のスレッド。合図は atomic の回し合いで、錠は使わない。
 	// 44100 回/秒の受け渡しなので、待つのは眠らずに回して待つ
 	std::thread m_slave_thread;
+	bool m_want_threaded = false;
+	u32  m_thread_check = 0;
+	void apply_threading();
 	std::atomic<u64> m_slave_go{0}, m_slave_done{0};
 	std::atomic<bool> m_slave_quit{false};
 	s32 m_slave_l = 0, m_slave_r = 0;
-	void slave_loop();
+	void slave_loop(u64 seen);
 
 public:
 	// 速さの手掛かり。1 サンプルあたり実行ループを何周したか
