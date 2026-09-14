@@ -48,6 +48,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 
 namespace {
 
@@ -436,6 +437,27 @@ void show_card_menu(HWND hwnd, POINT screen)
 	DestroyMenu(m);
 }
 
+// MIDI ファイルを流す（品書きから選んだとき・窓に落とされたとき）。鳴っていれば止めて流し直す
+void play_midi_file(HWND hwnd, const std::string &path)
+{
+	if (!g_win.br)
+		return;
+	std::string err;
+	if (!g_win.play_file.start(path, *g_win.br, err)) {
+		const std::wstring w = ui::to_wide("開けない: " + err);
+		MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+		return;
+	}
+	std::printf("再生: %s（%.1f 秒）\n", path.c_str(), g_win.play_file.length());
+	std::fflush(stdout);
+}
+
+// 窓に落とされたファイル（エディタや一覧の窓から）。本体の窓は WM_DROPFILES で受ける
+void play_dropped_file(const std::wstring &path)
+{
+	play_midi_file(GetForegroundWindow(), ui::to_utf8(path.c_str()));
+}
+
 void choose_midi_file(HWND hwnd)
 {
 	wchar_t file[MAX_PATH] = {};
@@ -450,15 +472,7 @@ void choose_midi_file(HWND hwnd)
 	if (!GetOpenFileNameW(&o))
 		return;
 
-	std::string path = ui::to_utf8(file);
-	std::string err;
-	if (!g_win.play_file.start(path, *g_win.br, err)) {
-		const std::wstring w = ui::to_wide("開けない: " + err);
-		MessageBoxW(hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
-		return;
-	}
-	std::printf("再生: %s（%.1f 秒)\n", path.c_str(), g_win.play_file.length());
-	std::fflush(stdout);
+	play_midi_file(hwnd, ui::to_utf8(file));
 }
 
 // 覚えている設定を捨てて、電源を入れ直す
@@ -666,6 +680,17 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 				g_win.reported_drops = drops;
 			}
 		}
+		return 0;
+	}
+
+	case WM_DROPFILES: {
+		// 窓に落とされたファイルの 1 つ目を流す
+		const HDROP drop = HDROP(wp);
+		wchar_t path[MAX_PATH * 4] = {};
+		const bool got = DragQueryFileW(drop, 0, path, UINT(sizeof(path) / sizeof(path[0]))) > 0;
+		DragFinish(drop);
+		if (got)
+			play_midi_file(hwnd, ui::to_utf8(path));
 		return 0;
 	}
 
@@ -1085,6 +1110,10 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "窓を出せない\n");
 		return 1;
 	}
+
+	// MIDI ファイルを窓に落とせば流す（本体の窓も、エディタや一覧の窓も）
+	DragAcceptFiles(hwnd, TRUE);
+	ui::pc_window::set_drop_handler(play_dropped_file);
 
 	g_win.br   = &br;
 	g_win.eng  = &eng;

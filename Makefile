@@ -116,7 +116,7 @@ $(BUILD)/src/gui.o: CXXFLAGS += $(IMGUI_FLAGS)
 
 $(BUILD)/gui.exe: $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(UI_OBJS) $(PC_OBJS) $(BUILD)/src/gui.o
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32 	       -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -limm32
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32 -lshell32 	       -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -limm32
 
 # midisend は MIDI ファイルを実時間で MIDI 出力へ流す（live の試験用）
 $(BUILD)/midisend.exe: $(BUILD)/src/smf.o $(BUILD)/src/midisend.o $(BUILD)/src/compat/compat.o

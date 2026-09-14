@@ -41,6 +41,10 @@ public:
 	// タイマーから。見えていなければ何もしない
 	void frame(xg::model &m, const xg_snapshot &ram, bridge &br);
 
+	// ファイルを窓に落とされたときに呼ぶ先（gui が MIDI ファイルを流す）。
+	// 窓を作る前に決めておく。決めていなければ落とせない
+	static void set_drop_handler(void (*fn)(const std::wstring &path)) { s_drop = fn; }
+
 private:
 	bool create(HINSTANCE inst, std::string &err);
 	bool create_device(std::string &err);
@@ -48,6 +52,7 @@ private:
 	void drop_target();
 	void destroy();
 	static LRESULT CALLBACK proc(HWND h, UINT msg, WPARAM wp, LPARAM lp);
+	static inline void (*s_drop)(const std::wstring &) = nullptr;
 
 	std::unique_ptr<imgui_view> m_view;
 	HWND m_hwnd = nullptr;

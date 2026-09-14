@@ -7,6 +7,8 @@
 #include "backends/imgui_impl_win32.h"
 
 #include <d3d11.h>
+#include <iterator>
+#include <shellapi.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -81,6 +83,8 @@ bool pc_window::create(HINSTANCE inst, std::string &err)
 		return false;
 	}
 	SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, LONG_PTR(this));
+	if (s_drop)
+		DragAcceptFiles(m_hwnd, TRUE);
 
 	if (!create_device(err)) {
 		destroy();
@@ -228,6 +232,16 @@ LRESULT CALLBACK pc_window::proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 	case WM_CLOSE:
 		ShowWindow(h, SW_HIDE);              // 消さずに隠す
 		return 0;
+	case WM_DROPFILES: {
+		// 落とされたファイルの 1 つ目だけを渡す
+		const HDROP drop = HDROP(wp);
+		wchar_t path[MAX_PATH * 4] = {};
+		const bool got = DragQueryFileW(drop, 0, path, UINT(std::size(path))) > 0;
+		DragFinish(drop);
+		if (got && s_drop)
+			s_drop(path);
+		return 0;
+	}
 	}
 	return DefWindowProcW(h, msg, wp, lp);
 }
