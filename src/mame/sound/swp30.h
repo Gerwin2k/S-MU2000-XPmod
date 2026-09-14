@@ -474,6 +474,9 @@ private:
 	// S-MU2000: MEG の定数の値が変わるたびに 1 増える（JIT の定数を焼き込んだ版を捨てる印）。
 	// 状態の保存には入れない（meg_state の並びを変えると、前の版で保存した状態が読めなくなる）
 	u32 m_meg_const_gen = 0;
+	// S-MU2000: 分岐のあるプログラムを JIT で回すときの「この命令の手前まで飛ばす」位置（0 なら飛ばさない）。
+	// 1 サンプルの中だけで使う。保存しない
+	u32 m_meg_jit_skip = 0;
 
 	u32 m_sample_counter = 0;
 	u32 m_wave_adr = 0, m_wave_size = 0, m_wave_val = 0, m_revram_adr = 0, m_revram_data = 0;
