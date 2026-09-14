@@ -721,7 +721,14 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		// 2. 実行する
 		res r = none;
 		const size_t op_begin = a.code.size();
-		if (!slot && native_enabled())
+		// 遅延スロットの命令も、pc を使わない普通の命令なら機械語で書く（解釈実行でも pc は見ない）。
+		// pc を使うのは MOV.W/MOV.L @(disp,PC) と MOVA だけ（分岐はスロットに来ない）
+		static const bool slot_native = [] {
+			const char *e = std::getenv("SMU2000_SH2_SLOTNATIVE");
+			return !(e && e[0] == '0');
+		}();
+		const bool pc_rel = (op >> 12) == 0x9 || (op >> 12) == 0xd || (op >> 8) == 0xc7;
+		if (native_enabled() && (!slot || (slot_native && k == kind::normal && !pc_rel)))
 			r = native(op, at);
 		if (r == none) {
 			if (!slot && lazy_pc && !jit_trace_on())
