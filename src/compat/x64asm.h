@@ -107,6 +107,7 @@ public:
 	void cmovl64(u8 d, u8 s) { rr(0, true, {0x0f, 0x4c}, d, s); }
 	void cmovg64(u8 d, u8 s) { rr(0, true, {0x0f, 0x4f}, d, s); }
 	void cmovs64(u8 d, u8 s) { rr(0, true, {0x0f, 0x48}, d, s); }
+	void cmove64(u8 d, u8 s) { rr(0, true, {0x0f, 0x44}, d, s); }
 	void setl_mem(const mem &m) { rm(0, false, {0x0f, 0x9c}, 0, m); }
 	void sete_mem(const mem &m) { rm(0, false, {0x0f, 0x94}, 0, m); }
 	void call_reg(u8 r) { rr(0, false, {0xff}, 2, r); }

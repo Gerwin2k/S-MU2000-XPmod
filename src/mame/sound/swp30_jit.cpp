@@ -313,12 +313,17 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 		a.and32i(RCX, 0x7fff);
 		a.add64(RAX, RCX);
 		a.sar64(RAX, 15);
-		a.imm64(RCX, u64(s64(-0x800000)));
+		// 1 つだけはみ出したときは限界に止め、ほかは 24bit で折り返す（meg_pack24 と同じ）
+		a.imm64(RCX, 0x800000);
 		a.cmp64(RAX, RCX);
-		a.cmovl64(RAX, RCX);
 		a.imm64(RCX, 0x7fffff);
+		a.cmove64(RAX, RCX);
+		a.imm64(RCX, u64(s64(-0x800001)));
 		a.cmp64(RAX, RCX);
-		a.cmovg64(RAX, RCX);
+		a.imm64(RCX, u64(s64(-0x800000)));
+		a.cmove64(RAX, RCX);
+		a.shl64(RAX, 40);
+		a.sar64(RAX, 40);
 	};
 	// 乱数を 1 つ引く（swp30_device::rand）。出力 eax
 	const auto rnd = [&]() {
