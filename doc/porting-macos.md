@@ -459,6 +459,26 @@ The Makefile detects the platform: `OS=Windows_NT` → Windows, `uname -s` =
 libraries as before. The two Objective-C++ files get their own pattern rule,
 because they have to be compiled with `-fobjc-arc`.
 
+Architecture: by default everything builds for this machine's own slice
+(`-arch` is not passed and the compiler default wins, so Apple Silicon Macs
+build arm64-only). Three opt-ins:
+
+```
+make ARCH=arm64       # force one slice
+make ARCH=x86_64      # force the Intel slice (BUILD=build-x64 keeps objects apart)
+make UNIVERSAL=1      # both slices in every binary and bundle
+```
+
+The two JITs (SH2 and MEG) emit x86-64 machine code, so they are active in
+the x86_64 slice only — including under Rosetta — and always compiled out of
+the arm64 slice, which interprets. Both JITs were ported to the SysV calling
+convention (`src/compat/exec_mem.h` holds the mmap/mprotect layer); the same
+audio fingerprints pass with them on and off. Under Rosetta both JITs together
+render roughly twice as fast as the arm64 interpreter (0.37 vs 0.67 ms per
+64-frame block), but Rosetta occasionally pauses for tens of milliseconds
+while it translates newly generated code, so audio paths want a large device
+buffer there; the arm64 slice has no such spikes.
+
 ## Verifying
 
 Without ROMs only the ROM-free checks can run:

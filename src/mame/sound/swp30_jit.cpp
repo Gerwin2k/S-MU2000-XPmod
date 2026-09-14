@@ -15,13 +15,14 @@
 // 分岐（bit 0x3f）を含むプログラムは訳さずに run_program() に任せる（LO-FI と DYNA 系だけ）。
 // 訳した物はどこにも保存しない（firmware 由来のものを配らない。実行時に作って捨てる）。
 //
-// Windows の x86-64 だけ。ほかでは build() が false を返し、今までどおり解釈実行する。
+// x86-64 で使う（Windows・macOS・Linux。生成するのは x86 の機械語なので arm64 では使わない）。
+// そのほかでは build() が false を返し、今までどおり解釈実行する。
 
 #include "swp30.h"
 
-#if defined(_WIN32) && defined(__x86_64__)
+#ifdef __x86_64__
 #define SMU2000_MEG_JIT 1
-#include <windows.h>
+#include "compat/exec_mem.h"
 #else
 #define SMU2000_MEG_JIT 0
 #endif
@@ -134,7 +135,7 @@ struct swp30_device::meg_jit {
 	{
 #if SMU2000_MEG_JIT
 		if (buf)
-			VirtualFree(buf, 0, MEM_RELEASE);
+			exec_mem::free_mem(buf, buf_size);
 #endif
 	}
 
@@ -194,14 +195,19 @@ u64 swp30_device::meg_jit_selftest()
 	u64 bad = 0;
 	for (int which = 0; which < 3; which++) {
 		assembler a;
-		a.mov32(RAX, RCX);
+		a.mov32(RAX, ARG0);
 		if (which == 0) emit_revram_encode(a); else if (which == 1) emit_revram_decode(a); else emit_m1_expand(a);
 		a.ret();
-		void *buf = VirtualAlloc(nullptr, a.code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+		// RW buffer, made executable after the copy (the return value is rax under either ABI)
+		void *buf = exec_mem::alloc_rw(a.code.size());
 		if (!buf)
 			return ~u64(0);
 		std::memcpy(buf, a.code.data(), a.code.size());
-		const auto fn = reinterpret_cast<u32 (*)(u32)>(buf);
+		if (!exec_mem::make_executable(buf, a.code.size())) {
+			exec_mem::free_mem(buf, a.code.size());
+			return ~u64(0);
+		}
+		const auto fn = reinterpret_cast<u32 (*)(x64_arg0_t)>(buf);
 		if (which == 0) {
 			for (u32 v = 0; v < 0x8000000; v++)        // encode は下の 27bit しか見ない
 				if ((fn(v) & 0xffff) != meg_state::revram_encode(v))
@@ -220,7 +226,7 @@ u64 swp30_device::meg_jit_selftest()
 				if (fn64(v) != s64(meg_state::m1_expand(s16(v))))
 					bad++;
 		}
-		VirtualFree(buf, 0, MEM_RELEASE);
+		exec_mem::free_mem(buf, a.code.size());
 	}
 	return bad;
 #else
@@ -296,12 +302,12 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 	const u8 MS = RBX, SWP = R12, P = R13, SC = R14, RAM = R15;
 	const auto M = [&](s32 disp) { return mem{MS, NOREG, 1, disp}; };
 
-	// 入口（Windows x64: rcx = ms, rdx = swp, r8 = リバーブ RAM）
+	// 入口（引数は ARG0 = ms、ARG1 = swp、ARG2 = リバーブ RAM。Windows x64 でも SysVでも）
 	a.push(RBX); a.push(R12); a.push(R13); a.push(R14); a.push(R15);
 	a.subrsp(48);                                    // 呼ぶ先の影 32 + 自分の置き場 16。rsp は 16 の倍数
-	a.mov64(MS, RCX);
-	a.mov64(SWP, RDX);
-	a.mov64(RAM, R8);
+	a.mov64(MS, ARG0);
+	a.mov64(SWP, ARG1);
+	a.mov64(RAM, ARG2);
 	a.load64(P, M(o_p));
 	a.load32(SC, M(o_sample));
 
@@ -492,8 +498,8 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 		if (o.dm) {
 			switch (o.dm_src) {
 			case 0: case 1: case 2: case 3:
-				a.mov64(RCX, MS);
-				a.imm32(RDX, o.lfo);
+				a.mov64(ARG0, MS);
+				a.imm32(ARG1, o.lfo);
 				a.call_abs(reinterpret_cast<void *>(&meg_jit::call_lfo));
 				break;
 			case 4:
@@ -608,19 +614,20 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 
 	if (a.code.size() > buf_size) {
 		if (buf)
-			VirtualFree(buf, 0, MEM_RELEASE);
+			exec_mem::free_mem(buf, buf_size);
 		buf_size = (a.code.size() + 0xffff) & ~size_t(0xffff);
-		buf = VirtualAlloc(nullptr, buf_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		buf = exec_mem::alloc_rw(buf_size);
 		if (!buf) {
 			buf_size = 0;
 			return false;
 		}
 	}
-	DWORD old;
-	VirtualProtect(buf, buf_size, PAGE_READWRITE, &old);
+	// make writable, copy, make executable again. Needed on rebuilds, which arrive still executable
+	if (!exec_mem::make_writable(buf, buf_size))
+		return false;
 	std::memcpy(buf, a.code.data(), a.code.size());
-	VirtualProtect(buf, buf_size, PAGE_EXECUTE_READ, &old);
-	FlushInstructionCache(GetCurrentProcess(), buf, a.code.size());
+	if (!exec_mem::make_executable(buf, buf_size))
+		return false;
 	fn = reinterpret_cast<fn_t>(buf);
 	return true;
 }

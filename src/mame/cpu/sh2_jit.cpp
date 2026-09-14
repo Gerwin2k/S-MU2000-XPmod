@@ -19,14 +19,15 @@
 // ROM は書き換わらないので、訳した物は捨て直さない（リセットのときだけ捨てる）。
 // 訳した物はどこにも保存しない（firmware 由来のものを配らない。実行時に作って捨てる）。
 //
-// Windows の x86-64 だけ。ほかの環境と SMU2000_SH2_JIT=0 では使わない。
+// x86-64 で使う（Windows・macOS・Linux。arm64 では訳せないので使わない）。
+// SMU2000_SH2_JIT=0 では使わない。SMU2000_SH2_JIT=1 のときの挙動は下の注釈どおり。
 // SMU2000_SH2_JIT=1 では命令を機械語で書かず、全部 execute_one を呼ぶ（食い違いを探すとき用）。
 
 #include "sh2.h"
 
-#if defined(_WIN32) && defined(__x86_64__)
+#ifdef __x86_64__
 #define SMU2000_SH2_JIT 1
-#include <windows.h>
+#include "compat/exec_mem.h"
 #include "x64asm.h"
 #else
 #define SMU2000_SH2_JIT 0
@@ -38,8 +39,9 @@
 #include <memory>
 
 struct sh2_device::jit {
-	// 入口の関数（Windows x64: rcx = cpu、rdx = 状態、r8 = ROM、r9 = RAM）。entry のブロックから回し始め、
-	// ブロックの終わりで次のブロックへ直に飛ぶ。icount が尽きるか、訳していない所・m_delay・割り込みの印に当たると戻る
+	// 入口の関数（Windows x64: rcx = cpu、rdx = 状態、r8 = ROM、r9 = RAM。SysV: rdi・rsi・rdx・rcx）。
+	// 状態はどちらの規約でも rbp に置く。rbp は両方の規約で保つべきレジスタなので、
+	// ブロックの中で呼ぶ先（呼ぶ先が壊してよいのは rax・rcx・rdx・rsi・rdi・r8〜r11）と衝突しない
 	using enter_t = void (*)(sh2_device *, internal_sh2_state *, const u8 *rom, u8 *ram);
 	using code_t = void *;
 
@@ -59,7 +61,7 @@ struct sh2_device::jit {
 	{
 #if SMU2000_SH2_JIT
 		if (buf)
-			VirtualFree(buf, 0, MEM_RELEASE);
+			exec_mem::free_mem(buf, BUF_SIZE);
 #endif
 	}
 
@@ -103,7 +105,7 @@ bool sh2_device::jit_enabled()
 }
 
 // 命令を機械語で書くか。SMU2000_SH2_JIT=1 なら全部 execute_one を呼ぶ
-static bool native_enabled()
+[[maybe_unused]] static bool native_enabled()
 {
 	static const bool on = [] {
 		const char *e = std::getenv("SMU2000_SH2_JIT");
@@ -193,7 +195,7 @@ namespace {
 // 命令の種類。execute_one の振り分けと同じ表から引く
 enum class kind { normal, delayed, ends };
 
-kind classify(u16 op)
+[[maybe_unused]] kind classify(u16 op)
 {
 	switch (op >> 12) {
 	case 0x0:
@@ -256,24 +258,24 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &, u32)
 // 置き場の頭に、入口（enter）とブロックの終わりから飛ぶ先（next_block）を作る
 bool sh2_device::jit::init(sh2_device &cpu)
 {
-	using namespace x64asm;
-	buf = VirtualAlloc(nullptr, BUF_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	using namespace x64asm;		// RWX buffer: code runs in place as soon as it is written (rebuilds overwrite it, so no protect swapping)
+	buf = exec_mem::alloc_rwx(BUF_SIZE);
 	if (!buf)
 		return false;
 	if (sizeof(pages[0]) != 8)
 		return false;
 	const internal_sh2_state *st = cpu.m_sh2_state;
-	const auto S = [st](const void *f) { return mem{ RSI, NOREG, 1, s32(intptr_t(f) - intptr_t(st)) }; };
+	const auto S = [st](const void *f) { return mem{ RBP, NOREG, 1, s32(intptr_t(f) - intptr_t(st)) }; };
 	const mem C_test { RBX, NOREG, 1, s32(intptr_t(&cpu.m_test_irq) - intptr_t(&cpu)) };
 
 	assembler a;
-	// enter: rbx rsi r12 r13 を保って、entry へ飛ぶ
-	a.push(RBX); a.push(RSI); a.push(R12); a.push(R13);
-	a.subrsp(40);                        // 影 32 + 詰め物 8。rsp は 16 の倍数になる
-	a.mov64(RBX, RCX);
-	a.mov64(RSI, RDX);
-	a.mov64(R12, R8);
-	a.mov64(R13, R9);
+	// enter: rbx rbp r12 r13 を保って、entry へ飛ぶ
+	a.push(RBX); a.push(RBP); a.push(R12); a.push(R13);
+	a.subrsp(40);                        // 影 32 + 詰め物 8。rsp は 16 の倍数になる（SysV では余分な空き）
+	a.mov64(RBX, ARG0);
+	a.mov64(RBP, ARG1);
+	a.mov64(R12, ARG2);
+	a.mov64(R13, ARG3);
 	a.imm64(RAX, u64(uintptr_t(&entry)));
 	a.load64(RAX, mem{ RAX, NOREG, 1, 0 });
 	a.rr(0, false, {0xff}, 4, RAX);      // jmp rax
@@ -309,7 +311,7 @@ bool sh2_device::jit::init(sh2_device &cpu)
 	for (size_t p : to_exit)
 		a.patch(p);
 	a.addrsp(40);
-	a.pop(R13); a.pop(R12); a.pop(RSI); a.pop(RBX);
+	a.pop(R13); a.pop(R12); a.pop(RBP); a.pop(RBX);
 	a.ret();
 
 	std::memcpy(buf, a.code.data(), a.code.size());
@@ -336,7 +338,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		return nullptr;
 
 	const internal_sh2_state *st = cpu.m_sh2_state;
-	const auto S = [st](const void *f) { return mem{ RSI, NOREG, 1, s32(intptr_t(f) - intptr_t(st)) }; };
+	const auto S = [st](const void *f) { return mem{ RBP, NOREG, 1, s32(intptr_t(f) - intptr_t(st)) }; };
 	const mem S_pc = S(&st->pc), S_delay = S(&st->m_delay), S_icount = S(&st->icount), S_ea = S(&st->ea);
 	const mem S_sr = S(&st->sr), S_pr = S(&st->pr), S_gbr = S(&st->gbr), S_vbr = S(&st->vbr);
 	const mem S_mach = S(&st->mach), S_macl = S(&st->macl);
@@ -346,11 +348,15 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		return nullptr;
 
 	assembler a;
-	// ブロックの中では rbx = cpu、rsi = 状態、r12 = ROM、r13 = RAM（enter が入れる）
+	// ブロックの中では rbx = cpu、rbp = 状態、r12 = ROM、r13 = RAM（enter が入れる）
 
 	std::vector<size_t> to_finish, to_ret;
 
 	const auto call = [&](void *fn) { a.call_abs(fn); };
+	// Helper-call arguments. The address sits in edx and the value in r8d by internal
+	// convention. Under Windows x64 that is already the argument order (only rcx is
+	// missing); under SysV they have to move to rsi and rdx
+	constexpr bool sysv = sysv_abi;
 	const auto setT = [&]() {           // al の 0/1 を T へ
 		a.movzx8(RAX, RAX);
 		a.and32i_mem(S_sr, ~u32(SH_T));
@@ -380,7 +386,9 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		else { a.load32(RAX, mw); a.bswap32(RAX); }
 		to_done.push_back(a.jmp_fwd());
 		for (size_t p : to_slow) a.patch(p);
-		a.mov64(RCX, RBX);
+		if constexpr (sysv)
+			a.mov64(ARG1, RDX);        // address
+		a.mov64(ARG0, RBX);
 		call(sz == 1 ? reinterpret_cast<void *>(&sh2_device::jit_rb) :
 		     sz == 2 ? reinterpret_cast<void *>(&sh2_device::jit_rw) : reinterpret_cast<void *>(&sh2_device::jit_rl));
 		for (size_t p : to_done) a.patch(p);
@@ -401,7 +409,11 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		else { a.mov32(RCX, R8); a.bswap32(RCX); a.store32(mw, RCX); }
 		const size_t done = a.jmp_fwd();
 		for (size_t p : to_slow) a.patch(p);
-		a.mov64(RCX, RBX);
+		if constexpr (sysv) {
+			a.mov64(ARG1, RDX);        // address
+			a.mov64(ARG2, R8);         // value
+		}
+		a.mov64(ARG0, RBX);
 		call(sz == 1 ? reinterpret_cast<void *>(&sh2_device::jit_wb) :
 		     sz == 2 ? reinterpret_cast<void *>(&sh2_device::jit_ww) : reinterpret_cast<void *>(&sh2_device::jit_wl));
 		a.patch(done);
@@ -684,7 +696,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		const kind k = classify(op);
 
 		if (jit_trace_on()) {
-			a.mov64(RCX, RBX);
+			a.mov64(ARG0, RBX);
 			call(reinterpret_cast<void *>(&sh2_device::jit_trace));
 		}
 
@@ -707,8 +719,8 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		if (!slot && native_enabled())
 			r = native(op, at);
 		if (r == none) {
-			a.mov64(RCX, RBX);
-			a.imm32(RDX, op);
+			a.mov64(ARG0, RBX);
+			a.imm32(ARG1, op);
 			call(reinterpret_cast<void *>(&sh2_device::jit_exec));
 			r = k == kind::delayed ? delayed : k == kind::ends ? ends : memop;
 		}
@@ -743,7 +755,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 	a.load32(RAX, S_delay);
 	a.test32(RAX, RAX);
 	const size_t no_irq2 = a.jcc_fwd(0x85);
-	a.mov64(RCX, RBX);
+	a.mov64(ARG0, RBX);
 	call(reinterpret_cast<void *>(&sh2_device::jit_irq));
 	a.patch(no_irq1);
 	a.patch(no_irq2);

@@ -46,6 +46,18 @@ EXE      :=
 # on virtual functions, so turn off just this warning rather than edit them:
 # that keeps the diff small for sending the changes back upstream
 CXXFLAGS += -Wno-inconsistent-missing-override
+#
+# Build for one architecture or both. Default: this machine's own.
+#   make ARCH=arm64   / make ARCH=x86_64   / make UNIVERSAL=1
+# The JITs emit x86-64 machine code, so they run in the x86_64 slice only
+# (also under Rosetta); the arm64 slice always interprets. Object files of
+# different flavors collide, so give each its own build directory:
+#   make BUILD=build-x64 ARCH=x86_64
+ifdef UNIVERSAL
+CXXFLAGS += -arch arm64 -arch x86_64
+else ifdef ARCH
+CXXFLAGS += -arch $(ARCH)
+endif
 endif
 
 # 自分の CPU に合わせるとさらに 4% ほど速いが、他の機械では動かなくなる。
