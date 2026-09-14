@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <sstream>
+#include <cmath>
 
 /*
 TODOs:
@@ -3332,6 +3333,20 @@ u32 swp30_device::meg_state::get_lfo(int lfo)
 
 // Expand the first multiplier input
 
+// S-MU2000: 内部の表の 0x000-0x0ff。bit 0x22-0x23 が 2 の読み出しは、firmware も MEG も書かない区画を +idx で引く。
+// RING MOD の搬送波（位相の上位 8bit を idx に 0x80 を中心に引く）が実機の 1001Hz と合い、音量も合うので、
+// そこは 256 点で 1 周の正弦と決めた。大きさは 0x7fffff。0x100 から上は分からないので、今までどおり RAM を読む
+const std::array<s32, 0x100> &swp30_device::meg_state::table_sine()
+{
+	static const std::array<s32, 0x100> t = [] {
+		std::array<s32, 0x100> v;
+		for(int i = 0; i != 0x100; i++)
+			v[i] = s32(std::lrint(std::sin(2 * 3.141592653589793 * i / 256) * 0x7fffff));
+		return v;
+	}();
+	return t;
+}
+
 s16 swp30_device::meg_state::m1_expand(s16 v)
 {
 	if(v < 0)
@@ -3392,6 +3407,7 @@ void swp30_device::meg_state::decode_program()
 		d.t_write   = BIT(opcode, 0x3b);
 		d.t_from_p  = BIT(opcode, 0x3c);
 		d.mem_use_index = BIT(opcode, 0x21);
+		d.mem_table = BIT(opcode, 0x22, 2) == 2;
 	}
 }
 
@@ -3658,17 +3674,15 @@ void swp30_device::meg_state::step()
 			m_swp->m_reverb_ram[address & 0x3ffff] = revram_encode(m_ram_write);
 		break;
 	}
-	case 2: {
-		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (d.mem_use_index ? m_ram_index : 0) - m_sample_counter);
-		if(address != 0xffffffff) {
-			const u16 val = m_swp->m_reverb_ram[address & 0x3ffff];
-			m_memr_value[m_delay_2] = revram_decode(val);
+	case 2: case 3: {
+		// S-MU2000: 内部の表の 0x000-0x0ff は、RAM でなく 256 点で 1 周の正弦を読む（doc/upstream.md の 24）
+		const s32 ti = s32(m_offset[m_pc/3]) + (d.mem_use_index ? s32(m_ram_index) : 0) + (d.memop == 3 ? 1 : 0);
+		if(d.mem_table && u32(ti) < 0x100) {
+			m_memr_value[m_delay_2] = u32(table_sine()[ti]);
 			m_memr_active[m_delay_2] = true;
+			break;
 		}
-		break;
-	}
-	case 3: {
-		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (d.mem_use_index ? m_ram_index : 0) - m_sample_counter + 1);
+		u32 address = resolve_address(m_pc, m_offset[m_pc/3] + (d.mem_use_index ? m_ram_index : 0) - m_sample_counter + (d.memop == 3 ? 1 : 0));
 		if(address != 0xffffffff) {
 			const u16 val = m_swp->m_reverb_ram[address & 0x3ffff];
 			m_memr_value[m_delay_2] = revram_decode(val);
@@ -3759,6 +3773,7 @@ void swp30_device::meg_state::build_ops(op *ops) const
 		o.t_write   = d.t_write;
 		o.t_from_p  = d.t_from_p;
 		o.memop     = d.memop;
+		o.mem_table = d.mem_table;
 		o.mem_use_index = d.mem_use_index;
 		o.lfo          = pc >> 4;
 		o.offset_index = pc / 3;
@@ -3918,6 +3933,14 @@ void swp30_device::meg_state::run_program(const op *ops)
 		m_t_value[d2] = o.index ? s16((p >> 8) & 0x7fff)
 		                        : s16(std::clamp<s64>(p >> (15+8), -0x8000, 0x7fff));
 
+		if(o.memop >= 2 && o.mem_table) {
+			const s32 ti = s32(m_offset[o.offset_index]) + (o.mem_use_index ? s32(m_ram_index) : 0) + (o.memop == 3 ? 1 : 0);
+			if(u32(ti) < 0x100) {
+				m_memr_value[d2] = u32(table_sine()[ti]);
+				m_memr_active[d2] = true;
+				goto mem_done;
+			}
+		}
 		if(o.memop) {
 			u32 off = u32(m_offset[o.offset_index]) + u32(o.mem_use_index ? m_ram_index : 0) - sample_counter;
 			if(o.memop == 3)
@@ -3930,6 +3953,7 @@ void swp30_device::meg_state::run_program(const op *ops)
 				m_memr_active[d2] = true;
 			}
 		}
+	mem_done:
 
 		d3 = d3 == 2 ? 0 : d3 + 1;
 		d2 ^= 1;

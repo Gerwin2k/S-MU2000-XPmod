@@ -797,6 +797,24 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		}
 
 		// ---- メモリ操作 ----
+		size_t table_done = 0;
+		if (o.memop >= 2 && o.mem_table) {
+			// 内部の表の 0x000-0x0ff は正弦を読む（meg_state::table_sine、doc/upstream.md の 24）
+			a.loadu16(RAX, M(o_offset + 2 * s32(o.offset_index)));
+			if (o.mem_use_index) {
+				a.load32(RCX, M(o_ram_index));
+				a.add32(RAX, RCX);
+			}
+			if (o.memop == 3)
+				a.add32i(RAX, 1);
+			a.cmp32ri(RAX, 0x100);
+			const size_t not_table = a.jcc_fwd(0x83);                // jae
+			a.imm64(R8, u64(uintptr_t(meg_state::table_sine().data())));
+			a.load32(RAX, mem{R8, RAX, 4, 0});
+			a.store32(M(o_memr_val + 4 * slot2(k)), RAX);
+			table_done = a.jmp_fwd();
+			a.patch(not_table);
+		}
 		if (o.memop) {
 			a.loadu16(RAX, M(o_offset + 2 * s32(o.offset_index)));
 			if (o.mem_use_index) {
@@ -822,6 +840,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.store32(M(o_memr_val + 4 * slot2(k)), RAX);
 			}
 		}
+		if (table_done)
+			a.patch(table_done);
 		if (k >= 0x17e)
 			a.store8i(M(o_memr_act + slot2(k)), (o.memop == 2 || o.memop == 3) ? 1 : 0);
 	}
