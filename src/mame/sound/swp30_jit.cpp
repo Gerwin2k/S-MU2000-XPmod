@@ -40,28 +40,32 @@ namespace {
 
 using namespace x64asm;
 
-// meg_state::revram_encode と同じことをする。入力 eax（u32）、出力 eax（u16）。rcx と rdx を壊す
+// meg_state::revram_encode と同じことをする。入力 eax（u32）、出力 eax（u16）。rcx rdx r11 を壊す。
+// 分岐を使わない。符号は音の値しだいで読めないので、分岐にすると予測の外れで遅くなる
 void emit_revram_encode(assembler &a)
 {
 	a.and32i(RAX, 0x7ffffff);
-	a.xor32(RDX, RDX);                                   // s
-	a.test32ri(RAX, 0x4000000);
-	const size_t pos = a.jcc_fwd(0x84);
-	a.xor32ri(RAX, 0x7ffffff);
-	a.imm32(RDX, 1);
-	a.patch(pos);
+	a.mov32(RDX, RAX);
+	a.shl32(RDX, 5);
+	a.sar32(RDX, 31);                                    // bit 26 が立っていれば -1
+	a.mov32(RCX, RDX);
+	a.and32i(RCX, 0x7ffffff);
+	a.xor32(RAX, RCX);
+	a.and32i(RDX, 1);                                    // s
 	// e は bit 11〜25 のうち一番上の 1 の位置 - 10。無ければ e = 0 で m = v（v < 0x800）
 	a.mov32(RCX, RAX);
-	a.shr32(RCX, 11);
-	const size_t small = a.jcc_fwd(0x84);
-	a.bsr32(RCX, RAX);
-	a.sub32ri(RCX, 11);                                  // e - 1
+	a.or32ri(RCX, 0x400);
+	a.bsr32(RCX, RCX);
+	a.sub32ri(RCX, 10);                                  // e
+	a.xor32(R11, R11);
+	a.test32(RCX, RCX);
+	a.setcc(0x95, R11);                                  // e != 0
+	a.sub32(RCX, R11);                                   // e ? e - 1 : 0
+	a.add32(R11, RCX);                                   // e
 	a.shr32cl(RAX);
 	a.and32i(RAX, 0x7ff);
-	a.add32ri(RCX, 1);
-	a.shl32(RCX, 12);
-	a.or32(RAX, RCX);
-	a.patch(small);
+	a.shl32(R11, 12);
+	a.or32(RAX, R11);
 	a.shl32(RDX, 11);
 	a.or32(RAX, RDX);
 }
@@ -94,28 +98,27 @@ void emit_m1_expand(assembler &a)
 	a.patch(done3);
 }
 
-// meg_state::revram_decode と同じことをする。入力 eax（u16）、出力 eax。rcx rdx r8 を壊す
+// meg_state::revram_decode と同じことをする。入力 eax（u16）、出力 eax。rcx rdx r8 を壊す。分岐を使わない
 void emit_revram_decode(assembler &a)
 {
 	a.mov32(R8, RAX);                                    // v
 	a.mov32(RCX, RAX);
 	a.shr32(RCX, 12);                                    // e
 	a.and32i(RAX, 0x7ff);                                // m
+	a.xor32(RDX, RDX);
 	a.test32(RCX, RCX);
-	const size_t e0 = a.jcc_fwd(0x84);
-	a.or32ri(RAX, 0x800);
-	a.sub32ri(RCX, 1);
+	a.setcc(0x95, RDX);                                  // e != 0
+	a.sub32(RCX, RDX);                                   // e ? e - 1 : 0
+	a.shl32(RDX, 11);
+	a.or32(RAX, RDX);                                    // e ? m | 0x800 : m
 	a.shl32cl(RAX);
 	a.imm32(RDX, 0xffffffff);
-	a.shl32cl(RDX);
-	const size_t join = a.jmp_fwd();
-	a.patch(e0);
-	a.imm32(RDX, 0xffffffff);
-	a.patch(join);
-	a.test32ri(R8, 0x800);
-	const size_t no_sign = a.jcc_fwd(0x84);
+	a.shl32cl(RDX);                                      // 反転の範囲
+	a.mov32(RCX, R8);
+	a.shl32(RCX, 20);
+	a.sar32(RCX, 31);                                    // s ? -1 : 0
+	a.and32(RDX, RCX);
 	a.xor32(RAX, RDX);
-	a.patch(no_sign);
 }
 
 #endif
