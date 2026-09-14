@@ -328,6 +328,10 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	const s32 o_ram_write = off(&ms, &ms.m_ram_write);
 	const s32 o_ram_index = off(&ms, &ms.m_ram_index);
 	const s32 o_sample   = off(&ms, &ms.m_sample_counter);
+	const s32 o_lfo      = off(&ms, ms.m_lfo.data());
+	const s32 o_lfo_counter = off(&ms, ms.m_lfo_counter.data());
+	// get_lfo を機械語にするのは、sin 表が 1/4 周期ぶん（0x8000 個）そろっているときだけ
+	const u16 *sintab = swp.m_sintab.count() >= 0x8000 ? swp.m_sintab.target() : nullptr;
 	const s32 o_seed     = off(&swp, &swp.m_rand_seed);
 	const s32 o_flag_n   = off(&swp, &swp.m_meg_flag_n);
 	const s32 o_flag_z   = off(&swp, &swp.m_meg_flag_z);
@@ -637,10 +641,74 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		if (o.dm) {
 			switch (o.dm_src) {
 			case 0: case 1: case 2: case 3:
-				a.mov64(RCX, MS);
-				a.imm32(RDX, o.lfo);
-				a.call_abs(reinterpret_cast<void *>(&meg_jit::call_lfo));
-				load_p_limits();
+				if (sintab && o.lfo < 0x18) {
+					// meg_state::get_lfo を機械語で（関数は呼ばない）。出力 eax。rcx rdx r8 を壊す
+					static constexpr u32 lfo_offsets[16] = {
+						0x00000, 0x02aaa, 0x04000, 0x05555, 0x08000, 0x0aaaa, 0x0c000, 0x0d555,
+						0x10000, 0x12aaa, 0x14000, 0x15555, 0x18000, 0x1aaaa, 0x1c000, 0x1d555,
+					};
+					a.load32(RAX, M(o_lfo_counter + 4 * s32(o.lfo)));
+					a.shr32(RAX, 5);
+					a.loadu16(RDX, M(o_lfo + 2 * s32(o.lfo)));
+					a.mov32(RCX, RDX);
+					a.shr32(RCX, 8);
+					a.and32i(RCX, 3);
+					a.shl32cl(RAX);
+					a.mov32(RCX, RDX);
+					a.shr32(RCX, 12);
+					a.imm64(R8, u64(uintptr_t(lfo_offsets)));
+					a.load32(RCX, mem{R8, RCX, 4, 0});
+					a.add32(RAX, RCX);
+					a.and32i(RAX, 0x1ffff);
+					a.shr32(RDX, 10);
+					a.and32i(RDX, 3);
+					std::vector<size_t> done;
+					a.test32(RDX, RDX);
+					const size_t not_sine = a.jcc_fwd(0x85);
+					{   // sine
+						a.mov32(RCX, RAX);
+						a.and32i(RCX, 0x7fff);
+						a.test32ri(RAX, 0x8000);
+						const size_t no_rev = a.jcc_fwd(0x84);
+						a.xor32ri(RCX, 0x7fff);
+						a.patch(no_rev);
+						a.imm64(R8, u64(uintptr_t(sintab)));
+						a.mov32(RDX, RAX);
+						a.loadu16(RAX, mem{R8, RCX, 2, 0});
+						a.test32ri(RDX, 0x10000);
+						const size_t no_neg = a.jcc_fwd(0x84);
+						a.xor32ri(RAX, 0xffff);
+						a.patch(no_neg);
+						done.push_back(a.jmp_fwd());
+					}
+					a.patch(not_sine);
+					a.cmp32ri(RDX, 1);
+					const size_t not_tri = a.jcc_fwd(0x85);
+					{   // tri
+						a.add32ri(RAX, 0x8000);
+						a.and32i(RAX, 0x1ffff);
+						a.test32ri(RAX, 0x10000);
+						const size_t no_fold = a.jcc_fwd(0x84);
+						a.xor32ri(RAX, 0x1ffff);
+						a.patch(no_fold);
+						done.push_back(a.jmp_fwd());
+					}
+					a.patch(not_tri);
+					a.cmp32ri(RDX, 2);
+					const size_t not_up = a.jcc_fwd(0x85);
+					a.shr32(RAX, 1);                                     // saw up
+					done.push_back(a.jmp_fwd());
+					a.patch(not_up);
+					a.xor32ri(RAX, 0x1ffff);                             // saw down
+					a.shr32(RAX, 1);
+					for (size_t d : done) a.patch(d);
+					a.shl32(RAX, 7);
+				} else {
+					a.mov64(RCX, MS);
+					a.imm32(RDX, o.lfo);
+					a.call_abs(reinterpret_cast<void *>(&meg_jit::call_lfo));
+					load_p_limits();
+				}
 				break;
 			case 4:
 				a.load32(RAX, M(o_ram_read));
