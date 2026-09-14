@@ -165,6 +165,12 @@ public:
 	// setcc al など（cc は 0x94 = sete、0x9d = setge、0x9f = setg、0x93 = setae、0x97 = seta）
 	void setcc(u8 cc, u8 r) { rr(0, false, {0x0f, cc}, 0, r); }
 	void lea32(u8 d, const mem &m) { rm(0, false, {0x8d}, d, m); }
+	void or32(u8 d, u8 s) { rr(0, false, {0x09}, s, d); }
+	void or32ri(u8 d, u32 v)  { rr(0, false, {0x81}, 1, d); d32(v); }
+	void xor32ri(u8 d, u32 v) { rr(0, false, {0x81}, 6, d); d32(v); }
+	void shl32cl(u8 d) { rr(0, false, {0xd3}, 4, d); }
+	void shr32cl(u8 d) { rr(0, false, {0xd3}, 5, d); }
+	void bsr32(u8 d, u8 s) { rr(0, false, {0x0f, 0xbd}, d, s); }   // s が 0 のときは使わないこと
 };
 
 } // namespace x64asm

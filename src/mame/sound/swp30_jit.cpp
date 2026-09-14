@@ -40,6 +40,56 @@ namespace {
 
 using namespace x64asm;
 
+// meg_state::revram_encode と同じことをする。入力 eax（u32）、出力 eax（u16）。rcx と rdx を壊す
+void emit_revram_encode(assembler &a)
+{
+	a.and32i(RAX, 0x7ffffff);
+	a.xor32(RDX, RDX);                                   // s
+	a.test32ri(RAX, 0x4000000);
+	const size_t pos = a.jcc_fwd(0x84);
+	a.xor32ri(RAX, 0x7ffffff);
+	a.imm32(RDX, 1);
+	a.patch(pos);
+	// e は bit 11〜25 のうち一番上の 1 の位置 - 10。無ければ e = 0 で m = v（v < 0x800）
+	a.mov32(RCX, RAX);
+	a.shr32(RCX, 11);
+	const size_t small = a.jcc_fwd(0x84);
+	a.bsr32(RCX, RAX);
+	a.sub32ri(RCX, 11);                                  // e - 1
+	a.shr32cl(RAX);
+	a.and32i(RAX, 0x7ff);
+	a.add32ri(RCX, 1);
+	a.shl32(RCX, 12);
+	a.or32(RAX, RCX);
+	a.patch(small);
+	a.shl32(RDX, 11);
+	a.or32(RAX, RDX);
+}
+
+// meg_state::revram_decode と同じことをする。入力 eax（u16）、出力 eax。rcx rdx r8 を壊す
+void emit_revram_decode(assembler &a)
+{
+	a.mov32(R8, RAX);                                    // v
+	a.mov32(RCX, RAX);
+	a.shr32(RCX, 12);                                    // e
+	a.and32i(RAX, 0x7ff);                                // m
+	a.test32(RCX, RCX);
+	const size_t e0 = a.jcc_fwd(0x84);
+	a.or32ri(RAX, 0x800);
+	a.sub32ri(RCX, 1);
+	a.shl32cl(RAX);
+	a.imm32(RDX, 0xffffffff);
+	a.shl32cl(RDX);
+	const size_t join = a.jmp_fwd();
+	a.patch(e0);
+	a.imm32(RDX, 0xffffffe0);
+	a.patch(join);
+	a.test32ri(R8, 0x800);
+	const size_t no_sign = a.jcc_fwd(0x84);
+	a.xor32(RAX, RDX);
+	a.patch(no_sign);
+}
+
 #endif
 
 } // namespace
@@ -64,8 +114,6 @@ struct swp30_device::meg_jit {
 	static u32 call_lfo(meg_state *ms, u32 lfo) { return ms->get_lfo(int(lfo)); }
 	static s64 call_expand(s64 v) { return ms_expand(s16(v)); }
 	static s64 ms_expand(s16 v) { return meg_state::m1_expand(v); }
-	static u32 call_encode(u32 v) { return meg_state::revram_encode(v); }
-	static u32 call_decode(u32 v) { return meg_state::revram_decode(u16(v)); }
 #endif
 
 	bool build(meg_state &ms, const meg_state::op *ops, swp30_device &swp);
@@ -110,6 +158,42 @@ bool swp30_device::meg_jit_run()
 	m_meg->m_pc = 0;
 	m_meg->m_icount -= 0x180;
 	return true;
+}
+
+// 機械語にしたリバーブ RAM の詰め方・戻し方を、meg_state の関数と全部の入力で突き合わせる。
+// 食い違った入力の数を返す（JIT が無い環境では 0）。make test の verify から呼ぶ
+u64 swp30_device::meg_jit_selftest()
+{
+#if SMU2000_MEG_JIT
+	u64 bad = 0;
+	for (int which = 0; which < 2; which++) {
+		assembler a;
+		a.mov32(RAX, RCX);
+		if (which == 0) emit_revram_encode(a); else emit_revram_decode(a);
+		a.ret();
+		void *buf = VirtualAlloc(nullptr, a.code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+		if (!buf)
+			return ~u64(0);
+		std::memcpy(buf, a.code.data(), a.code.size());
+		const auto fn = reinterpret_cast<u32 (*)(u32)>(buf);
+		if (which == 0) {
+			for (u32 v = 0; v < 0x8000000; v++)        // encode は下の 27bit しか見ない
+				if ((fn(v) & 0xffff) != meg_state::revram_encode(v))
+					bad++;
+			for (u32 v : { 0xffffffffu, 0x80000000u, 0xf8000001u })
+				if ((fn(v) & 0xffff) != meg_state::revram_encode(v))
+					bad++;
+		} else {
+			for (u32 v = 0; v < 0x10000; v++)
+				if (fn(v) != meg_state::revram_decode(u16(v)))
+					bad++;
+		}
+		VirtualFree(buf, 0, MEM_RELEASE);
+	}
+	return bad;
+#else
+	return 0;
+#endif
 }
 
 #if !SMU2000_MEG_JIT
@@ -470,14 +554,15 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 			a.add32i(RAX, o.addr_base);
 			a.and32i(RAX, 0x3ffff);
 			if (o.memop == 1) {
-				a.store64(mem{RSP, NOREG, 1, 40}, RAX);
-				a.load32(RCX, M(o_ram_write));
-				a.call_abs(reinterpret_cast<void *>(&meg_jit::call_encode));
-				a.load64(RCX, mem{RSP, NOREG, 1, 40});
-				a.store16(mem{RAM, RCX, 2, 0}, RAX);
+				// meg_state::revram_encode を機械語で（関数は呼ばない）。番地は r8 に取っておく
+				a.mov64(R8, RAX);
+				a.load32(RAX, M(o_ram_write));
+				emit_revram_encode(a);
+				a.store16(mem{RAM, R8, 2, 0}, RAX);
 			} else {
-				a.loadu16(RCX, mem{RAM, RAX, 2, 0});
-				a.call_abs(reinterpret_cast<void *>(&meg_jit::call_decode));
+				// meg_state::revram_decode を機械語で（関数は呼ばない）
+				a.loadu16(RAX, mem{RAM, RAX, 2, 0});
+				emit_revram_decode(a);
 				a.store32(M(o_memr_val + 4 * slot2(k)), RAX);
 			}
 		}

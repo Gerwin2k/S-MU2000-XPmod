@@ -459,6 +459,9 @@ private:
 	struct meg_jit;
 	static void meg_jit_delete(meg_jit *j);
 	static bool meg_jit_enabled();
+public:
+	static u64 meg_jit_selftest();
+private:
 	void meg_jit_rebuild();
 	bool meg_jit_run();
 	std::unique_ptr<meg_jit, void (*)(meg_jit *)> m_jit{nullptr, &meg_jit_delete};
