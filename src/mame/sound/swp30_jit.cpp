@@ -422,6 +422,9 @@ bool swp30_device::meg_jit::build(meg_state &ms, const meg_state::op *ops, swp30
 			if (o.m1_expand)
 				emit_m1_expand(a);                           // meg_state::m1_expand を機械語で
 			switch (o.mmode) {
+			case 0:
+				a.xor32(RAX, RAX);
+				break;
 			case 1:
 				a.shl64(RAX, 8 + 15);
 				break;

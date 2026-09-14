@@ -3497,7 +3497,8 @@ void swp30_device::meg_state::step()
 	const int t  = d.t;
 
 	const u32 mmode = d.mmode;
-	if(mmode != 0) {
+	// S-MU2000: 掛け算の無い形（mmode 0）でも、シフトと飽和は p にかかる（doc/upstream.md の 21）
+	if(mmode != 0 || d.shift || d.clamp) {
 		const u32 m1t = d.m1t;
 		s64 m1 = m1t == 1 || m1t == 2 ? m_t[t] : m_const[m_pc];
 		if(d.m1_expand)
@@ -3507,6 +3508,9 @@ void swp30_device::meg_state::step()
 
 		s64 m;
 		switch(mmode) {
+		case 0:
+			m = 0;
+			break;
 		case 1:
 			m = m1 << (8+15);
 			break;
@@ -3720,7 +3724,7 @@ void swp30_device::meg_state::build_ops(op *ops) const
 		const decoded &d = m_decoded[pc];
 		op &o = ops[pc];
 		o = op{};
-		o.alu       = d.mmode != 0;
+		o.alu       = d.mmode != 0 || d.shift || d.clamp;   // mmode 0 でもシフトと飽和はかかる（upstream 21）
 		o.mmode     = d.mmode;
 		o.m1_from_t = d.m1t == 1 || d.m1t == 2;
 		o.m1_expand = d.m1_expand;
@@ -3814,6 +3818,7 @@ void swp30_device::meg_state::run_program(const op *ops)
 
 			s64 m;
 			switch(o.mmode) {
+			case 0:  m = 0; break;
 			case 1:  m = m1 << (8+15); break;
 			case 2:  m = m1 * m2; break;
 			default: m = m2 << 15; break;
