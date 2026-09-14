@@ -433,8 +433,8 @@ private:
 	// route / vol が書かれたら作り直す（毎サンプル 16 出力ぶんを解くのをやめた）
 	struct mix_tap {
 		u8  dst;       // mixer_out の番号
-		u8  raw;       // 1 なら減衰なしで足す
-		u16 att;       // mixer_att に渡す値
+		u8  frac;      // mixer_att の減衰の下 4 ビット（減衰なしは 0）
+		u8  shift;     // mixer_att の減衰の上 4 ビット
 	};
 	std::array<std::array<mix_tap, 32>, 0x60> m_mix_taps = {};
 	std::array<u8, 0x60> m_mix_ntaps = {};

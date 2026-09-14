@@ -2869,8 +2869,9 @@ void swp30_device::mixer_rebuild()
 		const std::array<u16, 3> &vol = m_mixer[mix].vol;
 		auto &taps = m_mix_taps[mix];
 		int n = 0;
-		auto raw = [&](int dst) { taps[n++] = mix_tap{ u8(dst), 1, 0 }; };
-		auto att = [&](int dst, u32 a) { taps[n++] = mix_tap{ u8(dst), 0, u16(a) }; };
+		// 減衰なしは減衰 0 と同じ値になる（mixer_att(x, 0) == x）。0xff 以上は 0 を足すだけなので並びに入れない
+		auto raw = [&](int dst) { taps[n++] = mix_tap{ u8(dst), 0, 0 }; };
+		auto att = [&](int dst, u32 a) { if(a < 0xff) taps[n++] = mix_tap{ u8(dst), u8(a & 0xf), u8(a >> 4) }; };
 		for(int out = 0; out != 16; out++) {
 			int mode = ((route >> (out+32-2)) & 4) | ((route >> (out+16-1)) & 2) | ((route >> (out+0-0)) & 1);
 			switch(mode) {
@@ -2946,7 +2947,7 @@ void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 
 		const mix_tap *t = m_mix_taps[mix].data();
 		for(int i = 0; i != n; i++)
-			mixer_out[t[i].dst] += t[i].raw ? input : mixer_att(input, t[i].att);
+			mixer_out[t[i].dst] += (input - ((input * t[i].frac) >> 5)) >> t[i].shift;   // mixer_att と同じ
 	}
 	std::copy(mixer_out.begin() + 0x00, mixer_out.begin() + 0x10, m_melo.begin());
 	std::copy(mixer_out.begin() + 0x10, mixer_out.begin() + 0x20, m_meg->m_m.begin() + 0x20);
