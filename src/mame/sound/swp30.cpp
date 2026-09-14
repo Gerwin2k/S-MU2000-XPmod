@@ -769,7 +769,11 @@ std::pair<s16, bool> swp30_device::streaming_block::step(memory_access<25, 2, -2
 				if(m_pos_dec >= 0x8000)
 					m_pos ++;
 				m_pos_dec &= 0x7fff;
-				m_dpcm_pos = 3;
+				// S-MU2000: MAME は 3 に決め打ちしていた（doc/upstream.md の 12）。
+				// 展開は m_pos+3 まで済んでいて、ループの後ろには先頭の 3 つの差分の写しがある。
+				// 1 回で 2 つ進んでループを跨ぐと、済んでいるのは先頭の 1 つ目までなので、
+				// 3 から始めると 2 つ目の差分を落として積算器がずれる。済んだ所の続きから展開する
+				m_dpcm_pos -= m_loop_size;
 			} else {
 				m_done = true;
 				m_last = result;
