@@ -1861,6 +1861,7 @@ void swp30_device::reset()
 
 
 	std::fill(m_mixer.begin(), m_mixer.end(), mixer_slot());
+	m_mix_dirty = true;
 
 	for(auto &s : m_streaming)
 		s.clear();
@@ -2639,6 +2640,7 @@ template<int Sel> u16 swp30_device::vol_r(offs_t offset)
 template<int Sel> void swp30_device::vol_w(offs_t offset, u16 data)
 {
 	m_mixer[(Sel & 0x40) | (offset >> 6)].vol[Sel & 3] = data;
+	m_mix_dirty = true;
 }
 
 template<int Sel> u16 swp30_device::route_r(offs_t offset)
@@ -2649,6 +2651,7 @@ template<int Sel> u16 swp30_device::route_r(offs_t offset)
 template<int Sel> void swp30_device::route_w(offs_t offset, u16 data)
 {
 	m_mixer[(Sel & 0x40) | (offset >> 6)].route[Sel & 3] = data;
+	m_mix_dirty = true;
 }
 
 u16 swp30_device::lfo_type_step_pitch_r(offs_t offset)
@@ -2823,14 +2826,71 @@ s32 swp30_device::mixer_att(s32 sample, s32 att)
 	return (sample - ((sample * (att & 0xf)) >> 5)) >> (att >> 4);
 }
 
+void swp30_device::mixer_rebuild()
+{
+	m_mix_dirty = false;
+	for(int mix = 0; mix != 0x60; mix++) {
+		u64 route = (u64(m_mixer[mix].route[0]) << 32) | (u64(m_mixer[mix].route[1]) << 16) | m_mixer[mix].route[2];
+		const std::array<u16, 3> &vol = m_mixer[mix].vol;
+		auto &taps = m_mix_taps[mix];
+		int n = 0;
+		auto raw = [&](int dst) { taps[n++] = mix_tap{ u8(dst), 1, 0 }; };
+		auto att = [&](int dst, u32 a) { taps[n++] = mix_tap{ u8(dst), 0, u16(a) }; };
+		for(int out = 0; out != 16; out++) {
+			int mode = ((route >> (out+32-2)) & 4) | ((route >> (out+16-1)) & 2) | ((route >> (out+0-0)) & 1);
+			switch(mode) {
+			case 0: // No routing
+				break;
+
+			case 1: // No attenuation, add to both channels
+				raw(out*2);
+				raw(out*2+1);
+				break;
+
+			case 2: // No attenuation, add to left channel
+				raw(out*2);
+				break;
+
+			case 3: // No attenuation, add to right channel
+				raw(out*2+1);
+				break;
+
+			case 4: // Use attenuation slot 0
+				att(out*2,   (vol[0] >> 8)   + (vol[1] >> 8));
+				att(out*2+1, (vol[0] & 0xff) + (vol[1] >> 8));
+				break;
+
+			case 5: // Use attenuation slot 1
+				att(out*2,   (vol[0] >> 8)   + (vol[1] & 0xff));
+				att(out*2+1, (vol[0] & 0xff) + (vol[1] & 0xff));
+				break;
+
+			case 6: // Use attenuation slot 2
+				att(out*2,   (vol[0] >> 8)   + (vol[2] >> 8));
+				att(out*2+1, (vol[0] & 0xff) + (vol[2] >> 8));
+				break;
+
+			case 7: // Use attenuation slot 3
+				att(out*2,   (vol[0] >> 8)   + (vol[2] & 0xff));
+				att(out*2+1, (vol[0] & 0xff) + (vol[2] & 0xff));
+				break;
+			}
+		}
+		m_mix_ntaps[mix] = u8(n);
+	}
+}
+
 void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 {
+	if(m_mix_dirty)
+		mixer_rebuild();
+
 	std::array<s32, 0x20> mixer_out;
 	std::fill(mixer_out.begin(), mixer_out.end(), 0);
 
 	for(int mix = 0; mix != 0x60; mix++) {
-		u64 route = (u64(m_mixer[mix].route[0]) << 32) | (u64(m_mixer[mix].route[1]) << 16) | m_mixer[mix].route[2];
-		if(route == 0)
+		const int n = m_mix_ntaps[mix];
+		if(n == 0)
 			continue;
 
 		s32 input;
@@ -2844,47 +2904,9 @@ void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 		if(input == 0)
 			continue;
 
-		const std::array<u16, 3> &vol = m_mixer[mix].vol;
-		for(int out = 0; out != 16; out++) {
-			int mode = ((route >> (out+32-2)) & 4) | ((route >> (out+16-1)) & 2) | ((route >> (out+0-0)) & 1);
-			switch(mode) {
-			case 0: // No routing
-				break;
-
-			case 1: // No attenuation, add to both channels
-				mixer_out[out*2  ] += input;
-				mixer_out[out*2+1] += input;
-				break;
-
-			case 2: // No attenuation, add to left channel
-				mixer_out[out*2  ] += input;
-				break;
-
-			case 3: // No attenuation, add to right channel
-				mixer_out[out*2+1] += input;
-				break;
-
-			case 4: // Use attenuation slot 0
-				mixer_out[out*2  ] += mixer_att(input, (vol[0] >> 8)   + (vol[1] >> 8));
-				mixer_out[out*2+1] += mixer_att(input, (vol[0] & 0xff) + (vol[1] >> 8));
-				break;
-
-			case 5: // Use attenuation slot 1
-				mixer_out[out*2  ] += mixer_att(input, (vol[0] >> 8)   + (vol[1] & 0xff));
-				mixer_out[out*2+1] += mixer_att(input, (vol[0] & 0xff) + (vol[1] & 0xff));
-				break;
-
-			case 6: // Use attenuation slot 2
-				mixer_out[out*2  ] += mixer_att(input, (vol[0] >> 8)   + (vol[2] >> 8));
-				mixer_out[out*2+1] += mixer_att(input, (vol[0] & 0xff) + (vol[2] >> 8));
-				break;
-
-			case 7: // Use attenuation slot 3
-				mixer_out[out*2  ] += mixer_att(input, (vol[0] >> 8)   + (vol[2] & 0xff));
-				mixer_out[out*2+1] += mixer_att(input, (vol[0] & 0xff) + (vol[2] & 0xff));
-				break;
-			}
-		}
+		const mix_tap *t = m_mix_taps[mix].data();
+		for(int i = 0; i != n; i++)
+			mixer_out[t[i].dst] += t[i].raw ? input : mixer_att(input, t[i].att);
 	}
 	std::copy(mixer_out.begin() + 0x00, mixer_out.begin() + 0x10, m_melo.begin());
 	std::copy(mixer_out.begin() + 0x10, mixer_out.begin() + 0x20, m_meg->m_m.begin() + 0x20);
@@ -4032,6 +4054,7 @@ void swp30_device::state(state_io &s)
 	s.stdarr(m_envelope);
 	s.stdarr(m_lfo);
 	s.stdarr(m_mixer);
+	m_mix_dirty = true;
 	s.stdarr(m_melo);
 	s.stdarr(m_meli);
 	s.stdarr(m_adc);

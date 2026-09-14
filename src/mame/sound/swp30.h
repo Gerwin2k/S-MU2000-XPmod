@@ -425,6 +425,17 @@ private:
 	std::array<lfo_block,       0x40> m_lfo = {};
 
 	std::array<mixer_slot, 0x80> m_mixer = {};
+	// S-MU2000: ミキサの振り分けを、入力ごとの「足し先と減衰」の並びにしておく。
+	// route / vol が書かれたら作り直す（毎サンプル 16 出力ぶんを解くのをやめた）
+	struct mix_tap {
+		u8  dst;       // mixer_out の番号
+		u8  raw;       // 1 なら減衰なしで足す
+		u16 att;       // mixer_att に渡す値
+	};
+	std::array<std::array<mix_tap, 32>, 0x60> m_mix_taps = {};
+	std::array<u8, 0x60> m_mix_ntaps = {};
+	bool m_mix_dirty = true;
+	void mixer_rebuild();
 
 	std::array<s32,  0x10> m_melo = {};
 	std::array<s32,  0x10> m_meli = {};
