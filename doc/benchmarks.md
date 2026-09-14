@@ -1,0 +1,60 @@
+# Block-time measurements
+
+A place to record how many milliseconds it takes to render one block of
+64 frames (1.45 ms), together with the context of the machine that produced
+it. If the percentage of real time stays below 100%, that configuration keeps
+up in real time (for the margin below, look at the "worst" column). The floor
+for latency is set by that worst value (doc/todo.md item 2). This measures the
+render alone, without an audio device attached, so real latency gains whatever
+the device buffers on top.
+
+## How to measure
+
+For a one-off run, use the script:
+
+```
+scripts/bench_matrix.sh                  # default: roms demo.mid 64 10 3
+scripts/bench_matrix.sh roms my.mid 32 20 5   # different song and conditions
+```
+
+It appends a dated section with machine context to `doc/benchmarks.md`
+(never overwrites). The MIDI file never enters git — it may carry an
+incompatible license. Have the ROMs and the MIDI ready locally.
+
+To check configurations one by one by hand:
+
+```
+# arm64 (the native build; the JITs never compile in here)
+make build/blocktime
+./build/blocktime roms demo.mid 64 10 3
+
+# x86_64 (Rosetta; the JITs compile in. Built into its own directory)
+make BUILD=build-x64 ARCH=x86_64 build-x64/blocktime
+./build-x64/blocktime roms demo.mid 64 10 3
+
+# JIT on/off switches (for the x86_64 build)
+SMU2000_SH2_JIT=0 ./build-x64/blocktime ...   # SH2 interpreted
+SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # MEG interpreted
+SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # all interpreted
+```
+
+`blocktime <rom> <midi> <frames> [seconds] [repeats]`. The output includes the
+spread across repeats plus 95%, 99% and worst-case figures. Level the Mac's
+power and energy-saver settings before measuring.
+
+---
+
+## 2026-09-14 14:14 -- MacBookPro18,2 (Apple M1 Max)
+
+- macOS 27.0, uname arm64, 10 logical cores (8 performance + 2 efficiency), 32 GB RAM
+- Rosetta 2: yes; compiler: `Apple clang version 21.0.0 (clang-2100.3.34.2)`
+- source: `e945ce2-dirty`; block = 64 frames, 10 s x 3 repeats, medians of runs
+- song: `demo.mid` (local only); ROM: `roms`
+
+| config | avg ms/block | worst ms | % of real time (avg) | % of real time (worst) | blocks overrun |
+|---|---|---|---|---|---|
+| arm64 native (interpreter) | 0.576 | 1.16 | 39.7 | 80 | 1 |
+| x86_64 Rosetta - both JITs | 0.306 | 32.16 | 21.1 | 2216 | 23 |
+| x86_64 Rosetta - MEG JIT only | 0.734 | 31.74 | 50.6 | 2187 | 45 |
+| x86_64 Rosetta - SH2 JIT only | 0.527 | 1.90 | 36.3 | 131 | 27 |
+| x86_64 Rosetta - interpreter | 0.947 | 2.16 | 65.2 | 149 | 127 |

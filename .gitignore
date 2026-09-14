@@ -11,3 +11,5 @@ cfg/
 nvram/
 snap/
 __pycache__/
+# MIDI files may come with incompatible licenses; keep them local
+*.mid
