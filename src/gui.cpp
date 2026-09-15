@@ -2,7 +2,7 @@
 //
 // 実機のフロントパネル風の画面で MU2000 を動かす。
 //
-//   gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号]
+//   gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号] [--fast-midi]
 //       [--midiout 番号] [--midiout-b 番号] [--midiout-mu 番号] [--latency ミリ秒]
 //   gui --list                             MIDI の入口と出口の一覧
 //   gui <rom ディレクトリ> --shot 絵.png    窓を出さずに絵だけ書き出す（見た目の確認用）
@@ -1030,6 +1030,7 @@ int main(int argc, char **argv)
 	int win_w = 1000, win_h = 400;   // パネルの論理寸法（1000 × 400）と同じ比
 	bool size_given = false;
 	bool lcd_only = false;
+	bool fast_midi = false;
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
 	bool boot_for_shot = false;
@@ -1075,6 +1076,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--list-window")) open_list = true;
 		else if (!std::strcmp(argv[i], "--fx-window")) open_fx = true;
 		else if (!std::strcmp(argv[i], "--lcd")) lcd_only = true;
+		else if (!std::strcmp(argv[i], "--fast-midi")) fast_midi = true;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -1131,7 +1133,7 @@ int main(int argc, char **argv)
 		std::fprintf(stderr,
 			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号]"
 			" [--midiout 番号] [--midiout-b 番号] [--midiout-mu 番号]"
-			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid] [--lcd]\n"
+			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid] [--lcd] [--fast-midi]\n"
 			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
 			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
 			"        [--list-window] 一覧の窓も開く（窓では F3 か右クリック）\n"
@@ -1143,6 +1145,7 @@ int main(int argc, char **argv)
 	}
 
 	static engine eng(br, midi);
+	eng.mu.set_fast_midi(fast_midi);
 	eng.midi_b = &midi_b;
 	eng.mout_b = &mout_b;
 	eng.mout_mu = &mout_mu;
