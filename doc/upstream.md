@@ -776,3 +776,30 @@ MAME のように P=2 を常に t とすると、r2b は 0 から動かず、包
 
 こちらのコミット: `swp30.cpp` の `meg_state::step` / `run_program`、`swp30_jit.cpp` の同じ所
 
+## 30. 掛け算の無い形（mmode 0）でも、加算器（p = 0 - p）はかかる（直した）
+
+**症状**: XG のエフェクトの SLICE が、8 回刻むうち 4 回だけ 2 倍（+6dB）の大きさで鳴る。DYNA FLANG が実機より 5.6dB 大きい。
+
+upstream 21 で、mmode 0 の命令にもシフトと飽和がかかることは入れた。けれども加算器（引き算）は飛ばしたままだった。
+mmode 0 で引き算（rop 1、a = p）の命令は、116 種類の中で SLICE・DYNA FLANG・DYNA FLT・DYNA RING の 4 か所だけで、
+どれも `p = 0 - p`（符号の反転）として使っている。SLICE の例:
+
+```
+0de  p = m07                 m07 は刻みの形（0 か 1）
+0df  p = 0 - p               ← mmode 0、rop 1
+0e0  p =s (1.0 << 8) + p ; m08 = p       m08 = 1 - m07
+```
+
+加算器を飛ばすと `m08 = 1 + m07` になり、m07 が 1 の間だけゲインが 2 倍になっていた。
+mmode 0 でも、加算器・シフト・飽和はそのまま計算する（m は 0）。
+
+実機（XG モード）との比べ（SineLead A3、強い音）:
+
+| | 直す前 | 直した後 |
+|---|---|---|
+| SLICE | +4.8dB（帯の食い違い 4.2） | 0.0dB（0.6） |
+| DYNA FLANG | +5.6dB | 0.0dB（ただし出だしの 0.1 秒の山と、弱い音はまだ合わない） |
+| DYNA PHASE | +5.8dB | +5.8dB（変わらない） |
+
+こちらのコミット: `swp30.cpp` の `meg_state::step` / `decode_program`（run_program と JIT は op の alu で同じになる）
+

@@ -3547,8 +3547,8 @@ void swp30_device::meg_state::step()
 	const int t  = d.t;
 
 	const u32 mmode = d.mmode;
-	// S-MU2000: 掛け算の無い形（mmode 0）でも、シフトと飽和は p にかかる（doc/upstream.md の 21）
-	if(mmode != 0 || d.shift || d.clamp) {
+	// S-MU2000: 掛け算の無い形（mmode 0）でも、加算器・シフト・飽和は p にかかる（doc/upstream.md の 21 と 30）
+	if(mmode != 0 || d.shift || d.clamp || d.rop) {
 		const u32 m1t = d.m1t;
 		// S-MU2000: 第 1 入力の選び方 2 は、直前に印を立てた結果が負なら t、そうでなければ定数（doc/upstream.md の 29）
 		s64 m1 = m1t == 1 ? m_t[t] : m1t == 2 ? (m_swp->m_meg_flag_n ? m_t[t] : m_const[m_pc]) : m_const[m_pc];
@@ -3774,7 +3774,7 @@ void swp30_device::meg_state::build_ops(op *ops) const
 		const decoded &d = m_decoded[pc];
 		op &o = ops[pc];
 		o = op{};
-		o.alu       = d.mmode != 0 || d.shift || d.clamp;   // mmode 0 でもシフトと飽和はかかる（upstream 21）
+		o.alu       = d.mmode != 0 || d.shift || d.clamp || d.rop;   // mmode 0 でも加算器・シフト・飽和はかかる（upstream 21・30）
 		o.mmode     = d.mmode;
 		o.m1_from_t = d.m1t == 1 ? 1 : d.m1t == 2 ? 2 : 0;   // 2 は印で t と定数を選ぶ
 		o.m1_expand = d.m1_expand;
