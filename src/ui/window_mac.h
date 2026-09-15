@@ -70,6 +70,10 @@ public:
 
 	virtual void focus_lost() = 0;
 
+	// A file was dropped onto the window (a MIDI file, in practice). Not pure:
+	// a front end that has nothing to do with a drop does not have to say so
+	virtual void file_dropped(const std::string &path) { (void)path; }
+
 	// Draw a pointing hand here, i.e. this spot opens something
 	virtual bool hand_cursor(int x, int y) = 0;
 

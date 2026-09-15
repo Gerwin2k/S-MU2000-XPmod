@@ -50,6 +50,10 @@ static const unsigned short kKeyCodeF5 = 0x60;
 	if (self) {
 		_app = app;
 		_scroll_accum = 0.0;
+		// This is the initializer the window actually uses, so the drag types
+		// have to be registered here: a file dragged in from the Finder only
+		// reaches performDragOperation() if the view agreed to take it
+		[self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
 	}
 	return self;
 }
@@ -60,8 +64,45 @@ static const unsigned short kKeyCodeF5 = 0x60;
 }
 
 - (BOOL)isFlipped { return YES; }
+
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
+
+// ---- dropping a file on the window
+//
+// The Windows side gets a MIDI file dropped on it through WM_DROPFILES; this is
+// the same thing, asked for by registering the file URL type. What to do with
+// the path is the app's business (ui::mac_app::file_dropped)
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender
+{
+	if (!_app)
+		return NSDragOperationNone;
+	NSPasteboard *pb = [sender draggingPasteboard];
+	return [[pb types] containsObject:NSPasteboardTypeFileURL] ? NSDragOperationCopy
+	                                                          : NSDragOperationNone;
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender
+{
+	(void)sender;
+	return _app != nil;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+{
+	NSPasteboard *pb = [sender draggingPasteboard];
+	NSArray<NSURL *> *urls = [pb readObjectsForClasses:@[ [NSURL class] ]
+	                                          options:@{ NSPasteboardURLReadingFileURLsOnlyKey : @YES }];
+	NSURL *url = [urls firstObject];
+	if (!url || !_app)
+		return NO;
+	const char *path = [[url path] UTF8String];
+	if (!path)
+		return NO;
+	_app->file_dropped(std::string(path));
+	return YES;
+}
 
 - (void)updateTrackingAreas
 {

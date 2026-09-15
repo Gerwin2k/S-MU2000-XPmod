@@ -278,6 +278,7 @@ public:
 		// so it must not run on the audio thread (same as gui.cpp's WM_TIMER)
 		panel.tick(br);
 		card_tick();
+		report_drops();
 
 		ui::snapshot s;
 		br.read(s);
@@ -402,6 +403,13 @@ public:
 			if (play.playing())
 				stop += "（" + play.name() + "）";
 			g.items.push_back(item(stop.c_str(), ID_STOP_FILE, false, play.playing()));
+			// What to do with a file that uses ports 3 and 4
+			ui::menu_item psep;
+			psep.separator = true;
+			g.items.push_back(psep);
+			const bool fold = play.fold_extra_ports();
+			g.items.push_back(item("口 3・4 を A・B に重ねて鳴らす", ID_PORTS34_FOLD, fold, true));
+			g.items.push_back(item("口 3・4 は鳴らさない", ID_PORTS34_DROP, !fold, true));
 			groups.push_back(g);
 			return groups;
 		}
@@ -455,6 +463,8 @@ public:
 		else if (id == ID_CARD_OPEN)                                  open_card();
 		else if (id == ID_CARD_EJECT)                                 eject_card();
 		else if (id >= ID_CARD_NEW16 && id <= ID_CARD_NEW128)         new_card(16u << (id - ID_CARD_NEW16));
+		else if (id == ID_PORTS34_FOLD)                               set_fold34(true);
+		else if (id == ID_PORTS34_DROP)                               set_fold34(false);
 		else if (id == ID_FACTORY)                                    factory_reset();
 		else if (id == ID_PLAY_FILE) {
 			const std::string path = ui::open_midi_file_panel();
@@ -507,7 +517,45 @@ public:
 			return;
 		}
 		std::printf("再生: %s（%.1f 秒）\n", path.c_str(), play.length());
+		// The machine has two ports, so a file that uses four is either folded
+		// onto them or has its extra parts dropped. Say which, as gui.cpp does
+		if (play.ports_used() > 2)
+			std::printf("  この曲は %d 口ぶん。C・D は未対応なので、口 3 以降は%s\n",
+			            play.ports_used(),
+			            play.fold_extra_ports() ? " A・B に重ねて鳴らす" : "鳴らさない");
 		std::fflush(stdout);
+	}
+
+	// A file dropped on the window is played, which is what gui.cpp's
+	// WM_DROPFILES handler does with one. The window only hands the path over:
+	// what a drop means is the app's business
+	void file_dropped(const std::string &path) override
+	{
+		play_song(path);
+	}
+
+	// A MIDI loop (THRU fed back into an IN) overflows the guards. gui.cpp says
+	// so once a second rather than once a block; the same here, from the window's
+	// timer rather than from the paint
+	void report_drops()
+	{
+		if (!eng)
+			return;
+		const u64 now = smu2000::perf_ticks() * 1000 / smu2000::perf_freq();
+		if (now - last_drop_report < 1000)
+			return;
+		last_drop_report = now;
+		const u64 drops = eng->guard_a.dropped() + eng->guard_b.dropped() +
+		                  eng->mu.midi_dropped();
+		if (drops == reported_drops)
+			return;
+		reported_drops = drops;
+		std::fprintf(stderr,
+		             "MIDI が多すぎるので捨てた: THRU A %llu / THRU B %llu / 受信 %llu バイト"
+		             "（MIDI の輪ができていないか確かめる）\n",
+		             (unsigned long long)eng->guard_a.dropped(),
+		             (unsigned long long)eng->guard_b.dropped(),
+		             (unsigned long long)eng->mu.midi_dropped());
 	}
 
 	// Open what the menu picked. On failure it falls back to "unused".
@@ -761,6 +809,13 @@ public:
 
 	std::thread reboot;                // the factory-reset boot, while it runs
 
+	// Folding ports 3 and 4 of a MIDI file onto A and B, and remembering it
+	void set_fold34(bool on)
+	{
+		play.set_fold_extra_ports(on);
+		remember();
+	}
+
 	// Remembered by name rather than number (see the note on settings_path).
 	// A port that would not open keeps the name it was asked for, so a virtual
 	// port that is not up yet is not forgotten by the next start
@@ -882,6 +937,7 @@ int main(int argc, char **argv)
 	int win_w = 1400, win_h = 360;
 	bool grid = false;
 	bool boot_for_shot = false;
+	bool nomidi = false;               // --nomidi: open and remember no MIDI port
 	std::string shot_mid;
 	double shot_secs = 0.0;
 
@@ -917,7 +973,13 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--midiout") && i + 1 < argc) mout_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout-b") && i + 1 < argc) moutb_dev = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--midiout-mu") && i + 1 < argc) moutmu_dev = std::atoi(argv[++i]);
-		else if (!std::strcmp(argv[i], "--nomidi")) { midi_dev = -1; midib_dev = -1; }
+		else if (!std::strcmp(argv[i], "--nomidi")) {
+			// Nothing is opened and nothing is remembered: this is for tests,
+			// which must leave the real settings file the way they found it.
+			// The app itself is made further down, so the flag is carried there
+			midi_dev = midib_dev = mout_dev = moutb_dev = moutmu_dev = -1;
+			nomidi = true;
+		}
 		else if (!std::strcmp(argv[i], "--latency") && i + 1 < argc) latency = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--exclusive")) exclusive = true;
 		else if (!std::strcmp(argv[i], "--audio") && i + 1 < argc) audio_dev = argv[++i];
@@ -1032,6 +1094,7 @@ int main(int argc, char **argv)
 	// ---- Put the window up
 
 	static app gui(br, midi, midi_b, mout, mout_b, mout_mu);
+	gui.keep_settings = nomidi;
 	gui.eng = &eng;
 	gui.state = &eng.state;
 	gui.panel.resize(win_w, win_h);
@@ -1057,6 +1120,7 @@ int main(int argc, char **argv)
 	{
 		const port_names want = load_settings();
 		br.set_gain(want.volume);
+		gui.set_fold34(want.fold34);
 		// --audio wins; otherwise the port that was opened last time
 		gui.audio_name = audio_dev ? std::string(audio_dev) : want.audio;
 		// A/D INPUT is remembered by name too. It is opened in the boot thread,
@@ -1163,6 +1227,16 @@ int main(int argc, char **argv)
 
 	out.stop();
 	ain.stop();
+	// Leaving the THRU ports open with notes still held would leave them stuck
+	// on whatever is listening, so all sound off and all notes off go out first
+	for (ui::midi_out *thru : { &mout, &mout_b }) {
+		if (!thru->is_open())
+			continue;
+		for (int ch = 0; ch < 16; ch++) {
+			for (u8 v : { u8(0xb0 | ch), u8(120), u8(0), u8(0xb0 | ch), u8(123), u8(0) })
+				thru->send(v);
+		}
+	}
 	if (boot_thread.joinable())
 		boot_thread.join();
 	gui.join_reboot();
