@@ -4,6 +4,7 @@
 
 #include "mu2000.h"
 #include "nvram.h"
+#include "smartmedia.h"
 
 #include "compat/paths.h"
 #include "compat/platform.h"
@@ -193,6 +194,14 @@ engine::~engine()
 	m_abort.store(true, std::memory_order_relaxed);
 	if (m_thread.joinable())
 		m_thread.join();
+	// 音声スレッドはもう回っていない。SmartMedia に書いたものをその場で残す
+	if (m_mu && !card_path().empty()) {
+		std::vector<smartmedia::block> blocks;
+		m_mu->card().take_dirty_blocks(blocks);
+		std::string err;
+		if (!smartmedia::write_blocks(card_path(), blocks, err))
+			log_line(err.c_str());
+	}
 	delete m_mu;
 }
 
@@ -313,10 +322,9 @@ void engine::boot()
 	m_mu = mu;
 	m_message = warn.empty() ? std::string("ROM: ") + dir
 	                         : std::string("ROM: ") + dir + "\n警告: " + warn;
-	// If a restore was asked for before the machine came up, apply it here.
-	// **Before publishing ready**: publishing first would let a host read back
-	// the old machine rather than the one it just restored
-	apply_parked();
+	// A restore that arrived before the machine came up is kept in
+	// m_deferred_state and applied by the first fill() (apply_deferred_state),
+	// which is also where the m_machine lock is already held
 	m_state.store(status::ready, std::memory_order_release);
 	ui::driver::publish_now(*m_mu, m_bridge, true, nullptr);
 }
@@ -341,6 +349,8 @@ void engine::build_table()
 
 void engine::set_output_rate(double rate)
 {
+	// 変換器の入れ物を作り直すので、音声スレッドと重ならないようにする
+	std::lock_guard<std::mutex> lock(m_machine);
 	if (rate <= 0.0)
 		rate = NATIVE_RATE;
 	m_direct = std::fabs(rate - NATIVE_RATE) < 1e-6;
@@ -350,6 +360,8 @@ void engine::set_output_rate(double rate)
 	m_cutoff = std::min(1.0, rate / NATIVE_RATE) * 0.955;
 	// 音源側は「必要な先の音」をその場で作れるので、変換に先読みの遅れは無い
 	m_latency = 0;
+	m_in_rs.configure(rate, NATIVE_RATE);
+	m_in_w = m_in_r = 0;
 	flush_resampler();
 }
 
@@ -364,6 +376,13 @@ void engine::flush_resampler()
 void engine::one_sample(float &l, float &r)
 {
 	s32 li = 0, ri = 0;
+	// A/D INPUT。溜めが空なら無音（入力の変換器の先読みの分だけ、頭が少し欠ける）
+	if (m_in_r != m_in_w) {
+		m_mu->set_audio_input(m_in_q[m_in_r * 2], m_in_q[m_in_r * 2 + 1]);
+		m_in_r = (m_in_r + 1) & IN_MASK;
+	} else {
+		m_mu->set_audio_input(0, 0);
+	}
 	m_mu->run_sample(li, ri);
 	const float k = 1.0f / float(mu2000::DAC_FULL_SCALE);
 	l = std::clamp(float(li) * k, -1.0f, 1.0f);
@@ -375,16 +394,25 @@ void engine::midi(const uint8_t *bytes, size_t n, int port)
 {
 	port = port == 1 ? 1 : 0;
 	const status s = state();
-	if (s == status::ready) {
-		for (size_t i = 0; i < n; i++) {
-			m_mu->midi_in(bytes[i], port);
-			m_drv.watch(bytes[i], port);
-		}
-		return;
-	}
 	if (s == status::failed)
 		return;
-	// 起動待ち。あふれるようなら捨てる
+	if (s == status::ready) {
+		std::unique_lock<std::mutex> lock(m_machine, std::try_to_lock);
+		if (lock.owns_lock()) {
+			// 溜まっていた分を先に流して、順番を保つ
+			for (uint8_t b : m_pending[port]) {
+				m_mu->midi_in(b, port);
+				m_drv.watch(b, port);
+			}
+			m_pending[port].clear();
+			for (size_t i = 0; i < n; i++) {
+				m_mu->midi_in(bytes[i], port);
+				m_drv.watch(bytes[i], port);
+			}
+			return;
+		}
+	}
+	// 起動待ちか、機械を他が使っている。あふれるようなら捨てる
 	std::vector<uint8_t> &pending = m_pending[port];
 	if (pending.size() + n > 65536)
 		return;
@@ -402,18 +430,53 @@ void engine::all_notes_off()
 }
 
 
-void engine::fill(float *left, float *right, int n)
+// ホストの周波数の入力を 44100 に直して溜める。溢れる分は捨てる
+void engine::push_input(const float *in_l, const float *in_r, int n)
+{
+	if (!in_l || n <= 0)
+		return;
+	if (!in_r)
+		in_r = in_l;
+	for (int at = 0; at < n;) {
+		const int k = std::min(1024, n - at);
+		m_in_stage.resize(size_t(k) * 2);
+		for (int i = 0; i < k; i++) {
+			m_in_stage[size_t(i) * 2]     = s16(std::lround(std::clamp(in_l[at + i], -1.0f, 1.0f) * 32767.0f));
+			m_in_stage[size_t(i) * 2 + 1] = s16(std::lround(std::clamp(in_r[at + i], -1.0f, 1.0f) * 32767.0f));
+		}
+		m_in_rs.push(m_in_stage.data(), k);
+		at += k;
+		const int out = m_in_rs.output_available();
+		if (out <= 0)
+			continue;
+		m_in_conv.resize(size_t(out) * 2);
+		m_in_rs.pull(m_in_conv.data(), out);
+		for (int i = 0; i < out; i++) {
+			const int next = (m_in_w + 1) & IN_MASK;
+			if (next == m_in_r)
+				break;
+			m_in_q[m_in_w * 2]     = s16(std::lround(std::clamp(m_in_conv[size_t(i) * 2], -1.0f, 1.0f) * 32767.0f));
+			m_in_q[m_in_w * 2 + 1] = s16(std::lround(std::clamp(m_in_conv[size_t(i) * 2 + 1], -1.0f, 1.0f) * 32767.0f));
+			m_in_w = next;
+		}
+	}
+}
+
+void engine::fill(float *left, float *right, int n, const float *in_l, const float *in_r)
 {
 	if (n <= 0)
 		return;
-	if (state() != status::ready) {
+	// 音声スレッドは待たない。保存などで機械が使われていれば、この区間は無音
+	std::unique_lock<std::mutex> lock(m_machine, std::try_to_lock);
+	if (!lock.owns_lock() || state() != status::ready) {
 		std::memset(left,  0, size_t(n) * sizeof(float));
 		std::memset(right, 0, size_t(n) * sizeof(float));
+		if (lock.owns_lock())
+			push_input(in_l, in_r, n);
 		return;
 	}
-	// 頼まれている保存と復元を、ここ（音声スレッド）で片づける
-	m_fill_tick.fetch_add(1, std::memory_order_release);
-	serve_state();
+	push_input(in_l, in_r, n);
+	apply_deferred_state();
 
 	m_drv.apply_buttons(*m_mu, m_bridge);
 	m_drv.pump_midi(*m_mu, m_bridge);
@@ -482,115 +545,108 @@ void engine::fill(float *left, float *right, int n)
 
 // ---- 状態の保存と復元
 //
-// 機械に触れてよいのは、音を作っているあいだは音声スレッドだけ。
-// だから頼み事を置いておいて、fill() の頭で片づける。止まっているときは
-// 誰も触っていないので、その場でやってしまう。
+// どれも m_machine を取ってその場でやる。音声スレッドは取れない区間を無音にして待たない
 
-// Applies a restore that was parked before boot finished. Only boot() calls it,
-// once, with the machine fully up.
-//
-// fill() returns without touching the machine until it is ready, so nothing else
-// can be holding the machine while this runs
-void engine::apply_parked()
+void engine::apply_deferred_state()
 {
-	std::vector<uint8_t> parked;
-	{
-		std::lock_guard<std::mutex> lock(m_park_mutex);
-		parked.swap(m_parked);
-	}
-	if (parked.empty() || !m_mu)
+	if (m_deferred_state.empty() || state() != status::ready || !m_mu)
 		return;
 	std::string err;
-	if (!m_mu->load_state(parked.data(), parked.size(), err))
+	if (!m_mu->load_state(m_deferred_state.data(), m_deferred_state.size(), err))
 		log_line(("状態を読み戻せない: " + err).c_str());
-}
-
-void engine::serve_state()
-{
-	if (m_load_req.load(std::memory_order_acquire) == 1) {
-		std::string err;
-		if (m_mu)
-			m_mu->load_state(m_load_buf.data(), m_load_buf.size(), err);
-		m_load_req.store(0, std::memory_order_release);
-	}
-	if (m_save_req.load(std::memory_order_acquire) == 1) {
-		m_save_buf = m_mu ? m_mu->save_state() : std::vector<u8>();
-		m_save_req.store(2, std::memory_order_release);
-	}
+	m_deferred_state.clear();
+	m_deferred_state.shrink_to_fit();
 }
 
 std::vector<uint8_t> engine::save_state()
 {
-	if (state() != status::ready || !m_mu)
-		return {};
-	if (!m_processing.load(std::memory_order_acquire)) {
-		// 誰も触っていない。その場で
-		return m_mu->save_state();
+	std::lock_guard<std::mutex> lock(m_machine);
+	if (state() != status::ready || !m_mu) {
+		// 起動が終わる前に保存されたら、戻す予定だった状態をそのまま返す
+		return m_deferred_state;
 	}
-	// 「動いている」と言われていても、実際に fill() が回っていないことがある
-	// （止めたばかり、ホストが呼んでいない）。回っていなければその場でやる
-	const uint64_t t0 = m_fill_tick.load(std::memory_order_acquire);
-	m_save_req.store(1, std::memory_order_release);
-	for (int i = 0; i < 200; i++) {          // 2 秒まで待つ
-		if (m_save_req.load(std::memory_order_acquire) == 2)
-			break;
-		smu2000::sleep_ms(10);
-	}
-	if (m_save_req.load(std::memory_order_acquire) != 2) {
-		m_save_req.store(0, std::memory_order_release);
-		if (m_fill_tick.load(std::memory_order_acquire) == t0)
-			return m_mu->save_state();   // 誰も回していない
-		log_line("状態を保存できなかった（音声スレッドが応じない）");
-		return {};
-	}
-	std::vector<uint8_t> out;
-	out.swap(m_save_buf);
-    m_save_req.store(0, std::memory_order_release);
-	return out;
+	apply_deferred_state();
+	return m_mu->save_state();
 }
 
 bool engine::load_state(const uint8_t *p, size_t n)
 {
 	if (!p || !n)
 		return false;
-
-	// Still booting. Touching the machine now would spoil a boot in progress, so
-	// the buffer is **parked rather than dropped**.
-	//
-	// A host hands the state back before the machine has come up -- a DAW opening
-	// a project does exactly that. Returning false here discards it in silence and
-	// the unit comes up at its defaults instead of the saved voice. From the
-	// caller's side it was accepted, so this reports true, and boot() applies it
-	// at the end of boot
-	if (state() == status::loading) {
-		std::lock_guard<std::mutex> lock(m_park_mutex);
-		m_parked.assign(p, p + n);
+	std::lock_guard<std::mutex> lock(m_machine);
+	if (state() == status::failed)
+		return false;
+	if (state() != status::ready || !m_mu) {
+		m_deferred_state.assign(p, p + n);
 		return true;
 	}
+	m_deferred_state.clear();
+	std::string err;
+	const bool ok = m_mu->load_state(p, n, err);
+	if (!ok)
+		log_line(("状態を読み戻せない: " + err).c_str());
+	return ok;
+}
+
+
+// ---- 機械に触る仕事（SmartMedia の差し替えなど）
+
+bool engine::on_machine(const std::function<void(mu2000 &)> &fn)
+{
+	std::lock_guard<std::mutex> lock(m_machine);
 	if (state() != status::ready || !m_mu)
 		return false;
-	if (!m_processing.load(std::memory_order_acquire)) {
-		std::string err;
-		const bool ok = m_mu->load_state(p, n, err);
-		if (!ok)
-			log_line(("状態を読み戻せない: " + err).c_str());
-		return ok;
+	fn(*m_mu);
+	return true;
+}
+
+std::string engine::card_path() const
+{
+	std::lock_guard<std::mutex> lock(m_card_mutex);
+	return m_card_path;
+}
+
+void engine::card_flush()
+{
+	const std::string path = card_path();
+	if (path.empty() || !m_mu)
+		return;
+	std::vector<smartmedia::block> blocks;
+	const std::function<void(mu2000 &)> take = [&](mu2000 &m) { m.card().take_dirty_blocks(blocks); };
+	if (state() == status::ready)
+		on_machine(take);
+	else
+		take(*m_mu);
+	std::string err;
+	if (!smartmedia::write_blocks(path, blocks, err))
+		log_line(err.c_str());
+}
+
+void engine::card_eject()
+{
+	card_flush();
+	on_machine([](mu2000 &m) { m.card().eject(); });
+	std::lock_guard<std::mutex> lock(m_card_mutex);
+	m_card_path.clear();
+}
+
+bool engine::card_insert(const std::string &path, std::string &err)
+{
+	auto card = std::make_shared<smartmedia>();
+	if (!card->load(path, err))
+		return false;
+	if (state() != status::ready) {
+		err = "まだ起動していない";
+		return false;
 	}
-	const uint64_t t0 = m_fill_tick.load(std::memory_order_acquire);
-	m_load_buf.assign(p, p + n);
-	m_load_req.store(1, std::memory_order_release);
-	for (int i = 0; i < 200; i++) {
-		if (m_load_req.load(std::memory_order_acquire) == 0)
-			return true;
-		smu2000::sleep_ms(10);
+	card_flush();
+	if (!on_machine([card](mu2000 &m) { m.card() = std::move(*card); })) {
+		err = "カードを差せなかった（音声スレッドが応じない）";
+		return false;
 	}
-	m_load_req.store(0, std::memory_order_release);
-	if (m_fill_tick.load(std::memory_order_acquire) == t0) {
-		std::string err;
-		return m_mu->load_state(p, n, err);   // 誰も回していない
-	}
-	log_line("状態を読み戻せなかった（音声スレッドが応じない）");
-	return false;
+	std::lock_guard<std::mutex> lock(m_card_mutex);
+	m_card_path = path;
+	return true;
 }
 
 } // namespace vst3

@@ -49,10 +49,10 @@ CXXFLAGS += -Wno-inconsistent-missing-override
 #
 # Build for one architecture or both. Default: this machine's own.
 #   make ARCH=arm64   / make ARCH=x86_64   / make UNIVERSAL=1
-# The JITs emit x86-64 machine code, so they run in the x86_64 slice only
-# (also under Rosetta); the arm64 slice always interprets. Object files of
-# different flavors collide, so give each its own build directory:
-#   make BUILD=build-x64 ARCH=x86_64
+# The x86-64 JIT backend emits x86-64 machine code and the arm64 one emits
+# arm64, so each slice wants the objects built for it. The two do not mix, and
+# a directory holding both fails to link (or links the wrong half), so each
+# flavour gets a build directory of its own -- see BUILD below
 ifdef UNIVERSAL
 CXXFLAGS += -arch arm64 -arch x86_64
 else ifdef ARCH
@@ -69,10 +69,23 @@ CXXFLAGS += -I src -I src/compat
 # ヘッダを直したときに .o を作り直させる
 CXXFLAGS += -MMD -MP
 
-BUILD := build
+# Object files are per architecture, so a cross build gets its own directory
+# (build-universal, build-x86_64) and never reuses the native build/ -- an
+# `ARCH=x86_64 make` after a native one used to fail in the link step, with a
+# message about which architecture the .o files were. Passing BUILD=... still
+# overrides, and a plain `make` still uses build/
+ifeq ($(origin BUILD),undefined)
+ifdef UNIVERSAL
+BUILD := build-universal
+else ifdef ARCH
+BUILD := build-$(ARCH)
+endif
+endif
+BUILD ?= build
 
 SRCS := \
 	src/compat/compat.cpp \
+	src/smartmedia.cpp \
 	src/mame/sound/swp30.cpp \
 	src/mame/sound/swp30_jit.cpp \
 	src/mame/video/hd44780.cpp \
@@ -139,6 +152,11 @@ $(BUILD)/render$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
+# samptest はサンプリング（録音して試聴する）が一回りするかを確かめる
+$(BUILD)/samptest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/samptest.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
 # statetest は状態の保存と復元が正しいかを確かめる
 $(BUILD)/statetest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(BUILD)/src/statetest.o
 	@mkdir -p $(dir $@)
@@ -157,7 +175,7 @@ ifeq ($(PLATFORM),windows)
 
 # gui は実機のフロントパネル風の画面を出す
 UI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp src/ui/png.cpp \
-           src/ui/audio_out.cpp src/ui/midi_in.cpp src/ui/midi_out.cpp \
+           src/ui/audio_out.cpp src/ui/audio_in.cpp src/ui/midi_in.cpp src/ui/midi_out.cpp \
            src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp src/xg/model.cpp
 UI_OBJS := $(UI_SRCS:%.cpp=$(BUILD)/%.o)
 
@@ -226,7 +244,7 @@ vst3: $(VST3_BIN)
 
 $(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt
+	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32
 	@mkdir -p $(VST3_DIR)/Contents/Resources
 	@cp -f doc/vst3-readme.txt $(VST3_DIR)/Contents/Resources/README.txt 2>/dev/null || true
 	# 取り込んだものの著作権表示。BSD-3 はバイナリで配るときも添えろと言っている
@@ -469,7 +487,8 @@ check: $(BUILD)/verify$(EXE)
 #
 # The test names are the same on both platforms: run_tests.py is the one that
 # knows whether the binaries carry an .exe suffix (tools/run_tests.py)
-TEST_EXES := $(BUILD)/verify$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/render$(EXE) $(BUILD)/xgtest$(EXE)
+TEST_EXES := $(BUILD)/verify$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/render$(EXE) $(BUILD)/xgtest$(EXE) \
+             $(BUILD)/samptest$(EXE)
 
 test: $(TEST_EXES)
 	$(PYTHON) tools/run_tests.py $(if $(T),--only $(T),)

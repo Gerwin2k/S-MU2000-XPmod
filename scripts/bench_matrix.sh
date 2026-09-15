@@ -46,7 +46,7 @@ echo ">> make blocktime (arm64)" >&2
 make -j8 build/blocktime >&2
 
 echo ">> make blocktime (x86_64, Rosetta)" >&2
-make BUILD=build-x64 ARCH=x86_64 -j8 build-x64/blocktime >&2
+make ARCH=x86_64 -j8 build-x86_64/blocktime >&2
 
 # ---- run one config and pick the summary lines -------------------------------
 # Blocktime prints, among others:
@@ -73,10 +73,10 @@ rows+="$(run_in ./build/blocktime          "arm64 native - both JITs")"$'\n'
 rows+="$(run_in ./build/blocktime          "arm64 native - MEG JIT only" SMU2000_SH2_JIT=0)"$'\n'
 rows+="$(run_in ./build/blocktime          "arm64 native - SH2 JIT only" SMU2000_MEG_JIT=0)"$'\n'
 rows+="$(run_in ./build/blocktime          "arm64 native - interpreter" SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0)"$'\n'
-rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - both JITs")"$'\n'
-rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - MEG JIT only" SMU2000_SH2_JIT=0)"$'\n'
-rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - SH2 JIT only" SMU2000_MEG_JIT=0)"$'\n'
-rows+="$(run_in ./build-x64/blocktime      "x86_64 Rosetta - interpreter" SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0)"
+rows+="$(run_in ./build-x86_64/blocktime   "x86_64 Rosetta - both JITs")"$'\n'
+rows+="$(run_in ./build-x86_64/blocktime   "x86_64 Rosetta - MEG JIT only" SMU2000_SH2_JIT=0)"$'\n'
+rows+="$(run_in ./build-x86_64/blocktime   "x86_64 Rosetta - SH2 JIT only" SMU2000_MEG_JIT=0)"$'\n'
+rows+="$(run_in ./build-x86_64/blocktime   "x86_64 Rosetta - interpreter" SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0)"
 
 # ---- append to the doc ---------------------------------------------------------
 {

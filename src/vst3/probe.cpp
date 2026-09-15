@@ -3,7 +3,9 @@
 // VST3 プラグインを DAW 無しで動かしてみる小さなホスト。
 //
 //   vst3probe <S-MU2000.vst3 の DLL>                         名乗りだけ見る
-//   vst3probe <DLL> <MIDI ファイル> <出力 wav> [--rate 48000] [--block 512]
+//   vst3probe <DLL> <MIDI ファイル> <出力 wav> [--rate 48000] [--block 512] [--adc-sine]
+//
+// --adc-sine は A/D INPUT（補助の入力バス）に 440Hz の正弦を流す（入力の道が落ちないかを見る）
 //
 // DAW に入れる前にここで確かめる。工場が名乗るか、インターフェースが揃うか、
 // MIDI を受けて音が出るか、標本化周波数の変換が効いているか。
@@ -442,6 +444,80 @@ int run_torture(IPluginFactory *fac, const TUID cid)
 		if (c) c->release();
 	}
 
+	// 3.6 FL Studio の「Reset plugin when FL Studio resets」の形（issue #9）。
+	// 音声スレッドは process を回し続け、別のスレッドが保存のたびに
+	// setProcessing(false) → setActive(false) → getState → setActive(true) → setProcessing(true)
+	// を呼び、ときどき setState で戻す。機械に 2 つのスレッドが同時に触ると落ちるか、壊れた状態が出る
+	{
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		IAudioProcessor *p = nullptr;
+		if (c) c->queryInterface(IAudioProcessor::iid.toTUID(), (void **)&p);
+		if (c && p) {
+			c->initialize(nullptr);
+			ProcessSetup su{};
+			su.processMode = kRealtime;
+			su.symbolicSampleSize = kSample32;
+			su.maxSamplesPerBlock = 256;
+			su.sampleRate = 44100.0;
+			p->setupProcessing(su);
+			c->setActive(true);
+			p->setProcessing(true);
+
+			std::atomic<bool> quit{false};
+			std::atomic<uint64_t> blocks{0};
+			std::thread audio([&] {
+				std::vector<float> l(256), rr(256);
+				float *ch[2] = { l.data(), rr.data() };
+				AudioBusBuffers ab{};
+				ab.numChannels = 2; ab.channelBuffers32 = ch;
+				ProcessData pd{};
+				pd.symbolicSampleSize = kSample32;
+				pd.numOutputs = 1; pd.outputs = &ab;
+				pd.numSamples = 256;
+				while (!quit.load()) {
+					p->process(pd);          // 止めろと言われても呼び続ける
+					blocks.fetch_add(1);
+				}
+			});
+			// 起動を待つ
+			for (int t = 0; t < 300; t++) {
+				mem_stream s;
+				c->getState(&s);
+				if (s.size() >= 1000) break;
+				sleep_ms(50);
+			}
+			int saved = 0, restored = 0, small = 0;
+			const long long end = now_ms() + 8000;
+			for (int round = 0; now_ms() < end; round++) {
+				p->setProcessing(false);
+				c->setActive(false);
+				mem_stream st;
+				if (c->getState(&st) == kResultOk && st.size() >= 1000) saved++; else small++;
+				c->setActive(true);
+				p->setProcessing(true);
+				if (round % 3 == 2 && st.size() >= 1000) {
+					st.rewind();
+					if (c->setState(&st) == kResultOk) restored++;
+				}
+			}
+			quit.store(true);
+			audio.join();
+			if (small) {
+				std::printf("NG: 保存中のリセットで、中身の無い状態が %d 回\n", small);
+				bad++;
+			}
+			std::printf("OK: 保存中のリセットを %d 回（戻し %d 回）、そのあいだ process %llu 回\n",
+			            saved, restored, (unsigned long long)blocks.load());
+			p->setProcessing(false);
+			c->setActive(false);
+			c->terminate();
+		}
+		if (p) p->release();
+		if (c) c->release();
+	}
+
 	// 4. パラメータの問い合わせを全部
 	{
 		IComponent *c = nullptr;
@@ -555,6 +631,8 @@ int run_torture(IPluginFactory *fac, const TUID cid)
 int main(int argc, char **argv)
 {
 	smu2000::init_console_utf8();
+	// プラグインが落ちても、どこまで進んだかが残るように
+	std::setvbuf(stdout, nullptr, _IONBF, 0);
 
 	if (argc < 2) {
 		std::fprintf(stderr,
@@ -566,6 +644,7 @@ int main(int argc, char **argv)
 	int block = 512;
 	double extra = 3.0;      // 曲の後ろに足す残響ぶん
 	bool torture = false;
+	bool adc_sine = false;
 	bool one_bus = false;    // 比べる用。MIDI ファイルの口 B も A のバスへ流す
 	int  view_seconds = 0;
 	for (int i = 2; i < argc; i++) {
@@ -573,6 +652,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--block") && i + 1 < argc) block = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--tail") && i + 1 < argc) extra = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--torture")) torture = true;
+		else if (!std::strcmp(argv[i], "--adc-sine")) adc_sine = true;
 		else if (!std::strcmp(argv[i], "--one-bus")) one_bus = true;
 		else if (!std::strcmp(argv[i], "--view")) view_seconds =
 		    (i + 1 < argc && argv[i + 1][0] != '-') ? std::atoi(argv[++i]) : 20;
@@ -695,7 +775,15 @@ int main(int argc, char **argv)
 	}
 
 	SpeakerArrangement out_arr = SpeakerArr::kStereo;
-	proc->setBusArrangements(nullptr, 0, &out_arr, 1);
+	SpeakerArrangement in_arr = SpeakerArr::kStereo;
+	std::printf("音声入力バス %d\n", comp->getBusCount(kAudio, kInput));
+	if (adc_sine) {
+		if (proc->setBusArrangements(&in_arr, 1, &out_arr, 1) != kResultTrue)
+			std::printf("入力 1 つの並びを断られた\n");
+		comp->activateBus(kAudio, kInput, 0, true);
+	} else {
+		proc->setBusArrangements(nullptr, 0, &out_arr, 1);
+	}
 	comp->activateBus(kAudio, kOutput, 0, true);
 	for (int32 b = 0; b < comp->getBusCount(kEvent, kInput); b++)
 		comp->activateBus(kEvent, kInput, b, true);
@@ -770,7 +858,13 @@ int main(int argc, char **argv)
 	pd.processMode        = kOffline;
 	pd.symbolicSampleSize = kSample32;
 	pd.numSamples         = block;
-	pd.numInputs          = 0;
+	std::vector<float> il(block), ir(block);
+	float *ichans[2] = { il.data(), ir.data() };
+	AudioBusBuffers ibuf{};
+	ibuf.numChannels = 2;
+	ibuf.channelBuffers32 = ichans;
+	pd.numInputs          = adc_sine ? 1 : 0;
+	pd.inputs             = adc_sine ? &ibuf : nullptr;
 	pd.numOutputs         = 1;
 	pd.outputs            = &abuf;
 	pd.inputEvents        = &elist;
@@ -801,6 +895,9 @@ int main(int argc, char **argv)
 	const long long t0 = now_ms();
 	while (pos < total) {
 		const int32 n = int32(std::min<int64_t>(block, total - pos));
+		if (adc_sine)
+			for (int32 i = 0; i < n; i++)
+				il[size_t(i)] = ir[size_t(i)] = float(0.3 * std::sin(2 * 3.14159265358979 * 440.0 * double(pos + i) / rate));
 		elist.clear();
 		pchanges.clear();
 

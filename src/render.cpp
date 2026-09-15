@@ -2,7 +2,11 @@
 //
 // MIDI ファイルを食わせて WAV に書き出す。
 //
-//   render <rom ディレクトリ> <MIDI ファイル> <出力 wav> [秒数]
+//   render <rom ディレクトリ> <MIDI ファイル> <出力 wav> [秒数] [--adc-in 入力 wav] [--card カード img]
+//
+// --adc-in は A/D INPUT に流す音（16bit PCM、1 か 2 チャンネル、44.1kHz）。MIDI の 0 秒から流す。
+// 左が AD1、右が AD2（1 チャンネルなら両方に同じもの）
+// --card は SmartMedia の中身のファイル（gui で作ったもの）を差す。firmware が書いたブロックは終わりに書き戻す
 //
 // 実機と同じく、MIDI は 31250bps の直列で MIDI IN A に流し込む。
 // 出来た WAV は MAME の録音と突き合わせるためのもの。
@@ -35,6 +39,44 @@ void write_wav(const std::string &path, const std::vector<s16> &pcm, u32 rate)
 	std::fclose(f);
 }
 
+// 16bit PCM の WAV を読む。左右に分けて返す。読めなければ false
+bool read_wav16(const std::string &path, std::vector<s16> &l, std::vector<s16> &r, std::string &err)
+{
+	std::FILE *f = std::fopen(path.c_str(), "rb");
+	if (!f) { err = "開けない: " + path; return false; }
+	std::vector<u8> d;
+	u8 buf[65536];
+	size_t got;
+	while ((got = std::fread(buf, 1, sizeof buf, f)) > 0)
+		d.insert(d.end(), buf, buf + got);
+	std::fclose(f);
+	auto u16at = [&](size_t o) { return u16(d[o] | (d[o + 1] << 8)); };
+	auto u32at = [&](size_t o) { return u32(d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (u32(d[o + 3]) << 24)); };
+	if (d.size() < 12 || std::memcmp(d.data(), "RIFF", 4) || std::memcmp(d.data() + 8, "WAVE", 4)) { err = "WAV ではない: " + path; return false; }
+	int ch = 0, bits = 0;
+	u32 rate = 0;
+	for (size_t o = 12; o + 8 <= d.size();) {
+		const u32 len = u32at(o + 4);
+		const size_t body = o + 8;
+		if (!std::memcmp(d.data() + o, "fmt ", 4) && body + 16 <= d.size()) {
+			ch = u16at(body + 2); rate = u32at(body + 4); bits = u16at(body + 14);
+		} else if (!std::memcmp(d.data() + o, "data", 4)) {
+			if (bits != 16 || (ch != 1 && ch != 2)) { err = "16bit の 1 か 2 チャンネルだけ読める: " + path; return false; }
+			if (rate != 44100) std::fprintf(stderr, "警告: %s は %u Hz（44100 Hz として流す）\n", path.c_str(), rate);
+			const size_t n = std::min<size_t>(len, d.size() - body) / (2 * ch);
+			l.resize(n); r.resize(n);
+			for (size_t i = 0; i < n; i++) {
+				l[i] = s16(u16at(body + i * 2 * ch));
+				r[i] = s16(u16at(body + i * 2 * ch + (ch == 2 ? 2 : 0)));
+			}
+			return true;
+		}
+		o = body + len + (len & 1);
+	}
+	err = "data が無い: " + path;
+	return false;
+}
+
 } // namespace
 
 
@@ -55,6 +97,8 @@ int main(int argc, char **argv)
 	const char *meg_path = nullptr;    // MEG の中身を書き出す先
 	const char *meg_trace = nullptr;   // MEG を 1 命令ずつ追う
 	u32 meg_tr_from = 0, meg_tr_count = 0, meg_tr_pc0 = 0, meg_tr_pc1 = 0x180;
+	const char *adc_path = nullptr;    // A/D INPUT に流す WAV
+	const char *card_path = nullptr;   // 差す SmartMedia
 	for (int i = 4; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--trace-swp") && i + 1 < argc)
 			swptrace = argv[++i];
@@ -76,6 +120,10 @@ int main(int argc, char **argv)
 		}
 		else if (!std::strcmp(argv[i], "--single"))
 			single = true;
+		else if (!std::strcmp(argv[i], "--adc-in") && i + 1 < argc)
+			adc_path = argv[++i];
+		else if (!std::strcmp(argv[i], "--card") && i + 1 < argc)
+			card_path = argv[++i];
 		else if (!std::strcmp(argv[i], "-v"))
 			smu2000::g_verbose = true;
 		else
@@ -88,6 +136,9 @@ int main(int argc, char **argv)
 	std::printf("MIDI: %zu イベント、最後は %.2f 秒\n",
 	            events.size(), events.empty() ? 0.0 : events.back().time);
 
+	std::vector<s16> adc_l, adc_r;
+	if (adc_path && !read_wav16(adc_path, adc_l, adc_r, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+
 	mu2000 mu;
 	if (!mu.load_program(dir + "/mu2000_flash.bin")) {
 		std::fprintf(stderr, "%s\n", mu.error().c_str()); return 1;
@@ -97,6 +148,8 @@ int main(int argc, char **argv)
 	}
 	if (!mu.load_sintab(dir + "/standin/sin-table.bin"))
 		std::fprintf(stderr, "警告: %s\n", mu.error().c_str());
+
+	if (card_path && !mu.card().load(card_path, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
 
 	std::FILE *tf = swptrace ? std::fopen(swptrace, "w") : nullptr;
 	if (tf)
@@ -164,14 +217,19 @@ int main(int argc, char **argv)
 			if (ev.size() == 2 && ev[0] == 0xf5)
 				port = std::clamp(int(ev[1]) - 1, 0, mu2000::MIDI_PORTS - 1);
 			else {
-				const int to = port >= 0 ? port
-				             : std::min<int>(events[next].port, mu2000::MIDI_PORTS - 1);
+				// ファイルの口 3・4 は gui の既定と同じく A・B に重ねる
+				const int to = port >= 0 ? port : smf::mu_port(events[next].port, true);
 				for (u8 b : ev)
 					mu.midi_in(b, to);
 			}
 			next++;
 		}
 
+		if (!adc_l.empty()) {
+			const double tin = t * rate;
+			const size_t k = tin < 0 ? adc_l.size() : size_t(tin);
+			mu.set_audio_input(k < adc_l.size() ? adc_l[k] : 0, k < adc_r.size() ? adc_r[k] : 0);
+		}
 		s32 l = 0, r = 0;
 		mu.run_sample(l, r);
 		// DAC の全振幅は 1<<17。16bit に落とす（MAME の 1<<17 目盛りと同じ）
@@ -233,6 +291,15 @@ int main(int argc, char **argv)
 		};
 		report("マスタ", mu.swpm());
 		report("スレーブ", mu.swps());
+	}
+
+	if (card_path) {
+		std::vector<smu2000::smartmedia::block> blocks;
+		mu.card().take_dirty_blocks(blocks);
+		if (!smu2000::smartmedia::write_blocks(card_path, blocks, err))
+			std::fprintf(stderr, "%s\n", err.c_str());
+		else if (!blocks.empty())
+			std::printf("カードに書き戻した: %s（%zu ブロック）\n", card_path, blocks.size());
 	}
 
 	write_wav(wav, pcm, rate);

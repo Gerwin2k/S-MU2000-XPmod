@@ -32,6 +32,8 @@ public:
 
 	// 外から与えるメモリ
 	void set_wave_rom(const void *base, size_t bytes);
+	// S-MU2000: サンプリング RAM（SWP30 から見て 0x1000000 語目から。2 チップで同じ物を共有する）
+	void set_sample_ram(u8 *base, size_t bytes) { m_wave_cache.set_overlay(base, 0x1000000, bytes >> 2); }
 	void set_sintab(const u16 *base, size_t count);
 
 	void reset();
@@ -305,6 +307,8 @@ private:
 			bool m1_expand = false, m2_from_m = false;
 			bool dr_from_r = false, no_noise = false;
 			bool memw = false, index = false, t_write = false, t_from_p = false, mem_use_index = false;
+			bool index2 = false, mem_use_index2 = false;   // S-MU2000: 2 つ目の idx（doc/upstream.md の 32）
+			bool mem_table = false;   // S-MU2000: bit 0x23 の付いた読み出し（リバーブ RAM の絶対番地。doc/upstream.md の 24）
 		};
 		std::array<decoded, 0x180> m_decoded = {};
 		void decode_program();
@@ -321,7 +325,8 @@ private:
 			u8  sm, sr, dm, dr, t;
 			u8  dm_src, no_noise, dr_from_r;
 			u8  memw, index, t_write, t_from_p;
-			u8  memop, mem_use_index;
+			u8  index2, mem_use_index2;
+			u8  memop, mem_use_index, mem_table;
 			u8  lfo, offset_index;
 			u32 addr_mask, addr_base;   // resolve_address() を解いたもの
 			u8  latch;                // bit 0x20: 結果の符号とゼロを覚える
@@ -430,11 +435,13 @@ private:
 	// route / vol が書かれたら作り直す（毎サンプル 16 出力ぶんを解くのをやめた）
 	struct mix_tap {
 		u8  dst;       // mixer_out の番号
-		u8  raw;       // 1 なら減衰なしで足す
-		u16 att;       // mixer_att に渡す値
+		u8  frac;      // mixer_att の減衰の下 4 ビット（減衰なしは 0）
+		u8  shift;     // mixer_att の減衰の上 4 ビット
 	};
 	std::array<std::array<mix_tap, 32>, 0x60> m_mix_taps = {};
 	std::array<u8, 0x60> m_mix_ntaps = {};
+	std::array<u8, 0x60> m_mix_active = {};   // S-MU2000: 振り分け先のある入力の番号（mixer_rebuild が詰める）
+	u8 m_mix_nactive = 0;
 	u64 m_mix_dirty[2] = { ~u64(0), ~u64(0) };   // 作り直す入力の印（0x00-0x3f、0x40-0x5f）
 	void mixer_rebuild();
 	void mixer_mark(int mix) { if(mix < 0x60) m_mix_dirty[mix >> 6] |= u64(1) << (mix & 63); }
@@ -453,6 +460,11 @@ private:
 	// S-MU2000: MEG の分岐の状態（doc/upstream.md の 11）。飛び越しは 1 サンプルの中で終わり、
 	// 覚えた符号も次の比較で上書きされるので、状態の保存には入れない
 	bool m_meg_flag_n = false, m_meg_flag_z = false;
+	// S-MU2000: 2 つ目の idx（doc/upstream.md の 32）。idx と mw の両方が立った命令が 3 命令遅れで書き、
+	// bit 0x22 の付いた読み出しが足す。meg_state の並びを変えないよう、こちらに置く
+	std::array<s32, 3> m_meg_ix2_value = {};
+	std::array<u8,  3> m_meg_ix2_act = {};
+	s32 m_meg_ram_index2 = 0;
 	u16  m_meg_skip_to = 0;
 
 	// S-MU2000: MEG のプログラムを機械語にしたもの（swp30_jit.cpp）。命令表と同じく保存しない。
@@ -464,8 +476,23 @@ public:
 	static u64 meg_jit_selftest();
 private:
 	void meg_jit_rebuild();
+	void meg_jit_invalidate();
 	bool meg_jit_run();
 	std::unique_ptr<meg_jit, void (*)(meg_jit *)> m_jit{nullptr, &meg_jit_delete};
+	// S-MU2000: MEG の定数の値が変わるたびに 1 増える（JIT の定数を焼き込んだ版を捨てる印）。
+	// 状態の保存には入れない（meg_state の並びを変えると、前の版で保存した状態が読めなくなる）
+	u32 m_meg_const_gen = 0;
+	// S-MU2000: 分岐のあるプログラムを JIT で回すときの「この命令の手前まで飛ばす」位置（0 なら飛ばさない）。
+	// 1 サンプルの中だけで使う。保存しない
+	u32 m_meg_jit_skip = 0;
+	// S-MU2000: サンプリング。m_rec_bus は録るもの（ミキサの出力 8 の左。同じサンプルの中で作って使うので保存しない）。
+	// m_rec_pos は録音を始めてから書いた 16bit のサンプル数（0x30f で下の 16bit が読める）、
+	// m_rec_ctrl は 0x30e に書かれた値（意味はまだ分からない。firmware は 0x001f を書く）
+	s32 m_rec_bus = 0;
+	u32 m_rec_pos = 0;
+	u16 m_rec_ctrl = 0;
+	// S-MU2000: プログラムか番地が書かれてから数えたサンプル数（0 なら JIT の作り直しを待っていない）。保存しない
+	u32 m_meg_jit_wait = 0;
 
 	u32 m_sample_counter = 0;
 	u32 m_wave_adr = 0, m_wave_size = 0, m_wave_val = 0, m_revram_adr = 0, m_revram_data = 0;

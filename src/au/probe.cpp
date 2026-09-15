@@ -555,6 +555,9 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 			{ kAudioUnitProperty_SupportedNumChannels, kAudioUnitScope_Global },
 			{ kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output },
 			{ kAudioUnitProperty_ElementCount, kAudioUnitScope_Input },
+			// The input bus is the A/D INPUT, and this unit has one (the VST3 build
+			// has the same bus), so its format is answered rather than refused
+			{ kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input },
 		};
 		for (const prop_test &p : props) {
 			UInt32 size = 0;
@@ -575,7 +578,7 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 			{ kAudioUnitProperty_SupportedNumChannels,  kAudioUnitScope_Output },
 			{ kAudioUnitProperty_Latency,               kAudioUnitScope_Output },
 			{ kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Output },
-			{ kAudioUnitProperty_StreamFormat,          kAudioUnitScope_Input  },
+			{ kAudioUnitProperty_SetRenderCallback,     kAudioUnitScope_Output },
 			{ kAudioUnitProperty_ClassInfo,             kAudioUnitScope_Output },
 		};
 		for (const prop_test &p : wrong_scope) {

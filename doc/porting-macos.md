@@ -465,19 +465,27 @@ build arm64-only). Three opt-ins:
 
 ```
 make ARCH=arm64       # force one slice
-make ARCH=x86_64      # force the Intel slice (BUILD=build-x64 keeps objects apart)
+make ARCH=x86_64      # force the Intel slice (Rosetta)
 make UNIVERSAL=1      # both slices in every binary and bundle
 ```
 
-The two JITs (SH2 and MEG) emit x86-64 machine code, so they are active in
-the x86_64 slice only — including under Rosetta — and always compiled out of
-the arm64 slice, which interprets. Both JITs were ported to the SysV calling
-convention (`src/compat/exec_mem.h` holds the mmap/mprotect layer); the same
-audio fingerprints pass with them on and off. Under Rosetta both JITs together
-render roughly twice as fast as the arm64 interpreter (0.37 vs 0.67 ms per
-64-frame block), but Rosetta occasionally pauses for tens of milliseconds
-while it translates newly generated code, so audio paths want a large device
-buffer there; the arm64 slice has no such spikes.
+A forced slice gets a build directory of its own automatically
+(`build-arm64`, `build-x86_64`, `build-universal`), because object files of
+different slices cannot be mixed: an `ARCH=x86_64 make` after a native build
+used to fail in the link step with a message about which architecture the
+`.o` files were. `BUILD=...` still overrides the choice, and a plain `make`
+keeps using `build/`.
+
+The two JITs (SH2 and MEG) each have an arm64 backend as well as the original
+x86-64 one (`src/compat/a64asm.h` is the aarch64 emitter; `src/compat/exec_mem.h`
+holds the mmap/mprotect layer). So the arm64 slice compiles them both in, and
+Rosetta is no longer needed just to get the JITs. The same audio fingerprints
+pass with the JITs on and off, and a render is byte-identical either way; the
+arm64 build is now the fastest and steadiest configuration (doc/benchmarks.md
+has the numbers). Under Rosetta the worst-case blocks are still far behind,
+because Rosetta occasionally pauses for tens of milliseconds while it
+translates newly generated code, so an audio path running under it wants a
+large device buffer; the arm64 slice has no such spikes.
 
 ## Verifying
 

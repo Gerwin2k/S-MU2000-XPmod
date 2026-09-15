@@ -31,18 +31,18 @@ SMU2000_SH2_JIT=0 ./build/blocktime ...   # MEG JIT only
 SMU2000_MEG_JIT=0 ./build/blocktime ...   # SH2 JIT only
 SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build/blocktime ...   # all interpreted
 
-# x86_64 (Rosetta; both JITs compile in. Built into its own directory)
-make BUILD=build-x64 ARCH=x86_64 build-x64/blocktime
-./build-x64/blocktime roms demo.mid 64 10 3
+# x86_64 (Rosetta; both JITs compile in. ARCH= picks its own build dir)
+make ARCH=x86_64 build-x86_64/blocktime
+./build-x86_64/blocktime roms demo.mid 64 10 3
 
 # arm64 JIT on/off switches
 SMU2000_SH2_JIT=0 ./build/blocktime ...       # MEG JIT only
 SMU2000_MEG_JIT=0 ./build/blocktime ...       # SH2 JIT only
 
 # x86_64 JIT on/off switches
-SMU2000_SH2_JIT=0 ./build-x64/blocktime ...   # MEG JIT only
-SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # SH2 JIT only
-SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build-x64/blocktime ...   # all interpreted
+SMU2000_SH2_JIT=0 ./build-x86_64/blocktime ...   # MEG JIT only
+SMU2000_MEG_JIT=0 ./build-x86_64/blocktime ...   # SH2 JIT only
+SMU2000_SH2_JIT=0 SMU2000_MEG_JIT=0 ./build-x86_64/blocktime ...   # all interpreted
 ```
 
 `blocktime <rom> <midi> <frames> [seconds] [repeats]`. The output includes the

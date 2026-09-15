@@ -12,8 +12,13 @@
 #include "plug_window.h"
 #include "view.h"
 
+#include "ui/text.h"
+
 #include <windows.h>
 #include <windowsx.h>
+#include <commdlg.h>
+#include <cwchar>
+#include <string>
 
 namespace smu2000 {
 namespace vst3 {
@@ -87,10 +92,13 @@ public:
 	bool attach(void *parent, int w, int h) override;
 	void detach() override;
 	void set_size(int w, int h) override;
+	void card_menu(int x, int y) override;
+	void alert(const std::string &text) override;
 
 private:
 	static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp);
 	LRESULT handle(HWND h, UINT msg, WPARAM wp, LPARAM lp);
+	void card_command(UINT id);
 
 	plug_view &m_owner;
 	HWND m_hwnd = nullptr;
@@ -138,11 +146,100 @@ LRESULT CALLBACK win_window::wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 	return self->handle(h, msg, wp, lp);
 }
 
+// ---- SmartMedia（カードの差し込み口）。gui.exe の品書きと同じ
+
+namespace {
+
+enum : UINT { ID_CARD_NEW16 = 100, ID_CARD_NEW32, ID_CARD_NEW64, ID_CARD_NEW128, ID_CARD_OPEN = 110, ID_CARD_EJECT = 111 };
+
+void add_item(HMENU m, UINT flags, UINT_PTR id, const char *utf8)
+{
+	const std::wstring w = ui::to_wide(utf8);
+	AppendMenuW(m, flags, id, w.c_str());
+}
+
+std::string ask_card_path(HWND h, bool create)
+{
+	wchar_t file[MAX_PATH] = {};
+	if (create)
+		wcscpy(file, L"smartmedia.img");
+	OPENFILENAMEW o{};
+	o.lStructSize = sizeof(o);
+	o.hwndOwner = h;
+	o.lpstrFilter = L"SmartMedia の中身 (*.img)\0*.img\0すべて (*.*)\0*.*\0";
+	o.lpstrFile = file;
+	o.nMaxFile = MAX_PATH;
+	o.lpstrDefExt = L"img";
+	if (create) {
+		o.lpstrTitle = L"新しい SmartMedia の保存先";
+		o.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+		if (!GetSaveFileNameW(&o))
+			return {};
+	} else {
+		o.lpstrTitle = L"差す SmartMedia";
+		o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+		if (!GetOpenFileNameW(&o))
+			return {};
+	}
+	return ui::to_utf8(file);
+}
+
+} // namespace
+
+void win_window::alert(const std::string &text)
+{
+	const std::wstring w = ui::to_wide(text);
+	MessageBoxW(m_hwnd, w.c_str(), L"S-MU2000", MB_OK | MB_ICONWARNING);
+}
+
+void win_window::card_menu(int x, int y)
+{
+	// A card menu needs somewhere to send the choice, and this window is it:
+	// WM_COMMAND comes back to handle() below with the same ids
+	const std::string path = m_owner.card_path();
+	HMENU m = CreatePopupMenu();
+	HMENU mnew = CreatePopupMenu();
+	add_item(mnew, MF_STRING, ID_CARD_NEW16, "16MB");
+	add_item(mnew, MF_STRING, ID_CARD_NEW32, "32MB");
+	add_item(mnew, MF_STRING, ID_CARD_NEW64, "64MB");
+	add_item(mnew, MF_STRING, ID_CARD_NEW128, "128MB");
+	const UINT ready = m_owner.card_ready() ? 0 : MF_GRAYED;
+	add_item(m, MF_POPUP | ready, UINT_PTR(mnew), "新しい SmartMedia を作って差す");
+	add_item(m, MF_STRING | ready, ID_CARD_OPEN, "SmartMedia を差す...");
+	std::string eject = "SmartMedia を抜く";
+	if (!path.empty())
+		eject += "（" + path.substr(path.find_last_of("\\/") + 1) + "）";
+	add_item(m, MF_STRING | (path.empty() ? MF_GRAYED : 0), ID_CARD_EJECT, eject.c_str());
+	POINT pt{ x, y };
+	ClientToScreen(m_hwnd, &pt);
+	TrackPopupMenu(m, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hwnd, nullptr);
+	DestroyMenu(m);
+}
+
+void win_window::card_command(UINT id)
+{
+	if (id >= ID_CARD_NEW16 && id <= ID_CARD_NEW128) {
+		const std::string path = ask_card_path(m_hwnd, true);
+		if (!path.empty())
+			m_owner.card_make(path, 16 << (id - ID_CARD_NEW16));
+	} else if (id == ID_CARD_OPEN) {
+		const std::string path = ask_card_path(m_hwnd, false);
+		if (!path.empty())
+			m_owner.card_insert_path(path);
+	} else if (id == ID_CARD_EJECT) {
+		m_owner.card_eject();
+	}
+}
+
 LRESULT win_window::handle(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
 	switch (msg) {
 	case WM_TIMER:
 		InvalidateRect(h, nullptr, FALSE);
+		return 0;
+
+	case WM_COMMAND:
+		card_command(LOWORD(wp));
 		return 0;
 
 	case WM_ERASEBKGND:
@@ -166,6 +263,10 @@ LRESULT win_window::handle(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 		SetCapture(h);
 		m_owner.mouse_down(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
 		InvalidateRect(h, nullptr, FALSE);
+		return 0;
+
+	case WM_RBUTTONUP:
+		m_owner.mouse_right(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
 		return 0;
 
 	case WM_MOUSEMOVE:

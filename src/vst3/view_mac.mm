@@ -16,6 +16,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <algorithm>
+#include <string>
 
 using namespace Steinberg;
 
@@ -218,11 +219,61 @@ using smu2000::vst3::PLUG_KEY_NONE;
 		_owner->key(k, false);
 }
 
-- (void)resignKeyWindow:(NSNotification *)note
+- (void)rightMouseDown:(NSEvent *)event
 {
-	(void)note;
-	if (_owner)
-		_owner->focus_lost();
+	if (!_owner)
+		return;
+	NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+	_owner->mouse_right((int)p.x, (int)p.y);
+}
+
+@end
+
+
+// The card menu's target. NSMenu sends each choice to one object, and the size
+// items are told apart by their tag; this object turns that into a call on the
+// view (the same four jobs view.cpp's card_* methods do for either platform)
+@interface SMUCardMenu : NSObject
+{
+@public
+	plug_view *_owner;
+}
+- (void)choose:(id)sender;
+@end
+
+@implementation SMUCardMenu
+
+- (void)choose:(id)sender
+{
+	if (!_owner)
+		return;
+	const int tag = (int)[sender tag];
+
+	if (tag == 1 || tag == 2 || tag == 4 || tag == 8) {          // 16 / 32 / 64 / 128 MB
+		NSSavePanel *panel = [NSSavePanel savePanel];
+		[panel setTitle:@"新しい SmartMedia の保存先"];
+		[panel setNameFieldStringValue:@"smartmedia.img"];
+		[panel setAllowedFileTypes:@[ @"img" ]];
+		if ([panel runModal] != NSModalResponseOK)
+			return;
+		_owner->card_make(std::string([[[panel URL] path] UTF8String]), tag * 16);
+		return;
+	}
+
+	if (tag == 9) {                                              // 差す
+		NSOpenPanel *panel = [NSOpenPanel openPanel];
+		[panel setTitle:@"差す SmartMedia"];
+		[panel setCanChooseFiles:YES];
+		[panel setCanChooseDirectories:NO];
+		[panel setAllowsMultipleSelection:NO];
+		if ([panel runModal] != NSModalResponseOK)
+			return;
+		_owner->card_insert_path(std::string([[[panel URL] path] UTF8String]));
+		return;
+	}
+
+	if (tag == 10)                                               // 抜く
+		_owner->card_eject();
 }
 
 @end
@@ -240,11 +291,73 @@ public:
 	bool attach(void *parent, int w, int h) override;
 	void detach() override;
 	void set_size(int w, int h) override;
+	void card_menu(int x, int y) override;
+	void alert(const std::string &text) override;
 
 private:
 	plug_view &m_owner;
 	SMUPlugView *m_view = nil;
 };
+
+void mac_window::alert(const std::string &text)
+{
+	NSAlert *a = [[NSAlert alloc] init];
+	[a setMessageText:@"S-MU2000"];
+	[a setInformativeText:[NSString stringWithUTF8String:text.c_str()]];
+	[a addButtonWithTitle:@"OK"];
+	[a runModal];
+}
+
+// The card slot's menu, offered as a native popup. A card menu needs a target
+// to receive the choice, so one is made per call and released as the menu goes
+void mac_window::card_menu(int x, int y)
+{
+	if (!m_view)
+		return;
+
+	SMUCardMenu *target = [[SMUCardMenu alloc] init];
+	target->_owner = &m_owner;
+
+	NSMenu *m = [[NSMenu alloc] init];
+	[m setAutoenablesItems:NO];
+
+	NSMenuItem *item = [m addItemWithTitle:@"新しい SmartMedia を作って差す" action:nil keyEquivalent:@""];
+	NSMenu *sizes = [[NSMenu alloc] init];
+	const int mbs[4] = { 16, 32, 64, 128 };
+	const int tags[4] = { 1, 2, 4, 8 };
+	for (int i = 0; i < 4; i++) {
+		NSMenuItem *size = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"%dMB", mbs[i]]
+		                                              action:@selector(choose:)
+		                                       keyEquivalent:@""];
+		[size setTarget:target];
+		[size setTag:tags[i]];
+		[size setEnabled:m_owner.card_ready() ? YES : NO];
+		[sizes addItem:size];
+	}
+	[m setSubmenu:sizes forItem:item];
+
+	item = [m addItemWithTitle:@"SmartMedia を差す..." action:@selector(choose:) keyEquivalent:@""];
+	[item setTarget:target];
+	[item setTag:9];
+	[item setEnabled:m_owner.card_ready() ? YES : NO];
+
+	// The card in the slot, by file name, so it is clear which one is going out
+	const std::string path = m_owner.card_path();
+	NSString *eject_title = @"SmartMedia を抜く";
+	if (!path.empty()) {
+		const size_t slash = path.find_last_of("/");
+		NSString *name = [NSString stringWithUTF8String:path.substr(slash == std::string::npos ? 0 : slash + 1).c_str()];
+		eject_title = [NSString stringWithFormat:@"SmartMedia を抜く（%@）", name];
+	}
+	item = [m addItemWithTitle:eject_title action:@selector(choose:) keyEquivalent:@""];
+	[item setTarget:target];
+	[item setTag:10];
+	[item setEnabled:path.empty() ? NO : YES];
+
+	// In the view's own coordinates. The view is flipped, which is the space the
+	// panel's hit testing already worked in
+	[m popUpMenuPositioningItem:nil atLocation:NSMakePoint(x, y) inView:m_view];
+}
 
 bool mac_window::attach(void *parent, int w, int h)
 {

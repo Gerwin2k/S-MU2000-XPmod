@@ -12,7 +12,9 @@
 #include "plug_window.h"
 
 #include "compat/gdi.h"
+#include "compat/platform.h"
 #include "engine.h"
+#include "smartmedia.h"
 #include "ui/bridge.h"
 #include "ui/layout.h"
 #include "ui/panel.h"
@@ -24,6 +26,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 using namespace Steinberg;
 
@@ -169,6 +172,10 @@ tresult PLUGIN_API plug_view::attached(void *parent, FIDString type)
 
 tresult PLUGIN_API plug_view::removed()
 {
+	// The card file is the project's data, so the last of it is written back
+	// before the window goes: a host that closes the editor and never saves
+	// still keeps what the machine wrote
+	m_engine.card_flush();
 	if (m_window) {
 		m_window->detach();
 		delete m_window;
@@ -258,9 +265,29 @@ void plug_view::repaint(void *native, int w, int h)
 	m_impl->paint_panel(dc);
 	DeleteDC(dc);
 #endif
+
+	card_tick();
 }
 
-void plug_view::mouse_down(int x, int y) { m_impl->panel.press(x, y, m_engine.panel()); }
+void plug_view::mouse_down(int x, int y)
+{
+	// The card slot is not a button but a menu: a click there is about the image
+	// in the slot, and the machine is told nothing
+	if (card_slot_at(x, y)) {
+		if (m_window)
+			m_window->card_menu(x, y);
+		return;
+	}
+	m_impl->panel.press(x, y, m_engine.panel());
+}
+
+void plug_view::mouse_right(int x, int y)
+{
+	// The same menu as a left click. A right click anywhere else is not this
+	// view's business (the GUI front end opens its own settings menu there)
+	if (card_slot_at(x, y) && m_window)
+		m_window->card_menu(x, y);
+}
 
 void plug_view::mouse_drag(int x, int y) { m_impl->panel.drag(x, y, m_engine.panel()); }
 
@@ -281,6 +308,60 @@ void plug_view::key(int code, bool down)
 }
 
 void plug_view::focus_lost() { m_engine.panel().release_all(); }
+
+
+// ---- SmartMedia (the card slot)
+
+bool plug_view::card_slot_at(int x, int y) const { return m_impl->panel.on_card_slot(x, y); }
+
+bool plug_view::card_ready() const { return m_engine.state() == status::ready; }
+
+std::string plug_view::card_path() const { return m_engine.card_path(); }
+
+// A failure has nowhere to go on the panel itself, so it goes to the log
+// (engine) and to the user (the window's alert)
+void plug_view::card_error(const std::string &err)
+{
+	m_engine.log_line(err.c_str());
+	if (m_window)
+		m_window->alert(err);
+}
+
+void plug_view::card_make(const std::string &path, int mb)
+{
+	// An empty card, in the physical layout a new one comes in: the machine
+	// still has to format it (UTIL -> CARD -> Format) before it stores anything
+	std::string err;
+	smartmedia card;
+	if (!card.create(u32(mb) << 20) || !card.save(path, err)) {
+		card_error(err.empty() ? "SmartMedia を作れない" : err);
+		return;
+	}
+	card_insert_path(path);
+}
+
+void plug_view::card_insert_path(const std::string &path)
+{
+	std::string err;
+	if (!m_engine.card_insert(path, err))
+		card_error(err);
+}
+
+void plug_view::card_eject() { m_engine.card_eject(); }
+
+// Called once a frame, by whichever platform is painting. The machine writes to
+// the card while it runs, so the file is brought up to date every couple of
+// seconds instead of only when a project is saved; that is what keeps a crash
+// from losing more than the last two seconds. Saving and closing flush as well
+// (the host interface on save, and removed() when the window goes)
+void plug_view::card_tick()
+{
+	const uint64_t now = smu2000::perf_ticks() * 1000 / smu2000::perf_freq();
+	if (now - m_last_flush < 2000)
+		return;
+	m_last_flush = now;
+	m_engine.card_flush();
+}
 
 } // namespace vst3
 } // namespace smu2000

@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "audio_in.h"
 #include "audio_out.h"
 #include "bridge.h"
 #include "driver.h"
@@ -32,6 +33,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -47,12 +49,15 @@ struct engine {
 	// MIDI OUT。MU2000 が自分で送り出すもの（XG のダンプ要求への返事など）。
 	// これを loopMIDI 越しに外のエディタへ返すと、外から読み書きできる
 	midi_out *mout_mu = nullptr;
+	audio_in *ain = nullptr;          // A/D INPUT に入れる音（無ければ無音）
 
 	std::atomic<int> state{0};        // 0 起動中 / 1 準備完了 / 2 だめ
 	// THRU A / B の流量の上限。MIDI の輪で溢れたものを実機へ流さない（midi_guard.h）
 	thru_guard guard_a, guard_b;
 	// fill() が機械に触っている最中か。起動し直すときはこれが落ちるのを待つ
 	std::atomic<bool> in_fill{false};
+	// SmartMedia を差す・抜く・書き戻す間は、音声の糸が機械を回さないようにする
+	std::mutex card_lock;
 	bool use_nvram = false;           // 覚えている設定で起動するか（窓を出すときだけ）
 	std::string      message = "起動中...";
 
@@ -132,6 +137,7 @@ struct engine {
 	// 音声デバイスに頼まれた分だけ進める
 	void fill(s16 *out, u32 n)
 	{
+		const std::lock_guard<std::mutex> hold(card_lock);
 		// 先に「触っている」を立ててから state を見る。逆にすると、見た直後に
 		// 起動し直しが始まって、両方が機械に触ってしまう
 		in_fill.store(true);
@@ -170,6 +176,11 @@ struct engine {
 
 		for (u32 i = 0; i < n; i++) {
 			s32 l = 0, r = 0;
+			if (ain) {
+				s32 a1, a2;
+				ain->pop(a1, a2);
+				mu.set_audio_input(a1, a2);
+			}
 			mu.run_sample(l, r);
 			l = s32(l * g) * 32768 / mu2000::DAC_FULL_SCALE;
 			r = s32(r * g) * 32768 / mu2000::DAC_FULL_SCALE;

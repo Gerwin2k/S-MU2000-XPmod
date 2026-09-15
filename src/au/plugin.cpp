@@ -164,7 +164,50 @@ struct au_instance
 			std::memset(right, 0, size_t(n) * sizeof(float));
 			return;
 		}
-		eng.fill(left, right, int(n));
+		// in_l / in_r carry this block of the A/D INPUT bus, if the host fed one
+		eng.fill(left, right, int(n), in_l.empty() ? nullptr : in_l.data(),
+		         in_r.empty() ? nullptr : in_r.data());
+	}
+
+	// ---- A/D INPUT
+	//
+	// The host gives the unit an input bus and feeds it through a callback set on
+	// that bus (kAudioUnitProperty_SetRenderCallback). One block is pulled here
+	// and handed to engine::fill(), which resamples it to the machine's rate the
+	// way the VST3 build resamples its input bus. Left is AD1 and right is AD2
+	AURenderCallbackStruct in_cb{};
+	bool in_cb_set = false;
+	std::vector<float> in_l, in_r;
+
+	void pull_input(UInt32 frames)
+	{
+		if (!in_cb_set || !in_cb.inputProc)
+			return;
+		if (in_l.size() < frames) {
+			in_l.resize(frames);
+			in_r.resize(frames);
+		}
+		// AudioBufferList declares room for one buffer, so one more is added by
+		// hand: the unit's input is non-interleaved 32-bit float, which is what
+		// default_format() asks for and what a host rendering into it will have
+		struct { AudioBufferList list; AudioBuffer second; } bl{};
+		bl.list.mNumberBuffers = 2;
+		bl.list.mBuffers[0].mNumberChannels = 1;
+		bl.list.mBuffers[0].mDataByteSize = frames * sizeof(float);
+		bl.list.mBuffers[0].mData = in_l.data();
+		bl.second.mNumberChannels = 1;
+		bl.second.mDataByteSize = frames * sizeof(float);
+		bl.second.mData = in_r.data();
+		AudioUnitRenderActionFlags f = 0;
+		AudioTimeStamp ts{};
+		ts.mSampleTime = 0;
+		ts.mFlags = kAudioTimeStampSampleTimeValid;
+		const OSStatus rc = in_cb.inputProc(in_cb.inputProcRefCon, &f, &ts, 0, frames, &bl.list);
+		if (rc != noErr) {
+			// No input this block: silence, rather than a stale one
+			std::fill(in_l.begin(), in_l.begin() + frames, 0.0f);
+			std::fill(in_r.begin(), in_r.begin() + frames, 0.0f);
+		}
 	}
 
 	// Take what has piled up. midi_work is cleared first every time, so a block
@@ -279,6 +322,7 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 	if (interleaved) {
 		tell_notifies(au, kAudioUnitRenderAction_PreRender, flags, ts, frames, io);
 		au->take_midi();
+		au->pull_input(frames);
 
 		float l[256], r[256];
 		auto *dst = static_cast<float *>(io->mBuffers[0].mData);
@@ -320,8 +364,9 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 	tell_notifies(au, kAudioUnitRenderAction_PreRender, flags, ts, frames, io);
 
 	// Take the MIDI the host sent. If the lock is busy it is picked up in the
-	// next block instead
+	// next block instead, and take this block of the A/D INPUT bus
 	au->take_midi();
+	au->pull_input(frames);
 	if (au->midi_work.empty() && au->eng.state() != smu2000::vst3::status::ready) {
 		std::memset(left, 0, size_t(frames) * sizeof(float));
 		if (right != left)
@@ -557,6 +602,9 @@ OSStatus prop_info(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope
 	// Answering with a "MIDI stream" here makes auval treat it as the input
 	// format and fail the unit for being initialisable at 3 channels
 	case kAudioUnitProperty_StreamFormat:
+		// The input bus carries the A/D INPUT, at the host's rate like the output
+		if (scope == kAudioUnitScope_Input)
+			return element == 0 ? noErr : kAudioUnitErr_InvalidElement;
 		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global)
 			return kAudioUnitErr_InvalidScope;
 		if (element != kOutputElement)
@@ -565,7 +613,7 @@ OSStatus prop_info(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope
 		out.writable = true;
 		return noErr;
 
-	// No audio input (0), and exactly 2 output channels
+	// 2 in (the A/D INPUT bus) and 2 out
 	case kAudioUnitProperty_SupportedNumChannels:
 		if (!want_global(scope, element, err))
 			return err;
@@ -646,6 +694,19 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		CFDictionarySetValue(dict, CFSTR("S-MU2000-OutputLevel"), g);
 		CFRelease(g);
 		CFRelease(d);
+
+		// The SmartMedia in the slot, by file name. The image itself is not put in
+		// the preset (16 to 128 MB), the same as the VST3 side: what is saved is
+		// which file was in the machine. Any blocks the machine wrote are flushed
+		// to it first, so the project and the file agree
+		au->eng.card_flush();
+		const std::string card = au->eng.card_path();
+		if (!card.empty()) {
+			CFStringRef c = CFStringCreateWithCString(kCFAllocatorDefault, card.c_str(),
+			                                          kCFStringEncodingUTF8);
+			CFDictionarySetValue(dict, CFSTR("S-MU2000-SmartMedia"), c);
+			CFRelease(c);
+		}
 		*static_cast<CFPropertyListRef *>(data) = dict;
 		*size = sizeof(CFPropertyListRef);
 		return noErr;
@@ -701,13 +762,22 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 
 	case kAudioUnitProperty_ElementCount:
 		// aumu's rule: Global is 1 and there is one audio output bus. The input
-		// scope has 0 because its element 1 is MIDI, not audio. MusicDeviceBase
-		// answers the same
+		// scope has one as well -- the A/D INPUT the VST3 build also has, which
+		// the machine samples from (engine::fill). MIDI does not travel on it
 		if (*size < sizeof(UInt32))
 			return kAudioUnitErr_InvalidPropertyValue;
 		*static_cast<UInt32 *>(data) =
-		    (scope == kAudioUnitScope_Global || scope == kAudioUnitScope_Output) ? 1u : 0u;
+		    (scope == kAudioUnitScope_Global || scope == kAudioUnitScope_Output ||
+		     scope == kAudioUnitScope_Input) ? 1u : 0u;
 		*size = sizeof(UInt32);
+		return noErr;
+
+	case kAudioUnitProperty_SetRenderCallback:
+		// Read back so a host can check what it set (the input bus only)
+		if (scope != kAudioUnitScope_Input || element != 0 || *size < sizeof(AURenderCallbackStruct))
+			return kAudioUnitErr_InvalidProperty;
+		*static_cast<AURenderCallbackStruct *>(data) = au->in_cb;
+		*size = sizeof(AURenderCallbackStruct);
 		return noErr;
 
 	case kAudioUnitProperty_PresentPreset: {
@@ -773,9 +843,10 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 	case kAudioUnitProperty_SupportedNumChannels: {
 		if (*size < sizeof(AUChannelInfo))
 			return kAudioUnitErr_InvalidPropertyValue;
-		// No audio input (0 buses), exactly 2 output channels
+		// Two channels each way: the output, and the A/D INPUT the machine samples
+		// from (left is AD1 and right is AD2, as in the VST3 build)
 		auto *out = static_cast<AUChannelInfo *>(data);
-		out[0] = AUChannelInfo{ 0, 2 };
+		out[0] = AUChannelInfo{ 2, 2 };
 		*size = sizeof(AUChannelInfo);
 		return noErr;
 	}
@@ -836,10 +907,27 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 
 		// Nothing to wait for. A host sets this straight after
 		// AudioComponentInstanceNew, while the ROMs are still coming up, and
-		// engine::load_state() parks a restore that arrives that early and lets
-		// boot() apply it when the machine is up. Blocking here instead would
-		// hold the host's thread for as long as a cold boot takes
+		// engine::load_state() keeps a restore that arrives that early and lets the
+		// machine apply it once it is up. Blocking here instead would hold the
+		// host's thread for as long as a cold boot takes
 		au->eng.load_state(raw.data(), raw.size());
+
+		// Put the card back in the slot, if there was one and the file is still
+		// where it was. A preset with no card ejects whatever was there
+		if (dict) {
+			CFStringRef c = static_cast<CFStringRef>(const_cast<void *>(
+			    CFDictionaryGetValue(dict, CFSTR("S-MU2000-SmartMedia"))));
+			if (c && CFGetTypeID(c) == CFStringGetTypeID()) {
+				char path[4096] = {};
+				if (CFStringGetCString(c, path, sizeof(path), kCFStringEncodingUTF8)) {
+					std::string err;
+					if (!au->eng.card_insert(path, err))
+						au->eng.log_line(("SmartMedia を差せない: " + err).c_str());
+				}
+			} else if (!au->eng.card_path().empty()) {
+				au->eng.card_eject();
+			}
+		}
 		return noErr;
 	}
 
@@ -876,10 +964,32 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		return noErr;
 	}
 
+	case kAudioUnitProperty_SetRenderCallback:
+		// The host's way of feeding the A/D INPUT bus. Kept as it stands: it is
+		// called from this unit's own Render, once per block (pull_input)
+		if (scope != kAudioUnitScope_Input || element != 0 || size < sizeof(AURenderCallbackStruct))
+			return kAudioUnitErr_InvalidProperty;
+		au->in_cb = *static_cast<const AURenderCallbackStruct *>(data);
+		au->in_cb_set = au->in_cb.inputProc != nullptr;
+		return noErr;
+
 	case kAudioUnitProperty_StreamFormat: {
 		if (size < sizeof(AudioStreamBasicDescription))
 			return kAudioUnitErr_InvalidPropertyValue;
 		const auto *f = static_cast<const AudioStreamBasicDescription *>(data);
+
+		// The input bus is only checked, not remembered: the engine resamples the
+		// input to the machine's rate using its output rate, which is the rate the
+		// host renders the unit at anyway (the same arrangement the VST3 uses)
+		if (scope == kAudioUnitScope_Input) {
+			if (element != 0)
+				return kAudioUnitErr_InvalidElement;
+			if (f->mFormatID != kAudioFormatLinearPCM ||
+			    (f->mFormatFlags & kAudioFormatFlagIsFloat) == 0 ||
+			    f->mBitsPerChannel != 32 || f->mChannelsPerFrame != 2)
+				return kAudioUnitErr_FormatNotSupported;
+			return noErr;
+		}
 
 		// Double precision is refused: the engine is single precision throughout, so
 		// accepting it and pretending would corrupt the output. Exactly 2 channels

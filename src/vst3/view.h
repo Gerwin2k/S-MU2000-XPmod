@@ -20,7 +20,9 @@
 
 #include "pluginterfaces/gui/iplugview.h"
 
+#include <cstdint>
 #include <memory>
+#include <string>
 
 namespace smu2000 {
 namespace vst3 {
@@ -70,13 +72,34 @@ public:
 	void wheel(int x, int y, int steps);
 	void key(int code, bool down);          // code is a plug_key
 	void focus_lost();
+	void mouse_right(int x, int y);         // the card slot answers a right click
+
+	// ---- SmartMedia (the card slot on the front panel)
+	//
+	// The card itself belongs to the engine (see its card_insert / card_eject).
+	// What is here is what both platforms do the same way: the hit test for the
+	// slot, making an empty image, and writing dirty blocks back on a timer.
+	// The menu that offers those, and the file dialogs behind it, are the
+	// window's -- see plug_window::card_menu
+	bool card_slot_at(int x, int y) const;
+	bool card_ready() const;
+	std::string card_path() const;
+	void card_make(const std::string &path, int mb);   // create an empty image, then insert it
+	void card_insert_path(const std::string &path);
+	void card_eject();
+	void card_tick();                                  // flush every 2 seconds
 
 private:
+	void card_error(const std::string &err);           // log it and tell the user
+
 	struct impl;                            // the panel, and the Win32 backing store
 	std::unique_ptr<impl> m_impl;
 
 	engine &m_engine;
 	plug_window *m_window = nullptr;
+
+	// When the card was last written back, in milliseconds
+	uint64_t m_last_flush = 0;
 	int m_w = 1400, m_h = 360;
 	Steinberg::int32 m_refs = 1;
 	Steinberg::IPlugFrame *m_frame = nullptr;

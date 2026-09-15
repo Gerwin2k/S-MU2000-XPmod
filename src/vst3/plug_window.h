@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <string>
+
 namespace smu2000 {
 namespace vst3 {
 
@@ -59,6 +61,14 @@ public:
 	virtual bool attach(void *parent, int w, int h) = 0;
 	virtual void detach() = 0;
 	virtual void set_size(int w, int h) = 0;
+
+	// The SmartMedia menu, at a point inside the panel. A popup menu and a file
+	// dialog are native on both platforms, so the window builds them and calls
+	// back into the view's card_* methods to act on the choice
+	virtual void card_menu(int x, int y) = 0;
+
+	// Say something went wrong (the panel has nowhere to put it)
+	virtual void alert(const std::string &text) = 0;
 };
 
 // The platform type string this build answers to: kPlatformTypeHWND on
