@@ -412,6 +412,40 @@ install-vst3: $(VST3_BIN)
 	cp -r $(VST3_DIR) "$(VST3_INSTALL)/"
 	@echo "入れた: $(VST3_INSTALL)/S-MU2000.vst3"
 
+# ---- CLAP plug-in (macOS)
+#
+# The same src/clap/plugin.cpp as on Windows, around the VST3 engine and view.
+# On macOS a CLAP is a bundle like the VST3: the binary in Contents/MacOS, found
+# through Contents/Info.plist. Not in `all` yet -- it has not been tried in a
+# macOS host
+CLAP_DIR  := $(BUILD)/S-MU2000.clap
+CLAP_BIN  := $(CLAP_DIR)/Contents/MacOS/S-MU2000
+CLAP_INC  := -I third_party/clap $(VST3_INC)
+CLAP_OBJS := $(BUILD)/clapobj/src/clap/plugin.o $(filter-out $(BUILD)/vst3obj/src/vst3/plugin.o,$(VST3_OBJS))
+
+$(BUILD)/clapobj/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(CLAP_INC) -c -o $@ $<
+
+clap: $(CLAP_BIN)
+
+$(CLAP_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(CLAP_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -bundle -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
+	@mkdir -p $(CLAP_DIR)/Contents/Resources
+	@cp -f LICENSE $(CLAP_DIR)/Contents/Resources/LICENSE.txt
+	@cp -f NOTICE.txt $(CLAP_DIR)/Contents/Resources/NOTICE.txt
+	@cp -f packaging/clap-macos-Info.plist $(CLAP_DIR)/Contents/Info.plist
+	@printf 'BNDL????' > $(CLAP_DIR)/Contents/PkgInfo
+
+CLAP_INSTALL ?= $(HOME)/Library/Audio/Plug-Ins/CLAP
+
+install-clap: $(CLAP_BIN)
+	rm -rf "$(CLAP_INSTALL)/S-MU2000.clap"
+	mkdir -p "$(CLAP_INSTALL)"
+	cp -r $(CLAP_DIR) "$(CLAP_INSTALL)/"
+	@echo "入れた: $(CLAP_INSTALL)/S-MU2000.clap"
+
 # Small tool that pretends to be a host. Same as the Windows one, except that the
 # module is opened with CFBundle and the parent window is probe_host_mac.mm
 $(BUILD)/vst3probe$(EXE): $(BUILD)/vst3obj/src/vst3/probe.o \
