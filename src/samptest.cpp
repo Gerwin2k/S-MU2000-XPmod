@@ -6,7 +6,8 @@
 // 残す。SAMPLE の画面で AUDITION を押し、出てきた音が 440Hz かを見る。
 // firmware が録音に使う SWP30 の働き（サンプリング RAM と波形アクセス 0x7000）が
 // 正しくないと、サンプルが出来ないか、試聴で別の音か無音になる。
-// 続けて A/D パートの音量と、SmartMedia への書き出し・読み戻し（書式化 → SAVE → 別の機械で LOAD）を見る。
+// 続けて A/D パートの音量と、SmartMedia への書き出し・読み戻し（書式化 → SAVE → 別の機械で LOAD）、
+// REC の InputSrc（AD2 / AD1+2）で録るものが変わるかを見る。
 // 食い違えば 1 を返す。
 #include "mu2000.h"
 
@@ -25,6 +26,7 @@ struct rig {
 	mu2000 mu;
 	bool verbose = false;
 	double sine_amp = 0.0;          // A/D INPUT に流す正弦の振幅（0 なら無音）
+	double sine2_amp = -1.0;        // AD2 だけ 660Hz にするときの振幅（負なら AD1 と同じもの）
 	u64 n = 0;
 	std::vector<double> out;        // 集めている間の出力（左右の平均）
 	bool collect = false;
@@ -34,7 +36,8 @@ struct rig {
 		const u64 until = n + u64(ms) * RATE / 1000;
 		for (; n < until; n++) {
 			const s32 v = s32(std::lround(sine_amp * std::sin(2 * PI * 440.0 * double(n) / RATE)));
-			mu.set_audio_input(v, v);
+			const s32 v2 = sine2_amp < 0 ? v : s32(std::lround(sine2_amp * std::sin(2 * PI * 660.0 * double(n) / RATE)));
+			mu.set_audio_input(v, v2);
 			s32 l, r;
 			mu.run_sample(l, r);
 			u8 b;
@@ -272,6 +275,53 @@ int main(int argc, char **argv)
 	const bool same = used > 50000 && differ <= 2;
 	std::printf("%s 読み戻したサンプリング RAM     使っている %zu バイト、違う %zu バイト\n", same ? "合" : "NG", used, differ);
 	if (!same) bad++;
+
+	// REC の InputSrc。AD1 に 440Hz、AD2 に 660Hz を入れ、AD2 と AD1+2 で録る。
+	// firmware は MELI 6/7 からミキサの出力 8 への音量を切り替えるので、録ったものの周波数で分かる
+	auto record_src = [&](int presses, double &f440, double &f660) {
+		g.press(B::exit);
+		g.press(B::select_right);                       // SAVE の隣が REC
+		g.press(B::enter);
+		for (int i = 0; i < 3; i++)
+			g.press(B::select_right);
+		for (int i = 0; i < presses; i++)
+			g.press(B::value_plus);
+		for (int i = 0; i < 3; i++)
+			g.press(B::select_left);
+		const std::vector<u8> before = g.mu.sample_ram();
+		g.sine_amp = 8000;
+		g.sine2_amp = 8000;
+		g.pump(200);
+		g.press(B::enter);
+		g.pump(700);
+		g.press(B::enter);
+		g.sine_amp = 0;
+		g.sine2_amp = -1;
+		g.pump(300);
+		std::vector<double> x;
+		const auto &after = g.mu.sample_ram();
+		for (size_t i = 0; i + 1 < after.size(); i += 2)
+			if (after[i] != before[i] || after[i + 1] != before[i + 1])
+				x.push_back(double(s16(after[i] | (after[i + 1] << 8))) / 32768.0);
+		// 途中の 4000 サンプルで見る（変わらなかったバイトを飛ばしているので、全部を繋ぐと位相が飛ぶ）
+		const std::vector<double> mid = x.size() > 8000 ? std::vector<double>(x.begin() + 4000, x.begin() + 8000) : std::vector<double>();
+		f440 = mid.empty() ? 0 : tone(mid, 440);
+		f660 = mid.empty() ? 0 : tone(mid, 660);
+		g.press(B::exit);                               // Keep Sample? から抜ける（残すかどうかは見ない）
+		g.press(B::exit);
+		return x.size();
+	};
+	{
+		double a440 = 0, a660 = 0, b440 = 0, b660 = 0;
+		const size_t na = record_src(1, a440, a660);    // AD1 → AD2
+		const bool ad2 = a660 > 0.05 && a440 < a660 / 20;
+		std::printf("%s InputSrc=AD2 で AD2 だけ録る    %zu サンプル、440Hz %.4f / 660Hz %.4f\n", ad2 ? "合" : "NG", na, a440, a660);
+		const size_t nb = record_src(1, b440, b660);    // AD2 → AD1+2
+		const bool both = b440 > 0.05 && b660 > 0.05;
+		std::printf("%s InputSrc=AD1+2 で両方を録る     %zu サンプル、440Hz %.4f / 660Hz %.4f\n", both ? "合" : "NG", nb, b440, b660);
+		if (!ad2) bad++;
+		if (!both) bad++;
+	}
 
 	std::printf("サンプリング: 食い違い %d\n", bad);
 	return bad ? 1 : 0;

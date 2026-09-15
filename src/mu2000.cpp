@@ -796,10 +796,6 @@ void mu2000::run_sample(s32 &left, s32 &right)
 
 	run_cycles(cycles);
 
-	// A/D 入力。firmware はスレーブで録音する（どちらのチップにも同じものを入れておく）
-	m_swpm.set_adc_input(m_ad_in[0]);
-	m_swps.set_adc_input(m_ad_in[0]);
-
 	if (m_profile) {
 		QueryPerformanceCounter(&pt1);
 		m_t_cpu += u64(pt1.QuadPart - pt0.QuadPart);
@@ -844,6 +840,7 @@ void mu2000::run_sample(s32 &left, s32 &right)
 		m_swps.set_meli(i, m_swpm.melo(i));
 	// A/D INPUT はスレーブの入力 6（AD1）と 7（AD2）に入る。上のマスタからの線が飛ばしている 2 本で、
 	// A/D パートの音量を上げると firmware がここをミキサに通す（エミュで線を 1 本ずつ試して決めた）。
+	// サンプリングの録音も、この 2 本をミキサの出力 8 に集めて録る（swp30.cpp の sample_step）。
 	// 目盛りは 16bit を 8bit 上げた 24bit にしている（実機の入力の大きさとはまだ突き合わせていない）
 	m_swps.set_meli(6, m_ad_in[0] * 256);
 	m_swps.set_meli(7, m_ad_in[1] * 256);

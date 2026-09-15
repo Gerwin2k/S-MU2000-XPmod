@@ -2974,6 +2974,7 @@ void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 		for(int i = 0; i != n; i++)
 			mixer_out[t[i].dst] += (input - ((input * t[i].frac) >> 5)) >> t[i].shift;   // mixer_att と同じ
 	}
+	m_rec_bus = mixer_out[0x10];   // S-MU2000: 録音はミキサの出力 8 の左（sample_step）
 	std::copy(mixer_out.begin() + 0x00, mixer_out.begin() + 0x10, m_melo.begin());
 	std::copy(mixer_out.begin() + 0x10, mixer_out.begin() + 0x20, m_meg->m_m.begin() + 0x20);
 }
@@ -4091,23 +4092,6 @@ void swp30_device::sample_step()
 {
 	m_meg->flush_writes();
 
-	// S-MU2000: サンプリングの録音。firmware は録音を始めるとき、スレーブに番地（サンプリング RAM の先頭
-	// 0x1000000）と長さ（語数）を書いてから、波形アクセスに 0x7000 を書く。あとは 0x30f（書いた位置の下 16bit）と
-	// 0x10f の bit 14（書き終わり）を見続け、止めるときにアクセスを 0 に戻す。
-	// 1 サンプルごとに A/D 入力を 16bit で書く。32bit の語 1 つに 2 サンプル（下の 16bit が先）で、
-	// 声が 16bit のサンプルを読むとき（streaming_block::read_16）と同じ並び
-	if(m_wave_access == 0x7000 && m_wave_size) {
-		const u16 v = u16(std::clamp<s32>(m_adc_in, -0x8000, 0x7fff));
-		u32 w = m_wave_cache.read_dword(m_wave_adr);
-		w = (m_rec_pos & 1) ? ((w & 0x0000ffff) | (u32(v) << 16)) : ((w & 0xffff0000) | v);
-		m_wave_cache.write_dword(m_wave_adr, w);
-		m_rec_pos++;
-		if(!(m_rec_pos & 1)) {
-			m_wave_adr++;
-			m_wave_size--;
-		}
-	}
-
 	// S-MU2000: MEG の m レジスタ 0x20-0x3f を毎サンプル書き出す（--dump-dac）。
 	// **混ぜる前**なので、ここに出るのは MEG が 384 段回し終わった直後の姿、
 	// つまりエフェクトの出口。次の行の mixer_step が 0x20-0x2f を
@@ -4150,6 +4134,26 @@ void swp30_device::sample_step()
 	adc_step();
 	mixer_step(samples_per_chan);
 	m_meg->lfo_step();
+
+	// S-MU2000: サンプリングの録音。firmware は録音を始めるとき、スレーブに番地（サンプリング RAM の先頭
+	// 0x1000000）と長さ（語数）を書いてから、波形アクセスに 0x7000 を書く。あとは 0x30f（書いた位置の下 16bit）と
+	// 0x10f の bit 14（書き終わり）を見続け、止めるときにアクセスを 0 に戻す。
+	// 1 サンプルごとに、ミキサの出力 8 の左（m_rec_bus）を 16bit で書く。32bit の語 1 つに 2 サンプル（下の 16bit が先）で、
+	// 声が 16bit のサンプルを読むとき（streaming_block::read_16）と同じ並び。
+	// 出力 8 に繋がっているのは A/D INPUT の MELI 6（AD1）と 7（AD2）だけで、REC の InputSrc（AD1 / AD2 / AD1+2）は
+	// その 2 本の音量（0x5b8/0x5b9、0x5f8/0x5f9 に 0x00ff か 0xffff）を切り替えている（firmware 2.01 の 0x13af14）。
+	// MELI は 16bit を 8bit 上げて入れているので、8bit 下げて戻す
+	if(m_wave_access == 0x7000 && m_wave_size) {
+		const u16 v = u16(std::clamp<s32>(m_rec_bus >> 8, -0x8000, 0x7fff));
+		u32 w = m_wave_cache.read_dword(m_wave_adr);
+		w = (m_rec_pos & 1) ? ((w & 0x0000ffff) | (u32(v) << 16)) : ((w & 0xffff0000) | v);
+		m_wave_cache.write_dword(m_wave_adr, w);
+		m_rec_pos++;
+		if(!(m_rec_pos & 1)) {
+			m_wave_adr++;
+			m_wave_size--;
+		}
+	}
 
 	m_meg->m_sample_counter ++;
 }
