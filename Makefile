@@ -193,7 +193,7 @@ IMGUI_FLAGS += -DIMGUI_IMPL_WIN32_DISABLE_GAMEPAD
 IMGUI_SRCS := $(IMGUI_CORE) \
               $(IMGUI_DIR)/backends/imgui_impl_win32.cpp \
               $(IMGUI_DIR)/backends/imgui_impl_dx11.cpp
-PC_SRCS    := src/ui/pc_editor.cpp src/ui/pc_window.cpp src/ui/xg_ui.cpp src/ui/overview.cpp src/ui/fx_editor.cpp src/ui/fx_help.cpp
+PC_SRCS    := src/ui/pc_editor.cpp src/ui/pc_window.cpp src/ui/xg_ui.cpp src/ui/overview.cpp src/ui/fx_editor.cpp src/ui/fx_help.cpp src/ui/part_shapes.cpp
 PC_OBJS    := $(IMGUI_SRCS:%.cpp=$(BUILD)/imgui/%.o) $(PC_SRCS:%.cpp=$(BUILD)/imgui/%.o)
 
 # gui は実機のフロントパネル風の画面を出す
