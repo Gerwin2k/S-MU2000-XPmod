@@ -84,6 +84,8 @@ make
 build/live.exe   <rom ディレクトリ> [--midi 番号]     MIDI 入力を受けて鳴らす
 build/live.exe   --list                              MIDI 入力の一覧
 build/render.exe <rom ディレクトリ> <MIDI> <出力 wav>  ファイルを WAV に
+                 [--reset gm|gs|xg]                 リセットを明示して先頭に入れる
+                 [--fast-midi]                      firmware が読める速さで MIDI を渡す
 build/midisend.exe <MIDI ファイル> [--port 番号]      MIDI 出力へ実時間で流す
 build/boot.exe   <rom ディレクトリ> [サイクル数]       起動の確認
 build/gui.exe    <rom ディレクトリ> [--midi 番号]      実機パネル風の画面で鳴らす

@@ -95,6 +95,32 @@ const char *reset_name(const std::vector<u8> &bytes)
 	return nullptr;
 }
 
+std::vector<u8> reset_bytes(const char *mode)
+{
+	if (!std::strcmp(mode, "gm"))
+		return { 0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7 };
+	if (!std::strcmp(mode, "xg"))
+		return { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00, 0xf7 };
+	return { 0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7 };
+}
+
+void insert_reset(std::vector<smf::event> &events, const char *mode)
+{
+	double first = events.empty() ? 0.05 : events.front().time;
+	for (const smf::event &event : events) {
+		if (!(event.bytes.size() == 2 && event.bytes[0] == 0xf5)) {
+			first = event.time;
+			break;
+		}
+	}
+	if (first < 0.05) {
+		const double shift = 0.05 - first;
+		for (smf::event &event : events)
+			event.time += shift;
+	}
+	events.insert(events.begin(), { 0.0, reset_bytes(mode), 0 });
+}
+
 const char *event_name(const std::vector<u8> &bytes)
 {
 	if (bytes.empty()) return "empty";
@@ -126,13 +152,15 @@ int main(int argc, char **argv)
 {
 	if (argc < 4) {
 		std::fprintf(stderr,
-			"使い方: render <rom ディレクトリ> <MIDI ファイル> <出力 wav> [秒数] [--trace-midi]\n");
+			"使い方: render <rom ディレクトリ> <MIDI ファイル> <出力 wav> [秒数] [--trace-midi] [--reset gm|gs|xg] [--fast-midi]\n");
 		return 1;
 	}
 	const std::string dir = argv[1], mid = argv[2], wav = argv[3];
 	double seconds = 0.0;
 	bool duration_given = false;
 	bool trace_midi = false;
+	bool fast_midi = false;
+	const char *forced_reset = nullptr;
 	const char *swptrace = nullptr;
 	bool single = false;   // スレーブを別スレッドにしない
 	double boot = -1.0;     // 負なら firmware が受信を有効にするまで待つ
@@ -170,6 +198,20 @@ int main(int argc, char **argv)
 			card_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--trace-midi"))
 			trace_midi = true;
+		else if (!std::strcmp(argv[i], "--fast-midi"))
+			fast_midi = true;
+		else if (!std::strcmp(argv[i], "--reset")) {
+			if (i + 1 >= argc) {
+				std::fprintf(stderr, "--reset requires gm, gs, or xg\n");
+				return 1;
+			}
+			forced_reset = argv[++i];
+			if (std::strcmp(forced_reset, "gm") && std::strcmp(forced_reset, "gs") &&
+			    std::strcmp(forced_reset, "xg")) {
+				std::fprintf(stderr, "unknown reset mode: %s (expected gm, gs, or xg)\n", forced_reset);
+				return 1;
+			}
+		}
 		else if (!std::strcmp(argv[i], "-v"))
 			smu2000::g_verbose = true;
 		else {
@@ -181,6 +223,13 @@ int main(int argc, char **argv)
 	std::vector<smf::event> events;
 	std::string err;
 	if (!smf::load(mid, events, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+	if (forced_reset) {
+		events.erase(std::remove_if(events.begin(), events.end(), [](const smf::event &event) {
+			return reset_name(event.bytes) != nullptr;
+		}), events.end());
+		insert_reset(events, forced_reset);
+		std::printf("MIDI reset forced: %s\n", reset_name(events.front().bytes));
+	}
 	std::printf("MIDI: %zu イベント、最後は %.2f 秒\n",
 	            events.size(), events.empty() ? 0.0 : events.back().time);
 
@@ -220,6 +269,7 @@ int main(int argc, char **argv)
 	}
 
 	mu.set_threaded(!single);
+	mu.set_fast_midi(fast_midi);
 	mu.reset();
 
 	const u32 rate = 44100;
