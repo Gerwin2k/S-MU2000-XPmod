@@ -51,6 +51,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <commdlg.h>
 #include <shellapi.h>
 
 namespace {

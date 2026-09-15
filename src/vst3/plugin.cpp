@@ -40,6 +40,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include "compat/platform.h"      // windows.h (lean) for QueryPerformanceCounter
+#endif
+
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>      // CFBundleRef, the host's handle
 #include <mach/mach_time.h>                     // mach_absolute_time
