@@ -730,6 +730,15 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		const char *e = std::getenv("SMU2000_SH2_LAZYPC");
 		return !(e && e[0] == '0');
 	}();
+	static const bool slot_native = [] {
+		const char *e = std::getenv("SMU2000_SH2_SLOTNATIVE");
+		return !(e && e[0] == '0');
+	}();
+	// Same as the arm64 side: these two are functions with a function-local
+	// static, so they are read once per compile rather than inside the loop,
+	// which would ask for them two or three times per instruction compiled
+	const bool trace       = jit_trace_on();
+	const bool emit_native = native_enabled();
 	bool pc_stale = false;              // メモリの pc が古い
 	u32 stale_pc = 0;                   // そのとき正しい pc
 	std::vector<std::pair<size_t, u32>> stale_rets;   // pc を書いてから ret へ行く出口
@@ -745,7 +754,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		const u16 op = cpu.m_decrypted_program->read_word(at);
 		const kind k = classify(op);
 
-		if (jit_trace_on()) {
+		if (trace) {
 			if (pc_stale) { a.store32i(S_pc, stale_pc); pc_stale = false; }
 			a.mov64(ARG0, RBX);
 			a.imm32(ARG1, at);
@@ -763,7 +772,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 			a.patch(no_delay);
 			a.store32i(S_pc, at + 2);
 			a.patch(done);
-		} else if (!lazy_pc || jit_trace_on())
+		} else if (!lazy_pc || trace)
 			a.store32i(S_pc, at + 2);
 
 		// 2. 実行する
@@ -771,22 +780,18 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		const size_t op_begin = a.code.size();
 		// 遅延スロットの命令も、pc を使わない普通の命令なら機械語で書く（解釈実行でも pc は見ない）。
 		// pc を使うのは MOV.W/MOV.L @(disp,PC) と MOVA だけ（分岐はスロットに来ない）
-		static const bool slot_native = [] {
-			const char *e = std::getenv("SMU2000_SH2_SLOTNATIVE");
-			return !(e && e[0] == '0');
-		}();
 		const bool pc_rel = (op >> 12) == 0x9 || (op >> 12) == 0xd || (op >> 8) == 0xc7;
-		if (native_enabled() && (!slot || (slot_native && k == kind::normal && !pc_rel)))
+		if (emit_native && (!slot || (slot_native && k == kind::normal && !pc_rel)))
 			r = native(op, at);
 		if (r == none) {
-			if (!slot && lazy_pc && !jit_trace_on())
+			if (!slot && lazy_pc && !trace)
 				a.store32i(S_pc, at + 2);
 			a.mov64(ARG0, RBX);
 			a.imm32(ARG1, op);
 			call(reinterpret_cast<void *>(&sh2_device::jit_exec));
 			r = k == kind::delayed ? delayed : k == kind::ends ? ends : memop;
 			pc_stale = false;
-		} else if (!slot && lazy_pc && !jit_trace_on()) {
+		} else if (!slot && lazy_pc && !trace) {
 			if (r == pure) {
 				pc_stale = true;
 				stale_pc = at + 2;
@@ -1530,6 +1535,18 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		const char *e = std::getenv("SMU2000_SH2_LAZYPC");
 		return !(e && e[0] == '0');
 	}();
+	static const bool slot_native = [] {
+		const char *e = std::getenv("SMU2000_SH2_SLOTNATIVE");
+		return !(e && e[0] == '0');
+	}();
+	// The two that are functions rather than flags of this function are read
+	// once here instead of inside the loop below. Each read is a call to a
+	// function with a function-local static (a guard check on every call), and
+	// the loop asks for them two or three times per instruction compiled --
+	// which is once per compiled block, not once per instruction executed, but
+	// it is still the compile path that dominates boot
+	const bool trace       = jit_trace_on();
+	const bool emit_native = native_enabled();
 	bool pc_stale = false;              // the pc in the state is behind
 	u32 stale_pc = 0;                   // where it should point
 	std::vector<std::pair<size_t, u32>> stale_rets;   // exits that write it first
@@ -1548,7 +1565,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		const u16 op = cpu.m_decrypted_program->read_word(at);
 		const kind k = classify(op);
 
-		if (jit_trace_on()) {
+		if (trace) {
 			if (pc_stale) {
 				a.mov_imm32(W16, stale_pc);
 				a.str_w_big(W16, X20, S_pc);
@@ -1571,7 +1588,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 			a.mov_imm32(W16, at + 2);
 			a.str_w_big(W16, X20, S_pc);
 			a.patch(done);
-		} else if (!lazy_pc || jit_trace_on()) {
+		} else if (!lazy_pc || trace) {
 			a.mov_imm32(W16, at + 2);
 			a.str_w_big(W16, X20, S_pc);
 		}
@@ -1582,15 +1599,11 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		// A delay-slot instruction can be compiled as well, as long as it does not
 		// read the pc: only MOV.W/MOV.L @(disp,PC) and MOVA do, and no branch lands
 		// in a slot
-		static const bool slot_native = [] {
-			const char *e = std::getenv("SMU2000_SH2_SLOTNATIVE");
-			return !(e && e[0] == '0');
-		}();
 		const bool pc_rel = (op >> 12) == 0x9 || (op >> 12) == 0xd || (op >> 8) == 0xc7;
-		if (native_enabled() && (!slot || (slot_native && k == kind::normal && !pc_rel)))
+		if (emit_native && (!slot || (slot_native && k == kind::normal && !pc_rel)))
 			r = native(op, at);
 		if (r == none) {
-			if (!slot && lazy_pc && !jit_trace_on()) {
+			if (!slot && lazy_pc && !trace) {
 				a.mov_imm32(W16, at + 2);
 				a.str_w_big(W16, X20, S_pc);
 			}
@@ -1599,7 +1612,7 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 			call(reinterpret_cast<void *>(&sh2_device::jit_exec));
 			r = k == kind::delayed ? delayed : k == kind::ends ? ends : memop;
 			pc_stale = false;
-		} else if (!slot && lazy_pc && !jit_trace_on()) {
+		} else if (!slot && lazy_pc && !trace) {
 			if (r == pure) {
 				pc_stale = true;
 				stale_pc = at + 2;
@@ -1678,19 +1691,6 @@ sh2_device::jit::code_t sh2_device::jit::compile(sh2_device &cpu, u32 pc)
 		// 捨てたので、呼び出し元の置き場も消えている。次の呼び出しで訳し直す
 		return nullptr;
 	}
-#if defined(__aarch64__)
-	// Temporary aid while porting: SMU2000_JIT_DUMP=<hex pc> lists the words of
-	// the blocks compiled around that address (tools/jit_dump.py decodes them).
-	if (const char *e = std::getenv("SMU2000_JIT_DUMP")) {
-		const u32 lo = u32(std::strtoul(e, nullptr, 16));
-		if (pc >= lo && pc < lo + 0x40) {
-			std::fprintf(stderr, "blk %06X %zu\n", pc, a.code.size());
-			for (u32 w : a.code)
-				std::fprintf(stderr, " %08X", w);
-			std::fprintf(stderr, "\n");
-		}
-	}
-#endif
 	u8 *dst = static_cast<u8 *>(buf) + used;
 	exec_mem::copy_code(dst, a.code.data(), a.code.size() * 4);
 	used += a.code.size() * 4;

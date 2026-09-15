@@ -266,6 +266,43 @@ void swp30_device::meg_jit_delete(meg_jit *j)
 	delete j;
 }
 
+namespace {
+
+// ---- The tuning switches, read once at startup
+//
+// File scope on purpose rather than function-local statics: a function-local
+// static is only *initialised* once, but every read of it still costs a guard
+// check, and meg_jit_run() is called once per audio sample (44100 times a
+// second per MEG program). build() is only reached per program compiled, but it
+// is the same idea
+const bool g_meg_bake = [] {
+	const char *e = std::getenv("SMU2000_MEG_BAKE");
+	return !(e && e[0] == '0');
+}();
+const bool g_meg_check = [] {
+	const char *e = std::getenv("SMU2000_MEG_JIT_CHECK");
+	return e && e[0] != '0';
+}();
+
+// How many op codes of the block to emit and to step, for bisecting a
+// divergence against the interpreter (SMU2000_MEG_JIT_UPTO). It only means
+// anything together with g_meg_check, which runs the interpreter for the same
+// number of steps, so without that switch this is the whole block: a stray
+// variable must not be able to silently truncate a compiled program
+constexpr u32 MEG_OPS = 0x180;
+u32 meg_jit_upto()
+{
+	static const u32 upto = [] {
+		if (!g_meg_check)
+			return MEG_OPS;
+		const char *e = std::getenv("SMU2000_MEG_JIT_UPTO");
+		return e ? u32(std::atoi(e)) : MEG_OPS;
+	}();
+	return upto;
+}
+
+} // namespace
+
 bool swp30_device::meg_jit_enabled()
 {
 #if SMU2000_MEG_JIT
@@ -313,13 +350,8 @@ bool swp30_device::meg_jit_run()
 	if (!j || !j->gen.fn)
 		return false;
 
-	static const bool bake_on = [] {
-		const char *e = std::getenv("SMU2000_MEG_BAKE");
-		return !(e && e[0] == '0');
-	}();
-
 	meg_jit::code *c = &j->gen;
-	if (bake_on) {
+	if (g_meg_bake) {
 		const u32 cg = m_meg_const_gen;
 		if (cg != j->seen_const_gen) {
 			j->seen_const_gen = cg;
@@ -342,11 +374,7 @@ bool swp30_device::meg_jit_run()
 	if (c->d3 != m_meg->m_delay_3 || c->d2 != m_meg->m_delay_2)
 		return false;
 
-	static const bool check = [] {
-		const char *e = std::getenv("SMU2000_MEG_JIT_CHECK");
-		return e && e[0] != '0';
-	}();
-	if (check) {
+	if (g_meg_check) {
 		// DEBUG: run the block through the JIT, then through the interpreter from
 		// the same starting state, and report the first field that differs.
 		static int shown = 0;
@@ -364,9 +392,8 @@ bool swp30_device::meg_jit_run()
 		m_rand_seed = seed0;
 		m_meg_flag_n = fn0;
 		m_meg_flag_z = fz0;
-		if (const char *e = std::getenv("SMU2000_MEG_JIT_UPTO")) {
-			const int upto = std::atoi(e);
-			for (int i = 0; i != upto; i++)
+		if (const u32 upto = meg_jit_upto(); upto != MEG_OPS) {
+			for (u32 i = 0; i != upto; i++)
 				m_meg->step();
 		} else
 			m_meg->run_program(m_meg_ops.data());
@@ -1208,12 +1235,15 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		return false;
 
 	cd.fn = nullptr;
-	// Programs with jumps (LO-FI and DYNA types) fall back to the interpreter:
-	// the emitted block would have to read and write the delay ring on every op.
-	// The output is bit-identical either way
+	// Programs that jump (LO-FI and DYNA types) are compiled too, by reading and
+	// writing the delay ring on every op rather than committing three ops later,
+	// exactly as the x86-64 backend above does. An instruction that was jumped
+	// over clears the write it would have left in the ring and stores only its t
+	// value (meg_state::run_program does the same)
+	bool branchy = false;
 	for (u32 pc = 0; pc != 0x180; pc++)
 		if (ops[pc].jump)
-			return false;
+			branchy = true;
 	if (swp.m_reverb_ram.size() < 0x40000)
 		return false;
 
@@ -1253,6 +1283,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	const s32 o_ix2_value  = off(&swp, swp.m_meg_ix2_value.data());
 	const s32 o_ix2_act    = off(&swp, swp.m_meg_ix2_act.data());
 	const s32 o_ram_index2 = off(&swp, &swp.m_meg_ram_index2);
+	const s32 o_skip     = off(&swp, &swp.m_meg_jit_skip);
 
 	if (sizeof(ms.m_mw_reg[0]) != 1 || sizeof(ms.m_index_active[0]) != 1 || sizeof(ms.m_memw_active[0]) != 1 ||
 	    sizeof(swp.m_meg_flag_n) != 1 || sizeof(ms.m_t_value[0]) != 2 || sizeof(ms.m_const[0]) != 2 ||
@@ -1310,6 +1341,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	a.mov_x(RAM, X2);
 	ldx(P, MS, o_p);
 	ldw(SC, MS, o_sample);
+	if (branchy)
+		stw(WZR, SWP, o_skip);
 
 	// pack p into 24 bits (meg_state::meg_pack24). Input A, output A
 	const auto pack24 = [&]() {
@@ -1355,15 +1388,14 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		pack24();
 	};
 
-	// DEBUG: stop the block early, to bisect against the interpreter
-	u32 upto = 0x180;
-	if (const char *e = std::getenv("SMU2000_MEG_JIT_UPTO"))
-		upto = u32(std::atoi(e));
+	// DEBUG: stop the block early, to bisect against the interpreter. Read once
+	// (see meg_jit_upto); ignored unless the check above is on
+	const u32 upto = meg_jit_upto();
 	for (u32 k = 0; k != upto; k++) {
 		const meg_state::op &o = ops[k];
 
 		// ---- delayed writes, applied ----
-		if (k < 3) {
+		if (k < 3 || branchy) {
 			const u32 s = slot3(k);
 			// m: the slot's register number is the index, and it may be 0 (= none)
 			ldb(A, MS, o_mw_reg + s);
@@ -1415,7 +1447,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				stw(C, SWP, o_ram_index2);
 			}
 		}
-		if (k < 2) {
+		if (k < 2 || branchy) {
 			const u32 s = slot2(k);
 			ldb(A, MS, o_memw_act + s);
 			a.cmp_reg(A, WZR);
@@ -1443,6 +1475,40 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				stw(C, MS, o_ram_read);
 			}
 		}
+
+		// ---- branch, and the instruction it jumped over ----
+		size_t skip_jump = 0, jump_done = 0;
+		if (branchy) {
+			ldw(A, SWP, o_skip);
+			a.mov_imm32(C, k);
+			a.cmp_reg(A, C);
+			skip_jump = a.b_cond(HI);            // the skip target is past this instruction
+			if (o.jump) {
+				// meg_cond in machine code: 1 when the condition holds. N is the
+				// sign flag, Z the zero flag; bit 2 of cond chooses which, and
+				// bit 1 ORs Z in
+				size_t no_jump = 0;
+				if (o.cond & 8) {
+					ldb(A, SWP, o_flag_n);
+					if (!(o.cond & 4))
+						a.eor_imm(A, A, 1);
+					if (o.cond & 2) {
+						ldb(C, SWP, o_flag_z);
+						a.orr_reg(A, A, C);
+					}
+					a.cmp_reg(A, WZR);
+					no_jump = a.b_cond(EQ);
+				}
+				if (o.target > k) {
+					a.mov_imm32(C, o.target);
+					stw(C, SWP, o_skip);
+				}
+				if (no_jump)
+					a.patch(no_jump);
+				jump_done = a.b();               // the jump instruction does the same clean-up
+			}
+		}
+		if (!(branchy && o.jump)) {
 
 		// ---- ALU ----
 		if (o.alu) {
@@ -1577,7 +1643,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			}
 			stw(A, MS, o_mw_value + 4 * slot3(k));
 		}
-		if (k >= 0x17d) {
+		if (k >= 0x17d || branchy) {
 			a.mov_imm32(C, o.dm);
 			stb(C, MS, o_mw_reg + slot3(k));
 		}
@@ -1590,7 +1656,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				p_packed(!o.no_noise);
 			stw(A, MS, o_rw_value + 4 * slot3(k));
 		}
-		if (k >= 0x17d) {
+		if (k >= 0x17d || branchy) {
 			a.mov_imm32(C, o.dr);
 			stb(C, MS, o_rw_reg + slot3(k));
 		}
@@ -1601,7 +1667,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			a.asr_imm_x(A, A, 15);
 			stw(A, MS, o_memw_val + 4 * slot2(k));
 		}
-		if (k >= 0x17e) {
+		if (k >= 0x17e || branchy) {
 			a.mov_imm32(C, o.memw ? 1 : 0);
 			stb(C, MS, o_memw_act + slot2(k));
 		}
@@ -1619,7 +1685,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			a.asr_imm_x(A, A, 15 + 8);
 			stw(A, SWP, o_ix2_value + 4 * slot3(k));
 		}
-		if (k >= 0x17d) {
+		if (k >= 0x17d || branchy) {
 			a.mov_imm32(C, o.index ? 1 : 0);
 			stb(C, MS, o_ix_act + slot3(k));
 			a.mov_imm32(C, o.index2 ? 1 : 0);
@@ -1647,10 +1713,6 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.mov_imm64(C, 0x7fff);
 				a.cmp_x(A, C);
 				a.csel_x(A, C, A, GT);
-			}
-			if (o.mem_use_index2) {
-				ldw(C, SWP, o_ram_index2);
-				a.add_reg(A, A, C);
 			}
 			sth(A, MS, o_t_value + 2 * slot2(k));
 		}
@@ -1710,9 +1772,44 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		}
 		if (table_done)
 			a.patch(table_done);
-		if (k >= 0x17e) {
+		if (k >= 0x17e || branchy) {
 			a.mov_imm32(C, (o.memop == 2 || o.memop == 3) ? 1 : 0);
 			stb(C, MS, o_memr_act + slot2(k));
+		}
+		}   // !(branchy && o.jump)
+
+		if (branchy) {
+			const size_t normal_done = o.jump ? 0 : a.b();
+			a.patch(skip_jump);
+			if (jump_done)
+				a.patch(jump_done);
+			// the instruction that was jumped over (and the jump itself): drop the
+			// write it would have left in the ring and store only its t value
+			if (o.jump && o.t_write) {
+				if (o.t_from_p)
+					ldh(A, MS, o_t_value + 2 * slot2(k));
+				else
+					ldh(A, MS, o_const + 2 * s32(k));
+				sth(A, MS, o_t + 2 * o.t);
+			}
+			stb(WZR, MS, o_mw_reg + slot3(k));
+			stb(WZR, MS, o_rw_reg + slot3(k));
+			stb(WZR, MS, o_memw_act + slot2(k));
+			stb(WZR, MS, o_ix_act + slot3(k));
+			stb(WZR, SWP, o_ix2_act + slot3(k));
+			if (need_tval[k]) {
+				a.mov_x(A, P);
+				a.asr_imm_x(A, A, 15 + 8);
+				a.mov_imm64(C, u64(s64(-0x8000)));
+				a.cmp_x(A, C);
+				a.csel_x(A, C, A, LT);
+				a.mov_imm64(C, 0x7fff);
+				a.cmp_x(A, C);
+				a.csel_x(A, C, A, GT);
+				sth(A, MS, o_t_value + 2 * slot2(k));
+			}
+			if (normal_done)
+				a.patch(normal_done);
 		}
 	}
 
