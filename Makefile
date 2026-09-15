@@ -304,7 +304,8 @@ $(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(MAC_IO_OBJS) $(BUILD)/src/l
 # same translation unit.
 MAC_GUI_SRCS := src/ui/panel.cpp src/ui/editor.cpp src/ui/effects.cpp \
                 src/ui/png.cpp src/ui/layout.cpp src/ui/svg.cpp src/ui/player.cpp \
-                src/ui/audio_out_mac.cpp src/ui/midi_in_mac.cpp src/ui/midi_out_mac.cpp \
+                src/ui/audio_out_mac.cpp src/ui/audio_in_mac.cpp \
+                src/ui/midi_in_mac.cpp src/ui/midi_out_mac.cpp \
                 src/xg/model.cpp \
                 src/compat/gdi_mac.cpp src/ui/window_mac.mm src/gui_mac.cpp
 MAC_GUI_OBJS := $(MAC_GUI_SRCS:%.cpp=$(BUILD)/%.o)

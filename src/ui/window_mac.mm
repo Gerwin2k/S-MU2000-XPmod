@@ -445,6 +445,56 @@ std::string open_midi_file_panel()
 	return path ? std::string(path) : std::string();
 }
 
+std::string open_file_panel(const char *title, const char *ext)
+{
+	NSOpenPanel *panel = [NSOpenPanel openPanel];
+	[panel setCanChooseFiles:YES];
+	[panel setCanChooseDirectories:NO];
+	[panel setAllowsMultipleSelection:NO];
+	if (title && *title)
+		[panel setMessage:[NSString stringWithUTF8String:title]];
+	if (ext && *ext) {
+		// setAllowedContentTypes is macOS 11; asking for the type outside the
+		// guard would be calling it on a system that has no such selector
+		if (@available(macOS 11.0, *)) {
+			UTType *type = [UTType typeWithFilenameExtension:[NSString stringWithUTF8String:ext]];
+			if (type)
+				[panel setAllowedContentTypes:@[ type ]];
+		}
+	}
+	if ([panel runModal] != NSModalResponseOK)
+		return {};
+	NSURL *url = [[panel URLs] firstObject];
+	if (!url)
+		return {};
+	const char *path = [[url path] UTF8String];
+	return path ? std::string(path) : std::string();
+}
+
+std::string save_file_panel(const char *title, const char *default_name, const char *ext)
+{
+	NSSavePanel *panel = [NSSavePanel savePanel];
+	if (title && *title)
+		[panel setMessage:[NSString stringWithUTF8String:title]];
+	if (default_name && *default_name)
+		[panel setNameFieldStringValue:[NSString stringWithUTF8String:default_name]];
+	if (ext && *ext) {
+		// macOS 11, same as open_file_panel above
+		if (@available(macOS 11.0, *)) {
+			UTType *type = [UTType typeWithFilenameExtension:[NSString stringWithUTF8String:ext]];
+			if (type)
+				[panel setAllowedContentTypes:@[ type ]];
+		}
+	}
+	if ([panel runModal] != NSModalResponseOK)
+		return {};
+	NSURL *url = [panel URL];
+	if (!url)
+		return {};
+	const char *path = [[url path] UTF8String];
+	return path ? std::string(path) : std::string();
+}
+
 bool confirm_modal(const char *title, const char *message, const char *ok_label)
 {
 	@autoreleasepool {
@@ -457,6 +507,18 @@ bool confirm_modal(const char *title, const char *message, const char *ok_label)
 		[alert addButtonWithTitle:@"キャンセル"];
 		[alert addButtonWithTitle:[NSString stringWithUTF8String:ok_label]];
 		return [alert runModal] == NSAlertSecondButtonReturn;
+	}
+}
+
+void alert_modal(const char *title, const char *message)
+{
+	@autoreleasepool {
+		NSAlert *alert = [[NSAlert alloc] init];
+		[alert setAlertStyle:NSAlertStyleInformational];
+		[alert setMessageText:[NSString stringWithUTF8String:title]];
+		[alert setInformativeText:[NSString stringWithUTF8String:message]];
+		[alert addButtonWithTitle:@"OK"];
+		[alert runModal];
 	}
 }
 

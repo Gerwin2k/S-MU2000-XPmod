@@ -230,9 +230,13 @@ enum : UINT {
 	ID_OUT_NONE = 1900, ID_OUT_BASE = 1901,
 	ID_OUTB_NONE = 2400, ID_OUTB_BASE = 2401,
 	ID_OUTMU_NONE = 3100, ID_OUTMU_BASE = 3101,
-	ID_AIN_NONE = 3200, ID_AIN_BASE = 3201,
-	ID_CARD_NEW16 = 3300, ID_CARD_NEW32, ID_CARD_NEW64, ID_CARD_NEW128,
-	ID_CARD_OPEN = 3310, ID_CARD_EJECT = 3311,
+	// A/D INPUT and SmartMedia. Kept out of the ID_BASE..ID_BASE+255 ranges
+	// above, or the dispatch in the command handler takes them for that port:
+	// both used to sit inside ID_OUTMU_BASE's 256, so picking a recording
+	// device (or a card item) selected MIDI OUT instead
+	ID_AIN_NONE = 3400, ID_AIN_BASE = 3401,
+	ID_CARD_NEW16 = 3700, ID_CARD_NEW32, ID_CARD_NEW64, ID_CARD_NEW128,
+	ID_CARD_OPEN = 3710, ID_CARD_EJECT = 3711,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901, ID_PORTS34_FOLD = 2902, ID_PORTS34_DROP = 2903,
 	ID_FACTORY = 3000,
 	ID_PC_EDITOR = 3001,

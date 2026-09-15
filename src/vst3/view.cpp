@@ -333,11 +333,20 @@ void plug_view::card_make(const std::string &path, int mb)
 	// still has to format it (UTIL -> CARD -> Format) before it stores anything
 	std::string err;
 	smartmedia card;
-	if (!card.create(u32(mb) << 20) || !card.save(path, err)) {
+	if (!card.create(u32(mb)) || !card.save(path, err)) {
 		card_error(err.empty() ? "SmartMedia を作れない" : err);
 		return;
 	}
-	card_insert_path(path);
+	if (!m_engine.card_insert(path, err)) {
+		card_error(err);
+		return;
+	}
+	// A fresh card only carries the physical layout, so it has to be formatted
+	// on the machine before it holds anything. gui.cpp says the same thing when
+	// one is made there
+	if (m_window)
+		m_window->alert("空の SmartMedia を差しました。\n"
+		                "使う前に、本体の UTIL → CARD → Format で書式化してください。");
 }
 
 void plug_view::card_insert_path(const std::string &path)

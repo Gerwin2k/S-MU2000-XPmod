@@ -88,10 +88,23 @@ public:
 // rather than reaching for AppKit itself
 std::string open_midi_file_panel();
 
+// The same for a file of some other kind. ext is a filename extension (no dot)
+// and is only a hint: the panel lets anything through, because the files the
+// machine writes are not registered with the system
+std::string open_file_panel(const char *title, const char *ext);
+
+// Asks where to save a new file of some other kind. "" if it was cancelled
+std::string save_file_panel(const char *title, const char *default_name, const char *ext);
+
 // Asks a yes/no question and returns true only when the user accepts. Used
 // before the settings are thrown away, so the buttons are ordered for the
 // answer that changes nothing: Cancel is the default, and Return picks it
 bool confirm_modal(const char *title, const char *message, const char *ok_label);
+
+// Tells the user something they only have to acknowledge. confirm_modal's
+// counterpart for a message with no choice in it (inserting a blank
+// SmartMedia, for instance)
+void alert_modal(const char *title, const char *message);
 
 // Makes the window and pumps events until it closes. Blocks
 void run_window(mac_app &app, const char *title, int w, int h);

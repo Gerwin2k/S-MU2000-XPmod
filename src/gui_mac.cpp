@@ -32,6 +32,7 @@
 #include "compat/paths.h"
 #include "mu2000.h"
 #include "nvram.h"
+#include "smartmedia.h"
 #include "smf.h"
 #include "ui/audio_out.h"
 #include "ui/bridge.h"
@@ -66,7 +67,37 @@ enum : int {
 	ID_OUTMU_NONE = 3100, ID_OUTMU_BASE = 3101,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901,
 	ID_FACTORY = 3000,
+	// A/D INPUT (the recording device) and SmartMedia. Same numbers as gui.cpp's.
+	//
+	// They must not land inside another menu's range: a port menu occupies
+	// ID_BASE .. ID_BASE+255, and menu_chosen() below takes anything in such a
+	// range for that port. These two used to sit inside ID_OUTMU_BASE's 256,
+	// so picking an input device (or a card item) went to MIDI OUT instead and
+	// the tick never moved to what was picked
+	ID_AIN_NONE = 3400,  ID_AIN_BASE = 3401,
+	ID_CARD_NEW16 = 3700, ID_CARD_NEW32, ID_CARD_NEW64, ID_CARD_NEW128,
+	ID_CARD_OPEN = 3710, ID_CARD_EJECT = 3711,
+	// What to do with a MIDI file that uses ports 3 and 4. The machine only has
+	// two ports, so the extra parts are either folded onto A and B or dropped
+	ID_PORTS34_FOLD = 2902, ID_PORTS34_DROP = 2903,
 };
+
+// Checked at compile time, because the failure is silent: a menu id that lands
+// in a port menu's range (ID_BASE .. ID_BASE+255) is taken for that port by
+// menu_chosen(), so the chosen item never arrives and the tick never moves
+static_assert([] {
+	const int bases[] = { ID_IN_BASE, ID_INB_BASE, ID_OUT_BASE, ID_OUTB_BASE, ID_OUTMU_BASE, ID_AIN_BASE };
+	const int singles[] = { ID_IN_NONE, ID_INB_NONE, ID_OUT_NONE, ID_OUTB_NONE, ID_OUTMU_NONE,
+	                        ID_AIN_NONE, ID_CARD_NEW16, ID_CARD_NEW32, ID_CARD_NEW64,
+	                        ID_CARD_NEW128, ID_CARD_OPEN, ID_CARD_EJECT,
+	                        ID_PLAY_FILE, ID_STOP_FILE, ID_FACTORY,
+	                        ID_PORTS34_FOLD, ID_PORTS34_DROP };
+	for (int base : bases)
+		for (int id : singles)
+			if (id >= base && id < base + 256)
+				return false;
+	return true;
+}(), "a menu id falls inside another menu's ID_BASE..ID_BASE+255 range");
 
 // ---- Remember the chosen ports
 //
@@ -85,7 +116,12 @@ std::string settings_path()
 struct port_names {
 	std::string in, in_b, out, out_b, out_mu;
 	std::string audio;          // the audio device, by name
+	std::string audio_in;       // the recording device feeding A/D INPUT, by name
+	std::string card;           // the SmartMedia image in the slot, by path
 	float       volume = 1.0f;  // the panel's VOLUME knob
+	// Ports 3 and 4 of a MIDI file: true folds them onto A and B, false drops
+	// them. Same key as gui.cpp's ("ports34=fold" / "ports34=drop")
+	bool        fold34 = true;
 };
 
 port_names load_settings()
@@ -112,6 +148,9 @@ port_names load_settings()
 		if (key == "midi_out_b")  n.out_b = val;
 		if (key == "midi_out_mu") n.out_mu = val;
 		if (key == "audio_out")   n.audio = val;
+		if (key == "audio_in")    n.audio_in = val;
+		if (key == "smartmedia")  n.card  = val;
+		if (key == "ports34")     n.fold34 = val != "drop";
 		if (key == "volume" && !val.empty())
 			n.volume = std::clamp(float(std::atof(val.c_str())), 0.0f, 1.0f);
 	}
@@ -133,6 +172,9 @@ void save_settings(const port_names &n)
 	std::fprintf(f, "midi_out_b=%s\n",  n.out_b.c_str());
 	std::fprintf(f, "midi_out_mu=%s\n", n.out_mu.c_str());
 	std::fprintf(f, "audio_out=%s\n",   n.audio.c_str());
+	std::fprintf(f, "audio_in=%s\n",    n.audio_in.c_str());
+	std::fprintf(f, "smartmedia=%s\n",  n.card.c_str());
+	std::fprintf(f, "ports34=%s\n",     n.fold34 ? "fold" : "drop");
 	// The panel's VOLUME knob. On the real machine it is the analogue one behind
 	// the DAC, so the firmware's RAM does not hold it and it is kept here
 	std::fprintf(f, "volume=%.3f\n", n.volume);
@@ -235,6 +277,7 @@ public:
 		// The window's timer is where this has to happen: it touches the bridge,
 		// so it must not run on the audio thread (same as gui.cpp's WM_TIMER)
 		panel.tick(br);
+		card_tick();
 
 		ui::snapshot s;
 		br.read(s);
@@ -332,7 +375,28 @@ public:
 		std::vector<ui::menu_group> groups;
 
 		if (panel.on_card_slot(x, y)) {
+			// The card slot is about the SmartMedia in it, then about the MIDI
+			// file player. Same items in the same order as gui.cpp's menu
+			// (a group with a title becomes a submenu)
+			ui::menu_group fresh;
+			fresh.title = "新しい SmartMedia を作って差す";
+			fresh.items.push_back(item("16MB",  ID_CARD_NEW16,  false, true));
+			fresh.items.push_back(item("32MB",  ID_CARD_NEW32,  false, true));
+			fresh.items.push_back(item("64MB",  ID_CARD_NEW64,  false, true));
+			fresh.items.push_back(item("128MB", ID_CARD_NEW128, false, true));
+			groups.push_back(fresh);
+
 			ui::menu_group g;
+			g.items.push_back(item("SmartMedia を差す...", ID_CARD_OPEN, false, true));
+			std::string eject = "SmartMedia を抜く";
+			if (!card_path.empty()) {
+				const size_t slash = card_path.find_last_of('/');
+				eject += "（" + card_path.substr(slash == std::string::npos ? 0 : slash + 1) + "）";
+			}
+			g.items.push_back(item(eject.c_str(), ID_CARD_EJECT, false, !card_path.empty()));
+			ui::menu_item csep;
+			csep.separator = true;
+			g.items.push_back(csep);
 			g.items.push_back(item("MIDI ファイルを再生...", ID_PLAY_FILE, false, true));
 			std::string stop = "止める";
 			if (play.playing())
@@ -354,6 +418,10 @@ public:
 		                            ID_OUT_NONE, ID_OUT_BASE));
 		groups.push_back(port_group("MIDI OUT B（B で受けたものを外へ）", outs, out_dev_b,
 		                            ID_OUTB_NONE, ID_OUTB_BASE));
+		// The recording device the machine samples as its A/D INPUT. It is not a
+		// MIDI port, but it belongs in the same picker, as it does in gui.cpp
+		groups.push_back(port_group("A/D INPUT（録音デバイス）", ui::audio_in::list(), ain_dev,
+		                            ID_AIN_NONE, ID_AIN_BASE));
 
 		// Throwing the settings away reboots the machine, so it is only offered
 		// once the firmware is actually up
@@ -382,6 +450,11 @@ public:
 		else if (id >= ID_OUTMU_BASE && id < ID_OUTMU_BASE + 256)     choose_out_mu(id - ID_OUTMU_BASE);
 		else if (id == ID_OUTB_NONE)                                  choose_out_b(-1);
 		else if (id >= ID_OUTB_BASE && id < ID_OUTB_BASE + 256)       choose_out_b(id - ID_OUTB_BASE);
+		else if (id == ID_AIN_NONE)                                   choose_ain(-1);
+		else if (id >= ID_AIN_BASE && id < ID_AIN_BASE + 256)         choose_ain(id - ID_AIN_BASE);
+		else if (id == ID_CARD_OPEN)                                  open_card();
+		else if (id == ID_CARD_EJECT)                                 eject_card();
+		else if (id >= ID_CARD_NEW16 && id <= ID_CARD_NEW128)         new_card(16u << (id - ID_CARD_NEW16));
 		else if (id == ID_FACTORY)                                    factory_reset();
 		else if (id == ID_PLAY_FILE) {
 			const std::string path = ui::open_midi_file_panel();
@@ -518,6 +591,151 @@ public:
 		remember();
 	}
 
+	// ---- A/D INPUT (the recording device the machine samples)
+	//
+	// Same as gui.cpp's choose_ain: "no device" stops the capture and leaves
+	// nothing feeding the machine, which then samples silence
+	void choose_ain(int dev, bool keep = false)
+	{
+		if (!keep)
+			ain_keep.clear();
+		if (!ain)
+			return;
+		ain->stop();
+		if (dev < 0) {
+			ain_name.clear();
+			ain_dev = -1;
+			std::printf("A/D INPUT: なし\n");
+			std::fflush(stdout);
+			remember();
+			return;
+		}
+		const auto names = ui::audio_in::list();
+		if (size_t(dev) >= names.size()) {
+			std::fprintf(stderr, "A/D INPUT: %d 番のデバイスが無い\n", dev);
+			return;
+		}
+		std::string err;
+		if (!ain->start(names[size_t(dev)], err)) {
+			std::fprintf(stderr, "A/D INPUT: %s\n", err.c_str());
+			ain_name.clear();
+			ain_dev = -1;
+			return;
+		}
+		std::printf("A/D INPUT: %s（%s）\n", ain->device_name().c_str(), ain->format_line().c_str());
+		std::fflush(stdout);
+		// The chosen name is kept even if it was the default that opened: the
+		// menu shows which entry is ticked, and the entry is a name
+		ain_name = names[size_t(dev)];
+		ain_dev  = dev;
+		remember();
+	}
+
+	// ---- SmartMedia (the card slot)
+	//
+	// The image is a file, and what the machine writes has to go back into it.
+	// engine::card_lock is held while the machine itself is touched, because the
+	// audio thread is running the machine from the other side (see ui/engine.h)
+	void flush_card()
+	{
+		if (!eng || card_path.empty())
+			return;
+		std::vector<smu2000::smartmedia::block> blocks;
+		{
+			const std::lock_guard<std::mutex> hold(eng->card_lock);
+			eng->mu.card().take_dirty_blocks(blocks);
+		}
+		if (blocks.empty())
+			return;
+		std::string err;
+		if (!smu2000::smartmedia::write_blocks(card_path, blocks, err))
+			std::fprintf(stderr, "SmartMedia: %s\n", err.c_str());
+	}
+
+	void eject_card()
+	{
+		if (!eng)
+			return;
+		flush_card();
+		{
+			const std::lock_guard<std::mutex> hold(eng->card_lock);
+			eng->mu.card().eject();
+		}
+		if (!card_path.empty())
+			std::printf("SmartMedia を抜いた: %s\n", card_path.c_str());
+		card_path.clear();
+		remember();
+	}
+
+	// Load it first, so a file that cannot be read does not take the slot away
+	// from the card that is already in it
+	bool insert_card(const std::string &path)
+	{
+		if (!eng)
+			return false;
+		smu2000::smartmedia card;
+		std::string err;
+		if (!card.load(path, err)) {
+			std::fprintf(stderr, "SmartMedia: %s\n", err.c_str());
+			return false;
+		}
+		eject_card();
+		{
+			const std::lock_guard<std::mutex> hold(eng->card_lock);
+			eng->mu.card() = std::move(card);
+		}
+		card_path = path;
+		std::printf("SmartMedia を差した: %s（%uMB）\n", path.c_str(), eng->mu.card().megabytes());
+		std::fflush(stdout);
+		remember();
+		return true;
+	}
+
+	// An empty card, in the physical layout a new one comes in. It has to be
+	// formatted by the machine (UTIL -> CARD -> Format) before it holds anything
+	void new_card(u32 megabytes)
+	{
+		const std::string path = ui::save_file_panel("新しい SmartMedia の保存先", "smartmedia.img", "img");
+		if (path.empty())
+			return;
+		smu2000::smartmedia card;
+		if (!card.create(megabytes)) {
+			std::fprintf(stderr, "SmartMedia を作れない\n");
+			return;
+		}
+		std::string err;
+		if (!card.save(path, err)) {
+			std::fprintf(stderr, "SmartMedia: %s\n", err.c_str());
+			return;
+		}
+		// A fresh card only has the physical layout on it, so the machine still
+		// has to format it before it holds anything (gui.cpp says this too)
+		if (insert_card(path))
+			ui::alert_modal("S-MU2000",
+			                "空の SmartMedia を差しました。\n"
+			                "使う前に、本体の UTIL → CARD → Format で書式化してください。");
+	}
+
+	void open_card()
+	{
+		const std::string path = ui::open_file_panel("差す SmartMedia", "img");
+		if (!path.empty())
+			insert_card(path);
+	}
+
+	// Called from the window's timer. The machine writes to the card while it
+	// runs, so the file is brought up to date every couple of seconds: that is
+	// what keeps a crash from losing more than the last two seconds. Ejecting,
+	// closing the window and saving all flush as well
+	void card_tick()
+	{
+		const u64 now = smu2000::perf_ticks() * 1000 / smu2000::perf_freq();
+		if (now - last_flush < 2000)
+			return;
+		last_flush = now;
+		flush_card();
+	}
+
 	// Throwing the settings away means booting the machine again, which takes
 	// tens of seconds, so it runs on its own thread. The previous one is joined
 	// first: two boots at once would both be writing the machine
@@ -546,8 +764,11 @@ public:
 	// Remembered by name rather than number (see the note on settings_path).
 	// A port that would not open keeps the name it was asked for, so a virtual
 	// port that is not up yet is not forgotten by the next start
-	void remember() const
+	void remember()
 	{
+		// --nomidi must not write empty port names over the remembered ones
+		if (keep_settings)
+			return;
 		port_names n;
 		n.in     = in_name.empty()     ? in_keep     : in_name;
 		n.in_b   = in_name_b.empty()   ? in_keep_b   : in_name_b;
@@ -555,18 +776,32 @@ public:
 		n.out_b  = out_name_b.empty()  ? out_keep_b  : out_name_b;
 		n.out_mu = out_name_mu.empty() ? out_keep_mu : out_name_mu;
 		n.audio  = audio_name;
-		n.volume = br.gain();
+		// The recording device is kept by name even when it is not open, the
+		// same way the MIDI ports are: a device that is not there yet must not
+		// be forgotten. An empty name means "not used", which the menu sets
+		n.audio_in = ain_name.empty() ? ain_keep : ain_name;
+		n.card     = card_path;
+		n.volume   = br.gain();
+		n.fold34   = play.fold_extra_ports();
 		save_settings(n);
 	}
 
 	int in_dev = -1, in_dev_b = -1, out_dev = -1, out_dev_b = -1, out_dev_mu = -1;
+	int ain_dev = -1;
+	// MIDI thrown away by the THRU guards, and when that was last said out loud
+	u64  reported_drops = 0;
+	u64  last_drop_report = 0;
+	bool keep_settings = false;        // --nomidi: leave the remembered ports alone
 	std::string in_name, in_name_b, out_name, out_name_b, out_name_mu;
 	// The name to fall back on when a port could not be opened. Cleared when the
 	// menu is used, so a deliberate "unused" is not undone on the next start
-	std::string in_keep, in_keep_b, out_keep, out_keep_b, out_keep_mu;
+	std::string in_keep, in_keep_b, out_keep, out_keep_b, out_keep_mu, ain_keep;
 	std::string audio_name;            // the audio device, by name (empty = default)
+	std::string ain_name;              // the recording device, by name (empty = unused)
+	std::string card_path;             // the SmartMedia in the slot, by path (empty = none)
 
 	ui::audio_out *out = nullptr;      // set once the audio device is open
+	ui::audio_in  *ain = nullptr;      // set once the recording device is picked
 	ui::engine    *eng = nullptr;      // set once the ROMs are loaded
 	std::atomic<int> *state = nullptr; // the engine's, so menu items can be greyed
 
@@ -575,6 +810,7 @@ private:
 	ui::midi_in  &midi, &midi_b;
 	ui::midi_out &mout, &mout_b, &mout_mu;
 	bool m_pressed = false;
+	u64 last_flush = 0;                // when the card file was last written back
 };
 
 
@@ -668,6 +904,12 @@ int main(int argc, char **argv)
 			std::printf("音声の出口（--audio に名前の一部）:\n");
 			for (size_t k = 0; k < aouts.size(); k++)
 				std::printf("  %zu: %s\n", k, aouts[k].c_str());
+			const auto ains = ui::audio_in::list();
+			std::printf("A/D INPUT（録音デバイス。画面から選ぶ）:\n");
+			for (size_t k = 0; k < ains.size(); k++)
+				std::printf("  %zu: %s\n", k, ains[k].c_str());
+			if (ains.empty())
+				std::printf("  （なし）\n");
 			return 0;
 		}
 		else if (!std::strcmp(argv[i], "--midi") && i + 1 < argc) midi_dev = std::atoi(argv[++i]);
@@ -806,11 +1048,23 @@ int main(int argc, char **argv)
 	//
 	// Opening the ports here rather than on the boot thread keeps the names
 	// settled before the window starts reading them for the status line
+	// The machine's A/D INPUT. Declared here so the boot thread below can start
+	// it; the engine only samples it through the pointer
+	static ui::audio_in ain;
+	gui.ain = &ain;
+	eng.ain = &ain;
+
 	{
 		const port_names want = load_settings();
 		br.set_gain(want.volume);
 		// --audio wins; otherwise the port that was opened last time
 		gui.audio_name = audio_dev ? std::string(audio_dev) : want.audio;
+		// A/D INPUT is remembered by name too. It is opened in the boot thread,
+		// once the machine is up
+		gui.ain_name = want.audio_in;
+		gui.ain_keep = want.audio_in;
+		if (!want.card.empty())
+			gui.insert_card(want.card);
 		if (midi_dev == -2)   midi_dev   = find_device(ui::midi_in::list(), want.in);
 		if (midib_dev == -2)  midib_dev  = find_device(ui::midi_in::list(), want.in_b);
 		if (mout_dev == -2)   mout_dev   = find_device(ui::midi_out::list(), want.out);
@@ -877,6 +1131,20 @@ int main(int argc, char **argv)
 		// empty MIDI name and the next start would come up with no ports
 		gui.audio_name = out.device_name();
 		std::printf("音声の出口: %s\n", out.device_name().c_str());
+		// A/D INPUT: open the recording device that was picked last time. A
+		// device that cannot be opened now keeps its name in the settings, the
+		// same as a MIDI port (gui.cpp does this here too)
+		if (!gui.ain_name.empty()) {
+			const auto names = ui::audio_in::list();
+			const int dev = find_device(names, gui.ain_name);
+			std::string aerr;
+			if (dev >= 0 && ain.start(names[size_t(dev)], aerr)) {
+				gui.ain_dev = dev;
+				std::printf("A/D INPUT: %s（%s）\n", ain.device_name().c_str(), ain.format_line().c_str());
+			} else
+				std::printf("A/D INPUT: なし（%s）\n",
+				            dev < 0 ? "デバイスが見つからない" : aerr.c_str());
+		}
 		// Hog mode is a request, not a guarantee: something else may hold it
 		if (exclusive)
 			std::printf("独り占め: %s\n", out.exclusive() ? "取れた" : "取れなかった");
@@ -894,10 +1162,12 @@ int main(int argc, char **argv)
 	ui::run_window(gui, "S-MU2000", win_w, win_h);
 
 	out.stop();
+	ain.stop();
 	if (boot_thread.joinable())
 		boot_thread.join();
 	gui.join_reboot();
-	gui.remember();          // the audio port and the VOLUME knob's position
+	gui.flush_card();        // the sound has stopped; keep what was written to the card
+	gui.remember();          // the audio port, the A/D input and the VOLUME knob's position
 	// The sound has stopped by now. Keep the machine's settings only if it came up
 	if (eng.state.load() == 1 && !smu2000::nvram::save(eng.mu))
 		std::fprintf(stderr, "設定を残せなかった: %s\n", smu2000::nvram::path(eng.mu).c_str());
