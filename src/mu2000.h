@@ -110,6 +110,13 @@ public:
 	}
 	// 溢れて捨てたバイト数（どの糸から読んでもよい）
 	u64 midi_dropped() const { return m_midi_dropped.load(std::memory_order_relaxed); }
+	size_t midi_pending() const
+	{
+		size_t pending = 0;
+		for (const midi_line &m : m_midi)
+			pending += m.queue.size() + (m.bit >= 0 ? 1 : 0);
+		return pending;
+	}
 	bool midi_idle(int port) const
 	{
 		return m_midi[port].bit < 0 && m_midi[port].queue.empty();
