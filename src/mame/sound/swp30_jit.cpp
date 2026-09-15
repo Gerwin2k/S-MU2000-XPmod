@@ -903,6 +903,14 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			if (jump_done)
 				a.patch(jump_done);
 			// 飛ばされた命令（と分岐の命令）: 輪に入れる書き込みを消し、t の値を入れる
+			if (o.jump && o.t_write) {
+				// 分岐の命令も t を書く（meg_state::step と同じ、doc/upstream.md の 31）
+				if (o.t_from_p)
+					a.loadu16(RAX, M(o_t_value + 2 * slot2(k)));
+				else
+					a.loadu16(RAX, M(o_const + 2 * s32(k)));
+				a.store16(M(o_t + 2 * o.t), RAX);
+			}
 			a.store8i(M(o_mw_reg + slot3(k)), 0);
 			a.store8i(M(o_rw_reg + slot3(k)), 0);
 			a.store8i(M(o_memw_act + slot2(k)), 0);

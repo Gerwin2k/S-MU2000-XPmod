@@ -3523,6 +3523,9 @@ void swp30_device::meg_state::step()
 			if(target > m_pc)
 				m_swp->m_meg_skip_to = target;
 		}
+		// S-MU2000: 分岐の命令も t を書く（DYNA 系は分岐と同時に「大きさ - 包絡線」を t に入れる。doc/upstream.md の 31）
+		if(m_decoded[m_pc].t_write)
+			m_t[m_decoded[m_pc].t] = m_decoded[m_pc].t_from_p ? m_t_value[m_delay_2] : m_const[m_pc];
 		m_mw_reg[m_delay_3] = 0;
 		m_rw_reg[m_delay_3] = 0;
 		m_memw_active[m_delay_2] = false;
@@ -3851,6 +3854,9 @@ void swp30_device::meg_state::run_program(const op *ops)
 		if(skip_to || o.jump) {
 			if(!skip_to && meg_cond(o.cond, flag_n, flag_z) && o.target > pc)
 				skip_to = o.target;
+			// 分岐の命令も t を書く（step() と同じ）
+			if(o.jump && o.t_write)
+				m_t[o.t] = o.t_from_p ? m_t_value[d2] : m_const[pc];
 			m_mw_reg[d3] = 0;
 			m_rw_reg[d3] = 0;
 			m_memw_active[d2] = false;
