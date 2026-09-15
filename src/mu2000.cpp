@@ -479,6 +479,22 @@ void mu2000::build_bus()
 		m_bus.add_device(d);
 	}
 
+	// c00000: SmartMedia のデータ、d00000: 制御の留め金（smartmedia.h）
+	{
+		mem_bus::device d;
+		d.start = 0xc00000; d.end = 0xc7ffff;
+		d.r8 = [this](offs_t) { return m_card.data_r(); };
+		d.w8 = [this](offs_t, u8 v) { m_card.data_w(v); };
+		m_bus.add_device(d);
+	}
+	{
+		mem_bus::device d;
+		d.start = 0xd00000; d.end = 0xd7ffff;
+		d.r8 = [](offs_t) -> u8 { return 0xff; };
+		d.w8 = [this](offs_t, u8 v) { m_card.control_w(v); };
+		m_bus.add_device(d);
+	}
+
 	// f00000-f0003f: PLG ボード用の SCI4。ボードは挿さないが register は生きている
 	{
 		mem_bus::device d;
@@ -564,6 +580,15 @@ void mu2000::reset()
 	// 最後（128 Gunshot）まで走り、bit16 も一緒に上げると逆に動く
 	m_cpu->read_porta().set([this]() {
 		u32 v = 0xffff;
+		// SmartMedia の線（firmware は 0xFFFF8380 の下の 8bit で見る）:
+		//   PA18 (0x04) 忙しい（0 で準備ができている。firmware は 0 になるのを待つ）/ PA19 (0x08) 差し込まれている /
+		//   PA20 (0x10) 書き込みを禁じていない
+		// 読み書きはその場で済むので、忙しい印は立てない
+		if (m_card.inserted()) {
+			v |= 1u << 19;
+			if (!m_card.write_protected)
+				v |= 1u << 20;
+		}
 		if (m_enc_pending) {
 			if (m_enc_pending < 0) v |= 1u << 16;   // B 相は向きのあいだ立てておく
 			if (m_enc_high) {
@@ -838,7 +863,7 @@ namespace {
 
 // 保存の形。中身の並びを変えたら上げる
 constexpr u32 STATE_MAGIC   = 0x554d3253;   // "S2MU"
-constexpr u32 STATE_VERSION = 4;   // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG / 4: サンプリングの録音の位置
+constexpr u32 STATE_VERSION = 5;   // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG / 4: サンプリングの録音の位置 / 5: SmartMedia の命令の途中
 constexpr u32 STATE_VERSION_OLDEST = 2;
 
 } // namespace
@@ -853,6 +878,9 @@ void mu2000::state(state_io &s)
 	s.mem(m_dram.data(),    m_dram.size());
 	s.mem(m_iram.data(),    m_iram.size());
 	s.mem(m_sampram.data(), m_sampram.size());
+	// 版 5 から: SmartMedia の命令の途中の状態（カードの中身は入れない）
+	if (s.version() >= 5)
+		m_card.state(s);
 
 	if (m_cpu)  m_cpu->state(s);
 	m_swpm.state(s);

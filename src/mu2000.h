@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "smartmedia.h"
 #include "state.h"
 #include "compat/mamecompat.h"
 #include "compat/membus.h"
@@ -154,6 +155,12 @@ public:
 	// 入力の切り替えはまだ無い）に使う
 	void set_audio_input(s32 ad1, s32 ad2) { m_ad_in[0] = ad1; m_ad_in[1] = ad2; }
 
+	// 前面のカードの差し込み口（SmartMedia）。create / load で差し、eject で抜く。
+	// 中身は状態の保存に入れないので、使う側がファイルに書き出す（take_dirty_blocks / write_blocks）
+	smu2000::smartmedia &card() { return m_card; }
+	// サンプリング RAM（4MB）。確かめる用
+	const std::vector<u8> &sample_ram() const { return m_sampram; }
+
 	sh7043a_device &cpu()  { return *m_cpu; }
 	swp30_device   &swpm() { return m_swpm; }
 	swp30_device   &swps() { return m_swps; }
@@ -218,6 +225,7 @@ private:
 	std::vector<u8>  m_ram;         // ワーク RAM  0x400000-0x43ffff
 	std::vector<u8>  m_dram;        // DRAM        0x1000000-0x107ffff
 	std::vector<u8>  m_iram;        // CPU 内蔵    0xfffff000-0xffffffff
+	smu2000::smartmedia m_card;     // 前面のカードの差し込み口（SmartMedia）
 	std::vector<u8>  m_sampram;     // SWP30 のサンプリング RAM（4MB、SWP30 から見て 0x1000000 語目から）
 	s32 m_ad_in[2] = {};            // A/D INPUT（set_audio_input）
 

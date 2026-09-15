@@ -5,7 +5,9 @@
 // パネルで SAMPLING → REC に入り、A/D INPUT に 440Hz の正弦を流しながら 1 秒ほど録音して止め、
 // 残す。SAMPLE の画面で AUDITION を押し、出てきた音が 440Hz かを見る。
 // firmware が録音に使う SWP30 の働き（サンプリング RAM と波形アクセス 0x7000）が
-// 正しくないと、サンプルが出来ないか、試聴で別の音か無音になる。食い違えば 1 を返す。
+// 正しくないと、サンプルが出来ないか、試聴で別の音か無音になる。
+// 続けて A/D パートの音量と、SmartMedia への書き出し・読み戻し（書式化 → SAVE → 別の機械で LOAD）を見る。
+// 食い違えば 1 を返す。
 #include "mu2000.h"
 
 #include <cmath>
@@ -195,6 +197,81 @@ int main(int argc, char **argv)
 	(void)ad_off;
 	if (!off_ok) bad++;
 	if (!on_ok) bad++;
+
+	// SmartMedia。空のカードを差して UTIL → CARD → Format で書式化し、SAMPLING → SAVE で ALL+SEQ を書く。
+	// 書いたカードを新しい機械に差し、SAMPLING → LOAD で読み戻して、サンプリング RAM が同じになるかを見る。
+	// SmartMedia の NAND の命令・物理の書式・ECC と、SWP30 の続けて読む働き（波形アクセス 0x9000）を通る
+	g.mu.card().create(32);
+	g.pump(500);
+	g.press(B::util);
+	for (int i = 0; i < 4; i++)
+		g.press(B::select_right);
+	g.press(B::enter);
+	for (int i = 0; i < 4; i++)
+		g.press(B::select_right);
+	expect("UTIL → CARD → Format", "Format");
+	g.press(B::enter);
+	g.press(B::enter);                  // 書式化してよいか
+	for (int i = 0; i < 100 && g.lcd().find("Executing") != std::string::npos; i++)
+		g.pump(100);
+	expect("書式化を終えた", "Format");
+	g.press(B::exit);
+	g.press(B::exit);
+	g.press(B::exit);
+
+	g.press(B::sampling_mode);
+	g.press(B::select_right);
+	g.press(B::select_right);
+	g.press(B::enter);
+	expect("SAVE の画面", "ALL+SEQ");
+	g.press(B::enter);                  // 保存先のディレクトリ
+	g.pump(1000);
+	g.press(B::enter);                  // ファイルの名前
+	g.pump(1000);
+	expect("ファイルの名前", "ALL_SEQ");
+	g.press(B::enter);
+	expect("書き出し中", "SAVING");
+	for (int i = 0; i < 100 && g.lcd().find("SAVING") != std::string::npos; i++)
+		g.pump(100);
+	expect("書き終えた", "<SAVE>");
+
+	static rig h;
+	if (!h.mu.load_program(dir + "/mu2000_flash.bin") || !h.mu.load_wave(dir + "/dump")) {
+		std::fprintf(stderr, "%s\n", h.mu.error().c_str());
+		return 1;
+	}
+	h.verbose = g.verbose;
+	h.mu.load_sintab(dir + "/standin/sin-table.bin");
+	h.mu.reset();
+	for (u32 i = 0; i < 30 * RATE && !h.mu.midi_ready(); i += RATE / 100)
+		h.pump(10);
+	h.mu.card() = g.mu.card();
+	h.pump(1500);
+	h.press(B::sampling_mode);
+	h.press(B::select_right);
+	h.press(B::enter);
+	h.pump(1000);
+	h.press(B::enter);                  // ディレクトリの中
+	h.pump(1000);
+	{
+		const std::string s = h.lcd();
+		const bool ok = s.find("ALL_SEQ.M2A") != std::string::npos;
+		std::printf("%s %-28s [%s]\n", ok ? "合" : "NG", "カードにファイルがある", s.c_str());
+		if (!ok) bad++;
+	}
+	h.press(B::enter);
+	for (int i = 0; i < 100 && h.lcd().find("LOADING") != std::string::npos; i++)
+		h.pump(100);
+	// 録音の最後の 1 語の後ろ半分（サンプルの長さの外）は書き出されないので、そこだけは違ってよい
+	const auto &a = g.mu.sample_ram(), &b = h.mu.sample_ram();
+	size_t differ = 0, used = 0;
+	for (size_t i = 0; i < a.size(); i++) {
+		differ += a[i] != b[i];
+		used += a[i] != 0;
+	}
+	const bool same = used > 50000 && differ <= 2;
+	std::printf("%s 読み戻したサンプリング RAM     使っている %zu バイト、違う %zu バイト\n", same ? "合" : "NG", used, differ);
+	if (!same) bad++;
 
 	std::printf("サンプリング: 食い違い %d\n", bad);
 	return bad ? 1 : 0;

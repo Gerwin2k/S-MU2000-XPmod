@@ -31,6 +31,7 @@ BUILD := build
 
 SRCS := \
 	src/compat/compat.cpp \
+	src/smartmedia.cpp \
 	src/mame/sound/swp30.cpp \
 	src/mame/sound/swp30_jit.cpp \
 	src/mame/video/hd44780.cpp \

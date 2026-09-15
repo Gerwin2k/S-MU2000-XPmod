@@ -44,6 +44,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -74,6 +75,8 @@ struct engine {
 	ui::thru_guard guard_a, guard_b;
 	// fill() が機械に触っている最中か。起動し直すときはこれが落ちるのを待つ
 	std::atomic<bool> in_fill{false};
+	// SmartMedia を差す・抜く・書き戻す間は、音声の糸が機械を回さないようにする
+	std::mutex card_lock;
 	bool use_nvram = false;           // 覚えている設定で起動するか（窓を出すときだけ）
 	std::string      message = "起動中...";
 
@@ -153,6 +156,7 @@ struct engine {
 	// 音声デバイスに頼まれた分だけ進める
 	void fill(s16 *out, u32 n)
 	{
+		const std::lock_guard<std::mutex> hold(card_lock);
 		// 先に「触っている」を立ててから state を見る。逆にすると、見た直後に
 		// 起動し直しが始まって、両方が機械に触ってしまう
 		in_fill.store(true);
@@ -225,6 +229,7 @@ struct window_state {
 	ui::audio_out *out = nullptr;
 	ui::audio_in  *ain = nullptr;      // A/D INPUT（録音デバイス）
 	std::string ain_name;              // 選んだ録音デバイスの名前。空なら使わない
+	std::string card_path;             // 差している SmartMedia のファイル。空なら差していない
 
 	std::string audio_name;            // 音の出口（名前の一部）。空なら既定
 	std::string layout_path;           // 読んでいる panel.txt。F5 で読み直す
@@ -295,7 +300,7 @@ void load_settings(std::string &in_name, std::string &in_name_b,
                    std::string &out_name, std::string &out_name_b,
                    std::string &audio_name, float *volume = nullptr,
                    std::string *out_name_mu = nullptr, bool *fold_ports34 = nullptr,
-                   std::string *ain_name = nullptr)
+                   std::string *ain_name = nullptr, std::string *card_path = nullptr)
 {
 	const std::string path = settings_path();
 	if (path.empty())
@@ -319,6 +324,7 @@ void load_settings(std::string &in_name, std::string &in_name_b,
 		if (key == "midi_out_mu" && out_name_mu) *out_name_mu = val;
 		if (key == "audio_out")  audio_name = val;
 		if (key == "audio_in" && ain_name) *ain_name = val;
+		if (key == "smartmedia" && card_path) *card_path = val;
 		if (key == "ports34" && fold_ports34) *fold_ports34 = val != "drop";
 		if (key == "volume" && volume && !val.empty())
 			*volume = std::clamp(float(std::atof(val.c_str())), 0.0f, 1.0f);
@@ -346,6 +352,7 @@ void save_settings()
 	std::fprintf(f, "midi_out_mu=%s\n", pick(g_win.out_name_mu, g_win.out_keep_mu));
 	std::fprintf(f, "audio_out=%s\n", g_win.audio_name.c_str());
 	std::fprintf(f, "audio_in=%s\n", g_win.ain_name.c_str());
+	std::fprintf(f, "smartmedia=%s\n", g_win.card_path.c_str());
 	// パネルの VOLUME のつまみ。実機でも DAC の後ろのアナログのつまみで、
 	// firmware の RAM には入らないので、こちらで覚える
 	if (g_win.br)
@@ -374,6 +381,8 @@ enum : UINT {
 	ID_OUTB_NONE = 2400, ID_OUTB_BASE = 2401,
 	ID_OUTMU_NONE = 3100, ID_OUTMU_BASE = 3101,
 	ID_AIN_NONE = 3200, ID_AIN_BASE = 3201,
+	ID_CARD_NEW16 = 3300, ID_CARD_NEW32, ID_CARD_NEW64, ID_CARD_NEW128,
+	ID_CARD_OPEN = 3310, ID_CARD_EJECT = 3311,
 	ID_PLAY_FILE = 2900, ID_STOP_FILE = 2901, ID_PORTS34_FOLD = 2902, ID_PORTS34_DROP = 2903,
 	ID_FACTORY = 3000,
 	ID_PC_EDITOR = 3001,
@@ -487,11 +496,127 @@ void show_port_menu(HWND hwnd, POINT screen)
 	DestroyMenu(top);
 }
 
-// ---- カードの差し込み口。MIDI ファイルを流す
+// ---- カードの差し込み口。SmartMedia を差す・MIDI ファイルを流す
+
+// 書き換えたブロックをファイルへ書き戻す。写すときだけ音声の糸を止める
+void flush_card()
+{
+	if (!g_win.eng || g_win.card_path.empty())
+		return;
+	std::vector<smu2000::smartmedia::block> blocks;
+	{
+		const std::lock_guard<std::mutex> hold(g_win.eng->card_lock);
+		g_win.eng->mu.card().take_dirty_blocks(blocks);
+	}
+	std::string err;
+	if (!smu2000::smartmedia::write_blocks(g_win.card_path, blocks, err)) {
+		std::fprintf(stderr, "SmartMedia: %s\n", err.c_str());
+		std::fflush(stderr);
+	}
+}
+
+void eject_card()
+{
+	if (!g_win.eng)
+		return;
+	flush_card();
+	{
+		const std::lock_guard<std::mutex> hold(g_win.eng->card_lock);
+		g_win.eng->mu.card().eject();
+	}
+	if (!g_win.card_path.empty())
+		std::printf("SmartMedia を抜いた: %s\n", g_win.card_path.c_str());
+	std::fflush(stdout);
+	g_win.card_path.clear();
+}
+
+// ファイルの SmartMedia を差す。読むのは糸を止めずに済ませ、差し替えるときだけ止める
+bool insert_card(const std::string &path, bool quiet = false)
+{
+	if (!g_win.eng)
+		return false;
+	smu2000::smartmedia card;
+	std::string err;
+	if (!card.load(path, err)) {
+		if (!quiet)
+			g_win.last_error = err;
+		std::fprintf(stderr, "SmartMedia: %s\n", err.c_str());
+		return false;
+	}
+	eject_card();
+	{
+		const std::lock_guard<std::mutex> hold(g_win.eng->card_lock);
+		g_win.eng->mu.card() = std::move(card);
+	}
+	g_win.card_path = path;
+	std::printf("SmartMedia を差した: %s（%uMB）\n", path.c_str(), g_win.eng->mu.card().megabytes());
+	std::fflush(stdout);
+	return true;
+}
+
+std::string ask_card_path(HWND hwnd, bool create)
+{
+	wchar_t file[MAX_PATH] = {};
+	if (create)
+		wcscpy(file, L"smartmedia.img");
+	OPENFILENAMEW o{};
+	o.lStructSize = sizeof(o);
+	o.hwndOwner = hwnd;
+	o.lpstrFilter = L"SmartMedia の中身 (*.img)\0*.img\0すべて (*.*)\0*.*\0";
+	o.lpstrFile = file;
+	o.nMaxFile = MAX_PATH;
+	o.lpstrDefExt = L"img";
+	if (create) {
+		o.lpstrTitle = L"新しい SmartMedia の保存先";
+		o.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+		if (!GetSaveFileNameW(&o))
+			return {};
+	} else {
+		o.lpstrTitle = L"差す SmartMedia";
+		o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+		if (!GetOpenFileNameW(&o))
+			return {};
+	}
+	return ui::to_utf8(file);
+}
+
+// 空の SmartMedia（物理の書式だけ）を作って差す。使う前に UTIL → CARD → Format で書式化する
+void new_card(HWND hwnd, u32 megabytes)
+{
+	const std::string path = ask_card_path(hwnd, true);
+	if (path.empty())
+		return;
+	smu2000::smartmedia card;
+	card.create(megabytes);
+	std::string err;
+	if (!card.save(path, err)) {
+		g_win.last_error = err;
+		return;
+	}
+	if (insert_card(path)) {
+		save_settings();
+		MessageBoxW(hwnd, L"空の SmartMedia を差しました。\n"
+		                  L"使う前に、本体の UTIL → CARD → Format で書式化してください。",
+		            L"S-MU2000", MB_OK | MB_ICONINFORMATION);
+	}
+}
 
 void show_card_menu(HWND hwnd, POINT screen)
 {
 	HMENU m = CreatePopupMenu();
+	const bool card_in = !g_win.card_path.empty();
+	HMENU mnew = CreatePopupMenu();
+	add_item(mnew, MF_STRING, ID_CARD_NEW16, "16MB");
+	add_item(mnew, MF_STRING, ID_CARD_NEW32, "32MB");
+	add_item(mnew, MF_STRING, ID_CARD_NEW64, "64MB");
+	add_item(mnew, MF_STRING, ID_CARD_NEW128, "128MB");
+	add_item(m, MF_POPUP, UINT_PTR(mnew), "新しい SmartMedia を作って差す");
+	add_item(m, MF_STRING, ID_CARD_OPEN, "SmartMedia を差す...");
+	std::string eject = "SmartMedia を抜く";
+	if (card_in)
+		eject += "（" + g_win.card_path.substr(g_win.card_path.find_last_of("\\/") + 1) + "）";
+	add_item(m, MF_STRING | (card_in ? 0 : MF_GRAYED), ID_CARD_EJECT, eject.c_str());
+	AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
 	const bool on = g_win.play_file.playing();
 	add_item(m, MF_STRING, ID_PLAY_FILE, "MIDI ファイルを再生...");
 	std::string stop = "止める";
@@ -738,6 +863,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 				open_window(hwnd, g_win.fx);
 		}
 		InvalidateRect(hwnd, nullptr, FALSE);
+		// SmartMedia に書いたものを 2 秒ごとにファイルへ書き戻す（抜いたとき・閉じたときも）
+		static DWORD last_card = 0;
+		if (GetTickCount() - last_card > 2000) {
+			last_card = GetTickCount();
+			flush_card();
+		}
 		// MIDI の輪などで溢れて捨てたものがあれば、1 秒に 1 回だけ知らせる
 		static DWORD last = 0;
 		if (g_win.eng && GetTickCount() - last > 1000) {
@@ -862,6 +993,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		else if (id >= ID_OUTMU_BASE && id < ID_OUTMU_BASE + 256) choose_out_mu(int(id - ID_OUTMU_BASE));
 		else if (id == ID_AIN_NONE)      choose_ain(-1);
 		else if (id >= ID_AIN_BASE && id < ID_AIN_BASE + 256) choose_ain(int(id - ID_AIN_BASE));
+		else if (id >= ID_CARD_NEW16 && id <= ID_CARD_NEW128) new_card(hwnd, 16u << (id - ID_CARD_NEW16));
+		else if (id == ID_CARD_OPEN) {
+			const std::string path = ask_card_path(hwnd, false);
+			if (!path.empty() && insert_card(path))
+				save_settings();
+		}
+		else if (id == ID_CARD_EJECT) { eject_card(); save_settings(); }
 		else if (id == ID_PLAY_FILE) choose_midi_file(hwnd);
 		else if (id == ID_STOP_FILE) g_win.play_file.stop();
 		else if (id == ID_PORTS34_FOLD || id == ID_PORTS34_DROP) {
@@ -1255,9 +1393,12 @@ int main(int argc, char **argv)
 
 		// 前に選んだ口を名前で探す。--midi / --midiout があればそちらが勝つ
 		std::string want_in, want_in_b, want_out, want_out_b, want_audio, want_out_mu;
-		std::string want_ain;
-		load_settings(want_in, want_in_b, want_out, want_out_b, want_audio, nullptr, &want_out_mu, nullptr, &want_ain);
+		std::string want_ain, want_card;
+		load_settings(want_in, want_in_b, want_out, want_out_b, want_audio, nullptr, &want_out_mu, nullptr, &want_ain, &want_card);
 		g_win.ain_name = want_ain;
+		// 前に差していた SmartMedia。ファイルが無くなっていたら差さない（覚えている名前も消える）
+		if (!want_card.empty())
+			insert_card(want_card, true);
 		// --audio があればそちらが勝つ。無ければ前に選んだもの
 		g_win.audio_name = audio_dev ? std::string(audio_dev) : want_audio;
 		if (midi_dev == -2)
@@ -1375,6 +1516,7 @@ int main(int argc, char **argv)
 		boot_thread.join();
 	if (g_win.reboot.joinable())
 		g_win.reboot.join();
+	flush_card();      // 音はもう止まっている。SmartMedia に書いたものを残す
 	save_settings();   // VOLUME のつまみの位置
 	// 音はもう止まっている。起動できていたときだけ残す
 	if (eng.state.load() == 1 && !smu2000::nvram::save(eng.mu))
