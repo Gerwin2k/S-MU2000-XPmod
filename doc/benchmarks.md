@@ -96,3 +96,26 @@ power and energy-saver settings before measuring.
 | x86_64 Rosetta - MEG JIT only | 3.139 | 60.81 | 54.1 | 1048 | 14 |
 | x86_64 Rosetta - SH2 JIT only | 2.242 | 4.72 | 38.6 | 81 | 0 |
 | x86_64 Rosetta - interpreter | 4.049 | 7.96 | 69.7 | 137 | 49 |
+
+## 2026-09-15 10:26 -- MacBookPro18,2 (Apple M1 Max)
+
+- macOS 27.0, uname arm64, 10 logical cores (8 performance + 2 efficiency), 32 GB RAM
+- Rosetta 2: yes; compiler: `Apple clang version 21.0.0 (clang-2100.3.34.2)`
+- source: `a1d8c03`; block = 256 frames, 10 s x 3 repeats, medians of runs
+- song: `demo.mid` (local only); ROM: `roms`
+- note: first entry after the upstream merge. Both JITs now have arm64 backends,
+  so the arm64 slice no longer interprets-only, and the MEG JIT rows are new
+  there. Compared with the entry above, the interpreter got somewhat slower
+  (2.311 -> 2.916 ms) from the code merged in, while both JITs together land
+  well under it.
+
+| config | avg ms/block | worst ms | % of real time (avg) | % of real time (worst) | blocks overrun |
+|---|---|---|---|---|---|
+| arm64 native - both JITs | 0.865 | 4.12 | 14.9 | 71 | 0 |
+| arm64 native - MEG JIT only | 1.996 | 3.18 | 34.4 | 55 | 0 |
+| arm64 native - SH2 JIT only | 1.719 | 5.69 | 29.6 | 98 | 1 |
+| arm64 native - interpreter | 2.916 | 8.04 | 50.2 | 138 | 3 |
+| x86_64 Rosetta - both JITs | 1.242 | 10.26 | 21.4 | 177 | 6 |
+| x86_64 Rosetta - MEG JIT only | 3.317 | 11.25 | 57.1 | 194 | 16 |
+| x86_64 Rosetta - SH2 JIT only | 2.402 | 6.02 | 41.4 | 104 | 2 |
+| x86_64 Rosetta - interpreter | 4.638 | 8.99 | 79.9 | 155 | 100 |
