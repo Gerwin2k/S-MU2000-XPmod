@@ -323,6 +323,26 @@ int main(int argc, char **argv)
 		if (!both) bad++;
 	}
 
+	// REC の TriggerLvl。レベルを上げて Enter を押すと「Waiting!」で待ち、入力が来ると録音が始まる。
+	// firmware は CPU の A/D 変換器の AN0 / AN2（A/D INPUT の大きさ）を回し続けて読む
+	g.press(B::exit);
+	g.press(B::select_right);
+	g.press(B::enter);
+	g.press(B::select_right);
+	for (int i = 0; i < 6; i++)
+		g.press(B::value_plus);
+	expect("TriggerLvl を上げた", "TriggerLvl=06");
+	g.press(B::select_left);
+	g.press(B::enter);
+	g.pump(500);
+	expect("入力が無いと待つ", "Waiting!");
+	g.sine_amp = 12000;
+	g.pump(500);
+	expect("入力が来ると録音する", "Recording!");
+	g.press(B::enter);
+	g.sine_amp = 0;
+	g.pump(300);
+
 	std::printf("サンプリング: 食い違い %d\n", bad);
 	return bad ? 1 : 0;
 }

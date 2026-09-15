@@ -604,9 +604,13 @@ void mu2000::reset()
 
 	// A/D 変換。MAME の配線と同じ。
 	// **電池の残量を返さないと起動画面が「Battery Low!」のままになる**
-	m_cpu->read_adc<0>().set_constant(0);        // アナログ入力 右
+	// AN0 と AN2 は A/D INPUT の大きさ（AD1 と AD2）。サンプリングの REC の画面のレベルメーターとトリガに使う。
+	// firmware は起動から AN0-AN3 を回し続け（ADCSR0 = 0xb3）、ADDR の上 8bit を 0xff から引いて使う（2.01 の 0x116196、0x13b6e6）。
+	// つまり静かなほど値が大きい。引いた値が 0x18 以下でメーター 0、0x85 以上で振り切れる（0x13b78c）。
+	// 実機の検波の回路は分からないので、ピーク（すぐ上がり、0.1 秒で 1/e に下がる）を 0x18 から 0x85 に割り当てる
+	m_cpu->read_adc<0>().set([this]() { return ad_level_adc(0); });
 	m_cpu->read_adc<1>().set_constant(0);
-	m_cpu->read_adc<2>().set_constant(0);        // アナログ入力 左
+	m_cpu->read_adc<2>().set([this]() { return ad_level_adc(1); });
 	m_cpu->read_adc<3>().set_constant(0);
 	m_cpu->read_adc<4>().set_constant(0);        // ホストスイッチ = MIDI
 	m_cpu->read_adc<5>().set_constant(0);
@@ -844,6 +848,11 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	// 目盛りは 16bit を 8bit 上げた 24bit にしている（実機の入力の大きさとはまだ突き合わせていない）
 	m_swps.set_meli(6, m_ad_in[0] * 256);
 	m_swps.set_meli(7, m_ad_in[1] * 256);
+	// レベルメーター用の検波（AN0 / AN2）
+	for (int i = 0; i < 2; i++) {
+		const s32 a = std::min(std::abs(m_ad_in[i]), 32767);
+		m_ad_peak[i] = a >= m_ad_peak[i] ? a : m_ad_peak[i] - ((m_ad_peak[i] >> 12) + 1);
+	}
 
 	// スピーカーに出るのはマスタの DAC だけ。
 	// スレーブの DAC はどこにも繋がっていない
