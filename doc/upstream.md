@@ -889,7 +889,9 @@ MAME に上の直しを移すときに、DRC とインタプリタを同じ状�
 直した後は `-nodrc` の有り無しで、ディザの 1 LSB ほどの差しか残らない。
 
 MAME に投稿した PR（2026-09-15）: 22 は [mamedev/mame#16140](https://github.com/mamedev/mame/pull/16140)、
-33 は [mamedev/mame#16141](https://github.com/mamedev/mame/pull/16141)。
+33 は [mamedev/mame#16141](https://github.com/mamedev/mame/pull/16141)。どちらも同じ日のうちに取り込まれた。
+続けて 24 を [mamedev/mame#16142](https://github.com/mamedev/mame/pull/16142) に出した（#16140 で「リバーブ RAM に表を書いてどう使うのか」と
+聞かれたので、その答えも兼ねる）。
 
 MAME の PR 用ブランチ（tarboh/mame に push 済み。33 より後は前が取り込まれてから投稿）: `swp30-meg-drc-fixes`（33）、`swp30-meg-absolute-reads`（24）、
 `swp30-meg-alu`（18・20・21・23・30）、`swp30-meg-branches`（11・29・31）、`swp30-meg-index2`（32）、`swp30-meg-lfo-phase`（25）。
