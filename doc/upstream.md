@@ -957,3 +957,5 @@ XG のドラムキット 10 種 465 音で、帯の食い違いの平均が 0.27
 スタンダードキット 71 音と GM 128 音色は数字が 1 つも変わらない。make test も変わらない。
 
 こちらのコミット: `swp30.cpp` の `read_16` / `read_12` / `read_8` と `streaming_block::step`
+
+MAME に投稿した PR（2026-09-15）: [mamedev/mame#16143](https://github.com/mamedev/mame/pull/16143)。MAME でも同じ音の帯の食い違いが 5.67 → 0.17dB になった。
