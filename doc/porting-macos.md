@@ -651,7 +651,7 @@ Checked on arm64:
 | Check | Result |
 |---|---|
 | `aubprobe --list` | opens; `Output Level` 0–1 and `Status` 0–2; instrument name; latency 0 |
-| `--torture` | 8 create/dispose without initialize, 3 initialize cycles, 22050–192000 Hz, zero-length render, property table, state round-trip, 4 instances, the editor — **0 problems** |
+| `--torture` | 8 create/dispose without initialize, 3 initialize cycles, 22050–192000 Hz, zero-length render, property table, state round-trip, 4 instances, the editor, and (installed bundle) an out-of-process render in `AUHostingService` — **0 problems** |
 | state save/restore | **333333** bytes (packed), round-trips |
 | 4 instances at once | 2.13 s of audio in 3.17 s wall (37% CPU each) |
 | render vs `render` | 0 of 2194 windows missing; envelope within ±10%, the same scatter the VST3 side shows |
@@ -666,6 +666,9 @@ Apple's validator is stricter than either probe — it wants a specific set of
 properties to answer, in specific scopes, with the right writability — and it
 only sees components in the standard `Components` directories, so it needs
 `make install-au` first. It now passes:
+
+It is, however, an **in-process** host, which is why the element count below
+got past it:
 
 ```
 make install-au
@@ -692,6 +695,130 @@ a promise the AU cannot keep here.
   Output, `StreamFormat` for Input, `ClassInfo` for Output). When a scope
   question comes up, ask the reference: the pairs above were read off
   DLSMusicDevice rather than guessed.
+
+### The A/D INPUT bus, and the four properties it needs
+
+Upstream's VST3 build has an `A/D Input` bus (the machine samples from it in
+`engine::fill()`), and the merge gave the AU an input bus to match. A bus is not
+only a buffer: a host configures it through five properties before it renders
+anything, and `AUBase` is not in the way here — this wrapper answers them by
+hand. Each of the five was a separate hole.
+
+| what the host does | what was missing |
+|---|---|
+| reads `SupportedNumChannels`, sees `[2, 2]` | — |
+| `GetPropertyInfo(StreamFormat, Input)` | answered `noErr` with `size = 0`, `writable = false` |
+| `SetProperty(StreamFormat, Input, 2 ch)` | refused, because of the line above |
+| `GetPropertyInfo(SetRenderCallback, Input)` | not answered at all (`kAudioUnitErr_InvalidProperty`) |
+| `SetProperty(SetRenderCallback, Input, cb)` | — |
+| `SetProperty(MakeConnection, Input, cb)` (a graph connection) | not answered, not accepted |
+| renders, expecting the callback to see the render's timestamp | the callback was handed `mSampleTime = 0` |
+| expecting a callback's error to come back out of `AURender` | swallowed; the block was silenced and `noErr` returned |
+
+The first row was the first regression. A unit that says "that property is here"
+and then "not writable, size 0" is read as one that **cannot be configured at
+all**: `auval` reports
+`Cannot Set Input Num Channels:2 when unit says it can` (`kAudioUnitErr_PropertyNotWritable`,
+-10865) and fails the format tests before it ever reaches the render tests. Most
+hosts check validation when they scan for plug-ins and refuse to instantiate
+the unit, so from outside it looked like the AU had died — **no audio and no
+editor**, exactly as reported. Nothing about the engine or the editor was wrong.
+`MakeConnection` is the same shape of problem one step later: `auval` checks it
+under *connection semantics*, and a host that cannot connect the AU to a graph
+will not use it.
+
+Two more things about the bus that are easy to get wrong, both now checked:
+
+- **The render's timestamp travels with the pull.** It says where in the stream
+the block sits, and a host handed `0` in its place lines the input up wrongly
+(`auval`: `AU is not passing time stamp correctly`).
+- **A failing callback's error is returned from `AURender`.** The block it did
+not fill is silenced rather than playing whatever the buffers held, and the
+status goes up (`auval`: `Render Input returned an error, but was not returned
+to the caller of AURender`).
+
+`aubprobe --torture` grew a check for each: both properties answer writable with
+`sizeof(AURenderCallbackStruct)` on the input bus, the callback sees the sample
+time the render was given, and a callback returning
+`kAudioUnitErr_InvalidParameter` makes `AURender` return exactly that. Put any of
+the three bugs back and the probe reports it (two `NG` lines per sample rate) —
+verified by reverting the fix and building, then restoring it.
+
+#### The element count, and the second regression
+
+There was a worse one behind those, and it only shows up in a **sandboxed** host.
+GarageBand cannot load a plug-in bundle into its own process, so AudioToolbox
+hosts the unit for it, out of process in `AUHostingService`
+(`kAudioComponentInstantiation_LoadOutOfProcess`). That layer builds its graph
+from the unit's **bus counts**, and a unit that counts an input bus nobody
+connected makes a node whose input has no source. Every render then comes back
+`kAudioUnitErr_NoConnection` (-10876): no audio, and the machine never advances,
+so the panel sits on `PowerOn MU2000 EX / Checking PLG` forever. It looked like a
+dead plug-in in GarageBand and a perfectly healthy one everywhere else.
+
+Everything below was measured on this machine, on the same build, changing one
+thing at a time:
+
+| | in process | out of process |
+|---|---|---|
+| `ElementCount(Input) = 1` (input bus counted) | renders, sounds | **`-10876` on every render** |
+| the same, with a callback connected to that bus | renders, sounds | renders, sounds |
+| `ElementCount(Input) = 0` (bus answerable, not counted) | renders, sounds | renders, sounds |
+| `ElementCount(Input) = 0`, `SupportedNumChannels` still `[2, 2]` | renders, sounds | renders, sounds |
+| Apple's `DLSMusicDevice` (`aumu`, no input bus) | renders, sounds | renders, sounds |
+
+Three things follow, and the third is the one that matters:
+
+- **`SupportedNumChannels` is not the trigger.** `[2, 2]` with the bus not
+  counted renders fine out of process, `[0, 2]` with the bus counted still
+  fails, and `auval` passes either way. Only the element count moves the needle.
+- **An input bus is a promise to have it connected.** With one connected, the
+  identical unit renders out of process — so nothing about the plugin's code is
+  wrong, it is the declaration. An instrument in GarageBand never gets its input
+  connected, so for the AU that promise can only be broken.
+- **The bus stays answerable, and is simply not counted.** `StreamFormat` and
+  `SetRenderCallback` on the input scope still work, `engine::fill` still
+  resamples what a host feeds it, and a host that sets the input up explicitly
+  (moving the format, adding the callback) still gets A/D INPUT. What a host no
+  longer sees is a bus in the enumeration — so GarageBand offers no input, which
+  is exactly the freedom it needs to render at all. The VST3 build has no such
+  constraint and continues to advertise its input bus; the standalone GUI
+  captures A/D INPUT as it always did. For the AU, a plug-in that runs beats an
+  input that is listed.
+
+Why it went unnoticed for a while is worth writing down: **`auval` and
+`aubprobe` both run in process.** They open the bundle with `CFBundle` and
+register its factory with `AudioComponentRegister`, which is the road a
+non-sandboxed host takes — so every check in this file passed while GarageBand
+was silent. The probe now has an eighth step that instantiates the *installed*
+component with `kAudioComponentInstantiation_LoadOutOfProcess`, waits for the
+machine over the same round trip, plays a note and requires sound. It runs when
+the bundle it was handed is in a standard components directory, and says so when
+it is not (a bundle in the build tree is not one the registrar can hand out), so
+`make install-au` comes first:
+
+```
+make install-au
+S_MU2000_ROMS=roms build/aubprobe ~/Library/Audio/Plug-Ins/Components/S-MU2000.component --torture
+  ...
+  OK: 別プロセス（AUHostingService）でも Render できた
+  ---- 悪いところ 0 件 ----
+```
+
+Putting the input bus back into the count makes it say
+`NG: 別プロセスの Render が -10876 で落ちる` instead — checked by doing that and
+building, then restoring.
+
+One more thing the check needed before it told the truth: the service inherits
+the environment but not the working directory, so `S_MU2000_ROMS=roms` (relative)
+cannot be resolved from there. The probe now makes that path absolute before it
+hands the work over, and waits for `Status` to reach 1 before playing, or it
+would be measuring the boot rather than the unit.
+
+`auval` only ever looks at `~/Library/Audio/Plug-Ins/Components`, so a fresh
+`build/S-MU2000.component` means nothing to it: `make install-au` first, or the
+verdict is about the copy installed last time. The probes are the other way
+round — `build/aubprobe` opens the bundle it is handed.
 
 ### Where the ROMs are looked for
 

@@ -38,6 +38,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+// For the out-of-process check below: AudioComponentInstantiate calls back on a
+// queue, and the probe waits for it
+#include <dispatch/dispatch.h>
+#include <limits.h>
 #include <thread>
 #include <vector>
 
@@ -529,6 +534,55 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				}
 				ts.mSampleTime += 256;
 			}
+			// The A/D INPUT bus: a host feeds it with a render callback, and two
+			// things about that are easy to get wrong in a way hosts notice.
+			//
+			// 1. the timestamp the render was given has to travel to the callback.
+			//    A host lines the input up with the block it is rendering by it,
+			//    and auval reports a unit that hands over 0 instead ("AU is not
+			//    passing time stamp correctly")
+			// 2. a callback that fails has to be reported out of AURender. A unit
+			//    that answers noErr hides the broken graph (auval: "Render Input
+			//    returned an error, but was not returned to the caller of AURender")
+			struct seen_t { AudioTimeStamp ts; UInt32 calls; } seen{};
+			AURenderCallbackStruct in_cb{};
+			in_cb.inputProcRefCon = &seen;
+			in_cb.inputProc = [](void *ref, AudioUnitRenderActionFlags *, const AudioTimeStamp *t,
+			                     UInt32, UInt32, AudioBufferList *) -> OSStatus {
+				auto *s = static_cast<seen_t *>(ref);
+				s->ts = *t;
+				s->calls++;
+				return noErr;
+			};
+			if (AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
+			                         0, &in_cb, sizeof(in_cb)) != noErr) {
+				std::printf("NG: 入力のコールバックを受けない\n");
+				bad++;
+			} else {
+				ts.mSampleTime = 4096;
+				flags = 0;
+				AudioUnitRender(u, &flags, &ts, 0, 256, &bufs.list);
+				if (seen.calls != 1 || seen.ts.mSampleTime != 4096.0) {
+					std::printf("NG: 入力に渡った時刻が %g（%u 回呼ばれた）\n",
+					            double(seen.ts.mSampleTime), unsigned(seen.calls));
+					bad++;
+				}
+			}
+
+			// ...and the same callback, failing, must come back out of Render
+			in_cb.inputProc = [](void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *,
+			                     UInt32, UInt32, AudioBufferList *) -> OSStatus {
+				return kAudioUnitErr_InvalidParameter;
+			};
+			AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
+			                     0, &in_cb, sizeof(in_cb));
+			flags = 0;
+			const OSStatus fail = AudioUnitRender(u, &flags, &ts, 0, 256, &bufs.list);
+			if (fail != kAudioUnitErr_InvalidParameter) {
+				std::printf("NG: 入力を渡せないとき Render が %d を返した\n", int(fail));
+				bad++;
+			}
+
 			AudioUnitUninitialize(u);
 			AudioComponentInstanceDispose(u);
 		}
@@ -546,6 +600,8 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 			{ kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global },
 			{ kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global },
 			{ kAudioUnitProperty_Latency, kAudioUnitScope_Global },
+			// How long the machine keeps sounding after the last note (the reverb)
+			{ kAudioUnitProperty_TailTime, kAudioUnitScope_Global },
 			{ kAudioUnitProperty_ParameterList, kAudioUnitScope_Global },
 			{ kAudioUnitProperty_ParameterInfo, kAudioUnitScope_Global },
 			// Global, not Output. Apple's header says Global for this one, and
@@ -570,6 +626,107 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 			}
 		}
 
+		// The tail is asked for by value as well: a host stops rendering when it
+		// runs out, so a tail that is too short cuts the reverb off. The VST3 side
+		// answers four seconds (getTailSamples); this has to agree with it
+		{
+			Float64 tail = 0.0;
+			UInt32 n = sizeof(tail);
+			if (AudioUnitGetProperty(u, kAudioUnitProperty_TailTime, kAudioUnitScope_Global, 0,
+			                         &tail, &n) != noErr) {
+				std::printf("NG: 残響の長さを読めない\n");
+				bad++;
+			} else if (tail < 3.0) {
+				std::printf("NG: 残響の長さが %.2f 秒しかない\n", double(tail));
+				bad++;
+			}
+		}
+
+		// The channel matrix a host (and auval) walks: it reads SupportedNumChannels
+		// and then configures the unit for the combination it was told about.
+		//
+		// Answering "that property is here" without also saying it is *writable*,
+		// and how many bytes it is, reads as "this unit cannot be configured".
+		// auval says `Cannot Set Input Num Channels:2 when unit says it can`
+		// (kAudioUnitErr_PropertyNotWritable, -10865), fails the format tests and
+		// never reaches the render tests. From a host that looked like a dead
+		// plug-in: no audio and no editor
+		{
+			AUChannelInfo chans[4] = {};
+			UInt32 csize = sizeof(chans);
+			if (AudioUnitGetProperty(u, kAudioUnitProperty_SupportedNumChannels,
+			                         kAudioUnitScope_Global, 0, chans, &csize) != noErr ||
+			    csize < sizeof(AUChannelInfo)) {
+				std::printf("NG: 入出力の本数を読めない\n");
+				bad++;
+			} else {
+				// The input bus is the A/D INPUT, so the host asks how big the
+				// property is and whether it may write it before ever setting it
+				UInt32 size = 0;
+				Boolean writable = false;
+				const OSStatus info = AudioUnitGetPropertyInfo(u, kAudioUnitProperty_StreamFormat,
+				                                               kAudioUnitScope_Input, 0,
+				                                               &size, &writable);
+				if (info != noErr || !writable || size < sizeof(AudioStreamBasicDescription)) {
+					std::printf("NG: 入力の形式を書けない（status %d、%u バイト、writable %d）\n",
+					            int(info), unsigned(size), int(writable));
+					bad++;
+				}
+				// ...and it has to answer with a format a host can take and
+				// change only the channel count of, which is what auval does
+				AudioStreamBasicDescription cur{};
+				size = sizeof(cur);
+				if (AudioUnitGetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input,
+				                         0, &cur, &size) != noErr) {
+					std::printf("NG: 入力の今の形式を読めない\n");
+					bad++;
+				} else {
+					AudioStreamBasicDescription want = cur;
+					want.mChannelsPerFrame = 2;       // what the advert promises
+					if (AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input,
+					                         0, &want, sizeof(want)) != noErr) {
+						std::printf("NG: 入力を 2 本にできない（%d 本と名乗っている）\n",
+						            int(chans[0].inChannels));
+						bad++;
+					}
+					want.mChannelsPerFrame = 1;       // and what it does not
+					if (AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input,
+					                         0, &want, sizeof(want)) == noErr) {
+						std::printf("NG: 名乗っていない 1 本の入力を通してしまう\n");
+						bad++;
+					}
+				}
+
+				// The two properties a host uses to wire the input bus up. Both carry
+				// an AURenderCallbackStruct, and both have to be answerable *and*
+				// writable: a host asks GetPropertyInfo first and takes a unit that
+				// cannot answer as one it may not connect to at all
+				const AudioUnitPropertyID into[] = { kAudioUnitProperty_SetRenderCallback,
+				                                     kAudioUnitProperty_MakeConnection };
+				for (AudioUnitPropertyID id : into) {
+					UInt32 isize = 0;
+					Boolean iw = false;
+					if (AudioUnitGetPropertyInfo(u, id, kAudioUnitScope_Input, 0, &isize, &iw) != noErr ||
+					    !iw || isize < sizeof(AURenderCallbackStruct)) {
+						std::printf("NG: 入力の %u を書けない（%u バイト、writable %d）\n",
+						            unsigned(id), unsigned(isize), int(iw));
+						bad++;
+						continue;
+					}
+					// and setting it has to stick, so a host can read back what it
+					// connected
+					AURenderCallbackStruct cb{};
+					cb.inputProcRefCon = &cb;
+					cb.inputProc = [](void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *,
+					                  UInt32, UInt32, AudioBufferList *) -> OSStatus { return noErr; };
+					if (AudioUnitSetProperty(u, id, kAudioUnitScope_Input, 0, &cb, sizeof(cb)) != noErr) {
+						std::printf("NG: 入力の %u を設定できない\n", unsigned(id));
+						bad++;
+					}
+				}
+			}
+		}
+
 		// The other half of the same question. A property that answers in every
 		// scope gets read as if the value belonged to that scope, so refusing the
 		// wrong ones matters as much as answering the right ones. Each pair below
@@ -577,6 +734,7 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 		const prop_test wrong_scope[] = {
 			{ kAudioUnitProperty_SupportedNumChannels,  kAudioUnitScope_Output },
 			{ kAudioUnitProperty_Latency,               kAudioUnitScope_Output },
+			{ kAudioUnitProperty_TailTime,              kAudioUnitScope_Output },
 			{ kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Output },
 			{ kAudioUnitProperty_SetRenderCallback,     kAudioUnitScope_Output },
 			{ kAudioUnitProperty_ClassInfo,             kAudioUnitScope_Output },
@@ -702,6 +860,126 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 		AudioComponentInstanceNew(comp, &u);
 		bad += check_editor(u, bundle_path);
 		AudioComponentInstanceDispose(u);
+	}
+
+	// 8. the way a sandboxed host runs it: out of process, in AUHostingService
+	//
+	// GarageBand (and any other sandboxed host) cannot load the bundle into its
+	// own process, so AudioToolbox hosts it for them. That layer builds its graph
+	// from the unit's bus counts, and a unit that *counts* an input bus whose
+	// input nobody connected then fails every render with
+	// kAudioUnitErr_NoConnection -- no audio, and the machine never advances, so
+	// the panel sits on its power-on screen. Declaration, not code: the same unit
+	// renders perfectly in process, and the same unit renders out of process once
+	// something is connected to that bus.
+	//
+	// Only a component the system has on disk can be hosted that way, so this
+	// runs when the bundle we were handed is the installed one; otherwise it says
+	// so and moves on (make install-au first)
+	{
+		// A bundle can only be hosted that way once the system knows about it,
+		// which is what the standard directories are -- an AU found in the build
+		// tree is not one the AudioComponentRegistrar can hand out. So the test
+		// runs when the bundle we were handed is one of those, and says so when it
+		// is not, rather than testing whatever happens to be installed instead
+		char here_s[PATH_MAX] = {};
+		const char *at = realpath(bundle_path.c_str(), here_s) ? here_s : bundle_path.c_str();
+		const std::string where(at);
+		const char *homes[] = { "/Library/Audio/Plug-Ins/Components/",
+		                        "/System/Library/Components/" };
+		std::string user_dir;
+		if (const char *h = std::getenv("HOME"))
+			user_dir = std::string(h) + "/Library/Audio/Plug-Ins/Components/";
+		bool installed = !user_dir.empty() && where.rfind(user_dir, 0) == 0;
+		for (const char *d : homes)
+			installed = installed || where.rfind(d, 0) == 0;
+
+		AudioComponentDescription want{};
+		want.componentType = kType;
+		want.componentSubType = kSubtype;
+		want.componentManufacturer = kManufacturer;
+		AudioComponent system_comp = installed ? AudioComponentFindNext(nullptr, &want) : nullptr;
+		if (!system_comp) {
+			std::printf("OK: 別プロセスの口は飛ばした（make install-au して、入れた束を渡すと試す）\n");
+		} else {
+			// The service inherits this environment but not this working
+			// directory, so a relative ROM path has to be made absolute first --
+			// otherwise the service cannot find the ROMs and this measures that
+			// rather than the unit
+			if (const char *r = std::getenv("S_MU2000_ROMS")) {
+				char abs[PATH_MAX] = {};
+				if (realpath(r, abs))
+					setenv("S_MU2000_ROMS", abs, 1);
+			}
+			__block AudioUnit u = nullptr;
+			__block OSStatus oerr = noErr;
+			dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+			AudioComponentInstantiate(system_comp, kAudioComponentInstantiation_LoadOutOfProcess,
+			                          ^(AudioComponentInstance inst, OSStatus e) {
+				u = inst;
+				oerr = e;
+				dispatch_semaphore_signal(sem);
+			});
+			dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10ll * NSEC_PER_SEC));
+			if (!u) {
+				std::printf("NG: 別プロセスで開けない（%d）\n", int(oerr));
+				bad++;
+			} else {
+				const AudioStreamBasicDescription ofmt = float_format(44100.0, 2);
+				AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0,
+				                     &ofmt, sizeof(ofmt));
+				AudioUnitInitialize(u);
+
+				const UInt32 frames = 512;
+				std::vector<float> l(frames), r(frames);
+				audio_buffers_2 bufs{};
+				bufs.list.mNumberBuffers = 2;
+				bufs.list.mBuffers[0].mNumberChannels = 1;
+				bufs.list.mBuffers[0].mDataByteSize = frames * 4;
+				bufs.list.mBuffers[0].mData = l.data();
+				bufs.list.mBuffers[1].mNumberChannels = 1;
+				bufs.list.mBuffers[1].mDataByteSize = frames * 4;
+				bufs.list.mBuffers[1].mData = r.data();
+				AudioTimeStamp ts{};
+				ts.mFlags = kAudioTimeStampSampleTimeValid;
+
+				// The machine boots on its own thread inside the service. Rendering
+				// faster than it boots would measure the boot, not the unit, so wait
+				// for it the way the render above does, over the same round trip
+				for (int t = 0; t < 600; t++) {
+					AudioUnitParameterValue v = 0;
+					AudioUnitGetParameter(u, 1 /* status */, kAudioUnitScope_Global, 0, &v);
+					if (v >= 1.0f)
+						break;
+					std::this_thread::sleep_for(std::chrono::milliseconds(50));
+				}
+
+				const unsigned char on[] = { 0x90, 60, 100 };
+				send_midi(u, std::vector<u8>(on, on + 3), 0);
+
+				OSStatus first_err = noErr;
+				double peak = 0.0;
+				for (int blk = 0; blk < 44100 / int(frames); blk++) {
+					AudioUnitRenderActionFlags flags = 0;
+					const OSStatus st = AudioUnitRender(u, &flags, &ts, 0, frames, &bufs.list);
+					if (st != noErr && first_err == noErr)
+						first_err = st;
+					for (float v : l)
+						peak = std::max(peak, std::fabs(double(v)));
+					ts.mSampleTime += frames;
+				}
+				if (first_err != noErr) {
+					std::printf("NG: 別プロセスの Render が %d で落ちる\n", int(first_err));
+					bad++;
+				} else if (peak <= 0.0) {
+					std::printf("NG: 別プロセスでは音が出ない\n");
+					bad++;
+				}
+				AudioUnitUninitialize(u);
+				AudioComponentInstanceDispose(u);
+				std::printf("OK: 別プロセス（AUHostingService）でも Render できた\n");
+			}
+		}
 	}
 
 	std::printf("---- 悪いところ %d 件 ----\n", bad);
