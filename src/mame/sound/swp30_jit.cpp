@@ -603,7 +603,14 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		}
 		if (o.alu && !alu_skip) {
 			if (!(bake && !o.m1_from_t && o.mmode != 3)) {
-			if (o.m1_from_t)
+			if (o.m1_from_t == 2) {
+				// 印（負）が立っていれば t、そうでなければ定数（meg_state::step と同じ、doc/upstream.md の 29）
+				a.loads16(RAX, M(o_t + 2 * o.t));
+				a.loads16(RCX, M(o_const + 2 * s32(k)));
+				a.loadu8(RDX, mem{SWP, NOREG, 1, o_flag_n});
+				a.test32(RDX, RDX);
+				a.cmove64(RAX, RCX);
+			} else if (o.m1_from_t)
 				a.loads16(RAX, M(o_t + 2 * o.t));
 			else
 				a.loads16(RAX, M(o_const + 2 * s32(k)));
