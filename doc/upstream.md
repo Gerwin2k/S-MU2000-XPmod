@@ -686,6 +686,8 @@ idx の値（LFO から作った番地）に入れ替わる。ロータの遅延
 
 **idx にも書く命令では、bit 0x3d で書き値を取り込まない**とすると、実機（XG モード、2 回録って同じ）と合った。
 
+（2026-09-15 夜の追記: 本当は「idx と mw の両方が立った命令は 2 つ目の idx に書く」だった。upstream 32 を参照）
+
 | インサーション 1、SineLead A3 | 直す前（実機との音量差） | 直した後 |
 |---|---|---|
 | DUAL ROTR1 | -16.0dB（帯の食い違い 0.9） | +2.5dB（0.2） |
@@ -833,4 +835,41 @@ t を書かないと、0eb の t2 は前のサンプルでオールパスの係�
 | DYNA FLT | 弱 帯 9.6 | 弱 帯 7.0 |
 
 こちらのコミット: `swp30.cpp` の `meg_state::step` / `run_program`、`swp30_jit.cpp` の同じ所
+
+## 32. idx と mw の両方が立った命令は 2 つ目の idx に書き、bit 0x22 の読み出しがそれを足す（直した）
+
+**症状**: XG のエフェクトの DT/OD/AMP +RTRY、DT/OD/AMP +2RTRY、DUAL ROTR1/2、V-FLANGER が、音量は合うのに、
+倍音の間や低い帯域に実機より 30〜60dB 大きい濁りが出る。
+
+これらのプログラムは、bit 0x3e（idx = p）と bit 0x3d（mw = p）の両方が立った命令を置き、その 3 命令後に、
+bit 0x21（+idx）の無い、**bit 0x22 の付いた読み出し**を置く。DUAL ROTR1 の例:
+
+```
+0cf  400000344381d002  p =s 0.0245972 * r3a ; idx = p ; mem_1r +2
+0d0  60005a804381d802  p =s 0.0245972 * r3b ; mw = p ; idx = p      ← bit 0x3e と 0x3d
+0d2  1d3b002200840140  p = 0.03125 * m14 + p ; mem_r +2+idx          ← 0cf の idx
+0d5  0000003200819801  mem_1r +2+idx
+0d8  002f00244081b801  p =s 0.53421 * r37 + p ; mem_r +2               ← bit 0x22。0d0 の値を足す
+0db  1a02003444940040  mem_1r +2                                       ← bit 0x22
+```
+
+ロータリーは 2 本の遅延線（ホーンとローター）を別々の揺れで読むので、idx が 2 つ要る。
+**bit 0x3e と 0x3d が両方立った命令は、idx でも mw でもなく 2 つ目の idx に（3 命令遅れで）書き、
+bit 0x22 の付いた読み出しは番地に 2 つ目の idx を足す**（bit 0x23 の絶対番地の読み出しでも同じ。V-FLANGER と MULTI COMP が使う）。
+upstream 26 で「この命令は mw を取り込まない」としたのは半分だけ正しかった（idx にも書かない）。
+
+実機（XG モード）との比べ（SineLead A3、強い音。帯は上位 40dB の中の食い違いの平均）:
+
+| | 直す前 | 直した後 |
+|---|---|---|
+| DT +RTRY / OD +RTRY / AMP+RTRY | 16.6 / 12.2 / 2.7 | 0.1 / 0.1 / 0.1 |
+| DT +2RTRY / OD +2RTRY / AMP+2RTRY | 37.0 / 34.5 / 28.5 | 0.1 / 0.1 / 0.0 |
+| DUAL ROTR1 / DUAL ROTR2 | 36.3 / 36.4 | 0.1 / 0.0 |
+| V-FLANGER | 43.4（-2.4dB） | 0.1（0.0dB） |
+| MULTI COMP | -1.3dB | -0.8dB |
+
+S-MU2000 では 2 つ目の idx の値と遅延の輪を meg_state の外（swp30_device）に置き、状態の保存の版を 6 にした
+（MEG の印 flag_n/flag_z もこれまで保存していなかったので一緒に入れた）。
+
+こちらのコミット: `swp30.cpp` の `decode_program` / `step` / `run_program` / `flush_writes` / `state`、`swp30_jit.cpp` の同じ所
 
