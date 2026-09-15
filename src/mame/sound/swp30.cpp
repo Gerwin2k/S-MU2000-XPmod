@@ -2285,7 +2285,8 @@ void swp30_device::wave_access_w(u16 data)
 	// S-MU2000: 0x7000 は録音（sample_step）。位置は 0 から数え直す
 	if(data == 0x7000)
 		m_rec_pos = 0;
-	if(data == 0x8000) {
+	// S-MU2000: 0x9000 は続けて読む（カードへの書き出し）。最初の語をここで用意する
+	if(data == 0x8000 || data == 0x9000) {
 		m_wave_val = m_wave_cache.read_dword(m_wave_adr);
 		logerror("wave read adr=%08x size=%08x -> %08x\n", m_wave_adr, m_wave_size, m_wave_val);
 	}
@@ -2298,12 +2299,23 @@ u16 swp30_device::wave_access_r()
 
 u16 swp30_device::wave_busy_r()
 {
+	// S-MU2000: 続けて読むとき、firmware は下 8bit が 0 でなくなるのを待ってから 0x14e、0x14f の順に 1 語読む。
+	// (値 & 0x40ff) が 0x4000 なら打ち切りとみなすので、残りがある間は 0x0001 を返す
+	if(m_wave_access == 0x9000)
+		return m_wave_size ? 0x0001 : 0xffff;
 	return m_wave_size ? 0 : 0xffff;
 }
 
 template<int Sel> u16 swp30_device::wave_val_r()
 {
-	return m_wave_val >> (16*Sel);
+	const u16 v = m_wave_val >> (16*Sel);
+	// S-MU2000: 続けて読むときは、下の半分を読んだら次の語へ進む
+	if(!Sel && m_wave_access == 0x9000 && m_wave_size) {
+		m_wave_adr ++;
+		m_wave_size --;
+		m_wave_val = m_wave_size ? m_wave_cache.read_dword(m_wave_adr) : 0;
+	}
+	return v;
 }
 
 template<int Sel> void swp30_device::wave_val_w(u16 data)
