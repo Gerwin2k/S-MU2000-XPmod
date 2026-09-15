@@ -2690,7 +2690,12 @@ template<int Sel> u16 swp30_device::vol_r(offs_t offset)
 
 template<int Sel> void swp30_device::vol_w(offs_t offset, u16 data)
 {
-	m_mixer[(Sel & 0x40) | (offset >> 6)].vol[Sel & 3] = data;
+	// S-MU2000: firmware は A/D パートのミキサ（MELI 6/7 など 8 個）を同じ値で 1 秒に 2000 回ほど書き直す。
+	// 変わらない書き込みで並びを作り直さない
+	u16 &v = m_mixer[(Sel & 0x40) | (offset >> 6)].vol[Sel & 3];
+	if(v == data)
+		return;
+	v = data;
 	mixer_mark((Sel & 0x40) | (offset >> 6));
 }
 
@@ -2701,7 +2706,10 @@ template<int Sel> u16 swp30_device::route_r(offs_t offset)
 
 template<int Sel> void swp30_device::route_w(offs_t offset, u16 data)
 {
-	m_mixer[(Sel & 0x40) | (offset >> 6)].route[Sel & 3] = data;
+	u16 &r = m_mixer[(Sel & 0x40) | (offset >> 6)].route[Sel & 3];
+	if(r == data)
+		return;
+	r = data;
 	mixer_mark((Sel & 0x40) | (offset >> 6));
 }
 
