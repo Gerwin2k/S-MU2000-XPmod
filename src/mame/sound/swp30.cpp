@@ -2419,14 +2419,16 @@ template<int Sel> void swp30_device::revram_data_w(u16 data)
 	else
 		m_revram_data = (m_revram_data & 0xffff0000) |  data;
 
+	// S-MU2000: 書く値は上の 16bit が Q15（1.0 = 0x7fff）。MEG がメモリへ書く値（p >> 15）は 1.0 が 2^23 なので、
+	// 符号付きで 8bit 落として同じ目盛りにする。MAME は >> 5 で、8 倍（+18dB）大きく入っていた（doc/upstream.md の 24）
 	if(!Sel)
-		m_reverb_cache.write_word(m_revram_adr, meg_state::revram_encode(m_revram_data >> 5));
+		m_reverb_cache.write_word(m_revram_adr, meg_state::revram_encode(u32(s32(m_revram_data) >> 8)));
 }
 
 template<int Sel> u16 swp30_device::revram_data_r()
 {
 	if(Sel)
-		m_revram_data = meg_state::revram_decode(m_reverb_cache.read_word(m_revram_adr)) << 5;
+		m_revram_data = u32(s32(meg_state::revram_decode(m_reverb_cache.read_word(m_revram_adr)) << 5) << 3);
 
 	return Sel ? m_revram_data >> 16 : m_revram_data;
 }
@@ -3364,20 +3366,6 @@ u32 swp30_device::meg_state::get_lfo(int lfo)
 
 // Expand the first multiplier input
 
-// S-MU2000: 内部の表の 0x000-0x0ff。bit 0x22-0x23 が 2 の読み出しは、firmware も MEG も書かない区画を +idx で引く。
-// RING MOD の搬送波（位相の上位 8bit を idx に 0x80 を中心に引く）が実機の 1001Hz と合い、音量も合うので、
-// そこは 256 点で 1 周の正弦と決めた。大きさは 0x7fffff。0x100 から上は分からないので、今までどおり RAM を読む
-const std::array<s32, 0x100> &swp30_device::meg_state::table_sine()
-{
-	static const std::array<s32, 0x100> t = [] {
-		std::array<s32, 0x100> v;
-		for(int i = 0; i != 0x100; i++)
-			v[i] = s32(std::lrint(std::sin(2 * 3.141592653589793 * i / 256) * 0x7fffff));
-		return v;
-	}();
-	return t;
-}
-
 s16 swp30_device::meg_state::m1_expand(s16 v)
 {
 	if(v < 0)
@@ -3441,7 +3429,7 @@ void swp30_device::meg_state::decode_program()
 		d.t_write   = BIT(opcode, 0x3b);
 		d.t_from_p  = BIT(opcode, 0x3c);
 		d.mem_use_index = BIT(opcode, 0x21);
-		d.mem_table = BIT(opcode, 0x22, 2) == 2;
+		d.mem_table = BIT(opcode, 0x23);
 	}
 }
 
@@ -3709,10 +3697,11 @@ void swp30_device::meg_state::step()
 		break;
 	}
 	case 2: case 3: {
-		// S-MU2000: 内部の表の 0x000-0x0ff は、RAM でなく 256 点で 1 周の正弦を読む（doc/upstream.md の 24）
-		const s32 ti = s32(m_offset[m_pc/3]) + (d.mem_use_index ? s32(m_ram_index) : 0) + (d.memop == 3 ? 1 : 0);
-		if(d.mem_table && u32(ti) < 0x100) {
-			m_memr_value[m_delay_2] = u32(table_sine()[ti]);
+		// S-MU2000: bit 0x23 の付いた読み出しは、リバーブ RAM の絶対番地（offset + idx）を読む。サンプルの数え上げを引かず、
+		// map も通さない。firmware が種類を読み込むときに、波形や曲線の表をここへ直に書いている（doc/upstream.md の 24）
+		if(d.mem_table) {
+			const u32 address = (u32(m_offset[m_pc/3]) + (d.mem_use_index ? m_ram_index : 0) + (d.memop == 3 ? 1 : 0)) & 0x3ffff;
+			m_memr_value[m_delay_2] = revram_decode(m_swp->m_reverb_ram[address]);
 			m_memr_active[m_delay_2] = true;
 			break;
 		}
@@ -3968,12 +3957,11 @@ void swp30_device::meg_state::run_program(const op *ops)
 		                        : s16(std::clamp<s64>(p >> (15+8), -0x8000, 0x7fff));
 
 		if(o.memop >= 2 && o.mem_table) {
-			const s32 ti = s32(m_offset[o.offset_index]) + (o.mem_use_index ? s32(m_ram_index) : 0) + (o.memop == 3 ? 1 : 0);
-			if(u32(ti) < 0x100) {
-				m_memr_value[d2] = u32(table_sine()[ti]);
-				m_memr_active[d2] = true;
-				goto mem_done;
-			}
+			// 絶対番地の読み出し（上の step と同じ）
+			const u32 address = (u32(m_offset[o.offset_index]) + (o.mem_use_index ? m_ram_index : 0) + (o.memop == 3 ? 1 : 0)) & 0x3ffff;
+			m_memr_value[d2] = revram_decode(m_swp->m_reverb_ram[address]);
+			m_memr_active[d2] = true;
+			goto mem_done;
 		}
 		if(o.memop) {
 			u32 off = u32(m_offset[o.offset_index]) + u32(o.mem_use_index ? m_ram_index : 0) - sample_counter;

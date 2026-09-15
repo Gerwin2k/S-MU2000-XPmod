@@ -307,7 +307,7 @@ private:
 			bool m1_expand = false, m2_from_m = false;
 			bool dr_from_r = false, no_noise = false;
 			bool memw = false, index = false, t_write = false, t_from_p = false, mem_use_index = false;
-			bool mem_table = false;   // S-MU2000: bit 0x22-0x23 が 2 の読み出し（内部の表。doc/upstream.md の 24）
+			bool mem_table = false;   // S-MU2000: bit 0x23 の付いた読み出し（リバーブ RAM の絶対番地。doc/upstream.md の 24）
 		};
 		std::array<decoded, 0x180> m_decoded = {};
 		void decode_program();
@@ -391,8 +391,6 @@ private:
 		static u16 revram_encode(u32 v);
 		static u32 revram_decode(u16 v);
 		static s16 m1_expand(s16 v);
-		// S-MU2000: 内部の表の 0x000-0x0ff（256 点で 1 周の正弦）。doc/upstream.md の 24
-		static const std::array<s32, 0x100> &table_sine();
 
 		static void call_rand(void *ms);
 		static void call_revram_encode(void *ms);
