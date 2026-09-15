@@ -889,7 +889,9 @@ MAME に上の直しを移すときに、DRC とインタプリタを同じ状�
 直した後は `-nodrc` の有り無しで、ディザの 1 LSB ほどの差しか残らない。
 
 MAME に投稿した PR（2026-09-15）: 22 は [mamedev/mame#16140](https://github.com/mamedev/mame/pull/16140)、
-33 は [mamedev/mame#16141](https://github.com/mamedev/mame/pull/16141)。
+33 は [mamedev/mame#16141](https://github.com/mamedev/mame/pull/16141)。どちらも同じ日のうちに取り込まれた。
+続けて 24 を [mamedev/mame#16142](https://github.com/mamedev/mame/pull/16142) に出した（#16140 で「リバーブ RAM に表を書いてどう使うのか」と
+聞かれたので、その答えも兼ねる）。
 
 MAME の PR 用ブランチ（tarboh/mame に push 済み。33 より後は前が取り込まれてから投稿）: `swp30-meg-drc-fixes`（33）、`swp30-meg-absolute-reads`（24）、
 `swp30-meg-alu`（18・20・21・23・30）、`swp30-meg-branches`（11・29・31）、`swp30-meg-index2`（32）、`swp30-meg-lfo-phase`（25）。
@@ -933,3 +935,25 @@ GM 128 音色（送り 0、C4）で、Glockenspiel 5.27 → 0.26、Kalimba 4.96 
 -50dB を横切るまでの時間も実機に近づいた（NRPN のリリースタイム 96 で、実機 750ms・直す前 960ms・直した後 875ms。80 で 200・245・215ms）。
 
 こちらのコミット: `swp30.cpp` の `volume_apply`
+
+## 35. 逆向きに鳴らすサンプルの補間で、4 つの値の並びが逆のまま（直した）
+
+**症状**: XG の Electro Kit・Analog Kit の 28 番（8bit のサンプルを逆向きに、約 0.41 倍の速さで鳴らす）で、
+エミュだけ 10〜20kHz が実機より +14〜25dB 多く、5〜6.4kHz が 7〜10dB 足りない。
+
+`read_16` / `read_12` / `read_8` は、逆向き（loop の bit 31）のとき `spos = -m_pos` から番地の順に 4 つ読む。
+再生の順では、読んだ val0 が「次」、val1 が「今」、val2 が「前」、val3 が「その前」になる。`step()` は順向きと同じく
+val2 を「次」として端数で寄せるので、端数が増えるほど 1 つ前の値へ近づき、1 サンプルごとに行きつ戻りつする。
+ぎざぎざの雑音が高い帯に出て、本来の高めの成分は削られる。
+
+声の中身をダンプし（読んだ 4 つの値・端数・位置）、同じ補間の式で並びだけを再生の順に直して机上で計算すると、
+実機の録音と 640Hz から上の帯で平均 0.20dB の差で重なる（直線補間 1.48、Catmull-Rom 1.92、窓付き sinc 8 タップ 5.93dB）。
+フィルタの係数を変える案（この音はカットオフが最大・Q=1 で、Chamberlin がそのまま素通しになる）はどれも合わなかった。
+
+直し方: 逆向きのときは 1 つ手前（`-m_pos - 1`）から読み、`step()` で val0↔val3、val1↔val2 を入れ替える。
+これで前・今・次・その次の順になり、「今」の値は直す前と同じ。圧縮サンプル（`read_8c`）は逆向きが無いので触らない。
+
+XG のドラムキット 10 種 465 音で、帯の食い違いの平均が 0.272 → 0.252dB。Electro・Analog の 28 番は 3.9 → 0.1dB 前後に下がり、
+スタンダードキット 71 音と GM 128 音色は数字が 1 つも変わらない。make test も変わらない。
+
+こちらのコミット: `swp30.cpp` の `read_16` / `read_12` / `read_8` と `streaming_block::step`
