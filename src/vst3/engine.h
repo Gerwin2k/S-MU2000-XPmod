@@ -20,7 +20,9 @@
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -86,7 +88,23 @@ public:
 	std::vector<uint8_t> save_state();
 	bool load_state(const uint8_t *p, size_t n);
 
+	// ---- SmartMedia（前面のカードの差し込み口）
+	//
+	// カードの中身は PC のファイル（gui.exe と同じ .img）。firmware が書いたブロックは card_flush() で書き戻す。
+	// 差し替えと写しは音声スレッドに頼む（上の保存と同じやり方）。path は UTF-8
+	bool card_insert(const std::string &path, std::string &err);
+	void card_eject();
+	void card_flush();
+	std::string card_path() const;
+
 private:
+	// 機械に触る仕事を、音を作っていれば音声スレッドに頼み、止まっていればその場でやる
+	bool on_machine(const std::function<void(mu2000 &)> &fn);
+	std::atomic<int> m_fn_req{0};           // 0 なし / 1 頼んだ / 3 やっている / 2 できた
+	const std::function<void(mu2000 &)> *m_fn = nullptr;
+	mutable std::mutex m_card_mutex;        // m_card_path を守る
+	std::string m_card_path;
+
 	void boot();
 	void serve_state();          // 音声スレッドで頼み事を片づける
 	void one_sample(float &l, float &r);

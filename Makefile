@@ -168,7 +168,7 @@ vst3: $(VST3_BIN)
 
 $(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt
+	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) -lwinmm -lole32 -lgdi32 -luser32 -lavrt -lcomdlg32
 	@mkdir -p $(VST3_DIR)/Contents/Resources
 	@cp -f doc/vst3-readme.txt $(VST3_DIR)/Contents/Resources/README.txt 2>/dev/null || true
 	# 取り込んだものの著作権表示。BSD-3 はバイナリで配るときも添えろと言っている

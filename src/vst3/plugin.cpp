@@ -315,6 +315,21 @@ public:
 		for (int i = 0; i < 300 && m_engine.state() == smu2000::vst3::status::loading; i++)
 			Sleep(10);
 		m_engine.load_state(blob.data(), blob.size());
+
+		// 版 3 から: 差していた SmartMedia のファイル（UTF-8）。無くなっていたら差さない
+		if (version >= 3) {
+			int32 len = 0;
+			if (stream->read(&len, sizeof(len), &got) == kResultOk && got == sizeof(len) && len > 0 && len < 4096) {
+				std::string path(size_t(len), '\0');
+				if (stream->read(path.data(), len, &got) == kResultOk && got == len) {
+					std::string err;
+					if (!m_engine.card_insert(path, err))
+						m_engine.log_line(("SmartMedia を差せない: " + err).c_str());
+				}
+			}
+		} else if (!m_engine.card_path().empty()) {
+			m_engine.card_eject();
+		}
 		return kResultOk;
 	}
 
@@ -324,8 +339,9 @@ public:
 		// 開き直しても、音色もエフェクトもそのまま戻る
 		if (!stream)
 			return kResultFalse;
-		int32 version = 2;
+		int32 version = 3;
 		float gain = m_engine.panel().gain();
+		m_engine.card_flush();   // プロジェクトを保存するときに、カードのファイルも揃える
 		int32 written = 0;
 		stream->write(&version, sizeof(version), &written);
 		stream->write(&gain, sizeof(gain), &written);
@@ -337,6 +353,12 @@ public:
 		int32 n = int32(packed.size());
 		stream->write(&n, sizeof(n), &written);
 		stream->write(const_cast<uint8_t *>(packed.data()), n, &written);
+		// 版 3: 差している SmartMedia のファイル。中身はプロジェクトに入れない（16MB から 128MB あるので）
+		const std::string card = m_engine.card_path();
+		int32 len = int32(card.size());
+		stream->write(&len, sizeof(len), &written);
+		if (len)
+			stream->write(const_cast<char *>(card.data()), len, &written);
 		return kResultOk;
 	}
 

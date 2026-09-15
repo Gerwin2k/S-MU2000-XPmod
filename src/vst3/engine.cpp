@@ -4,6 +4,7 @@
 
 #include "mu2000.h"
 #include "nvram.h"
+#include "smartmedia.h"
 
 #include <algorithm>
 #include <cmath>
@@ -197,6 +198,14 @@ engine::~engine()
 	m_abort.store(true, std::memory_order_relaxed);
 	if (m_thread.joinable())
 		m_thread.join();
+	// 音声スレッドはもう回っていない。SmartMedia に書いたものをその場で残す
+	if (m_mu && !card_path().empty()) {
+		std::vector<smartmedia::block> blocks;
+		m_mu->card().take_dirty_blocks(blocks);
+		std::string err;
+		if (!smartmedia::write_blocks(card_path(), blocks, err))
+			log_line(err.c_str());
+	}
 	delete m_mu;
 }
 
@@ -533,6 +542,12 @@ void engine::fill(float *left, float *right, int n, const float *in_l, const flo
 
 void engine::serve_state()
 {
+	int want = 1;
+	if (m_fn_req.compare_exchange_strong(want, 3, std::memory_order_acq_rel)) {
+		if (m_mu && m_fn)
+			(*m_fn)(*m_mu);
+		m_fn_req.store(2, std::memory_order_release);
+	}
 	if (m_load_req.load(std::memory_order_acquire) == 1) {
 		std::string err;
 		if (m_mu)
@@ -601,6 +616,93 @@ bool engine::load_state(const uint8_t *p, size_t n)
 	}
 	log_line("状態を読み戻せなかった（音声スレッドが応じない）");
 	return false;
+}
+
+
+// ---- 機械に触る仕事を頼む（SmartMedia の差し替えなど）
+
+bool engine::on_machine(const std::function<void(mu2000 &)> &fn)
+{
+	if (state() != status::ready || !m_mu)
+		return false;
+	if (!m_processing.load(std::memory_order_acquire)) {
+		fn(*m_mu);
+		return true;
+	}
+	const uint64_t t0 = m_fill_tick.load(std::memory_order_acquire);
+	m_fn = &fn;
+	m_fn_req.store(1, std::memory_order_release);
+	for (int i = 0; i < 200; i++) {
+		if (m_fn_req.load(std::memory_order_acquire) == 2)
+			break;
+		Sleep(10);
+	}
+	int want = 1;
+	if (m_fn_req.compare_exchange_strong(want, 0, std::memory_order_acq_rel)) {
+		// 音声スレッドは手を付けていない。回っていなければその場でやる
+		m_fn = nullptr;
+		if (m_fill_tick.load(std::memory_order_acquire) == t0) {
+			fn(*m_mu);
+			return true;
+		}
+		log_line("カードの差し替えができなかった（音声スレッドが応じない）");
+		return false;
+	}
+	// 始めていれば終わるまで待つ（fn はこの関数の中にある）
+	while (m_fn_req.load(std::memory_order_acquire) != 2)
+		Sleep(1);
+	m_fn_req.store(0, std::memory_order_release);
+	m_fn = nullptr;
+	return true;
+}
+
+std::string engine::card_path() const
+{
+	std::lock_guard<std::mutex> lock(m_card_mutex);
+	return m_card_path;
+}
+
+void engine::card_flush()
+{
+	const std::string path = card_path();
+	if (path.empty() || !m_mu)
+		return;
+	std::vector<smartmedia::block> blocks;
+	const std::function<void(mu2000 &)> take = [&](mu2000 &m) { m.card().take_dirty_blocks(blocks); };
+	if (state() == status::ready)
+		on_machine(take);
+	else
+		take(*m_mu);
+	std::string err;
+	if (!smartmedia::write_blocks(path, blocks, err))
+		log_line(err.c_str());
+}
+
+void engine::card_eject()
+{
+	card_flush();
+	on_machine([](mu2000 &m) { m.card().eject(); });
+	std::lock_guard<std::mutex> lock(m_card_mutex);
+	m_card_path.clear();
+}
+
+bool engine::card_insert(const std::string &path, std::string &err)
+{
+	auto card = std::make_shared<smartmedia>();
+	if (!card->load(path, err))
+		return false;
+	if (state() != status::ready) {
+		err = "まだ起動していない";
+		return false;
+	}
+	card_flush();
+	if (!on_machine([card](mu2000 &m) { m.card() = std::move(*card); })) {
+		err = "カードを差せなかった（音声スレッドが応じない）";
+		return false;
+	}
+	std::lock_guard<std::mutex> lock(m_card_mutex);
+	m_card_path = path;
+	return true;
 }
 
 } // namespace vst3
