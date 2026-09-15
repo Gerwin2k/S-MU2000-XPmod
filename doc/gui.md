@@ -33,8 +33,23 @@ build/gui.exe <rom> --play 曲.mid         MIDI ファイルを流しながら�
 SAMPLING の SAVE / LOAD（ALL+SEQ など）と UTIL の CARD が使える。firmware が書いたところは 2 秒ごとと、
 抜いたとき・gui を閉じたときにファイルへ書き戻す（書き換えたブロックだけ）。差していたカードは gui.ini に覚え、次に起動したときも差す。
 
-ファイルの中身は SmartMedia の NAND の生の並び（1 ページ 512 バイト + 予備 16 バイト）で、PC から中のファイルを直に読み書きする道具はまだ無い。
-WAV / AIFF の取り込みは本体の SAMPLING → LOAD で、カードに置く方法がまだ無い。
+ファイルの中身は SmartMedia の NAND の生の並び（1 ページ 512 バイト + 予備 16 バイト）。PC との出し入れは `tools/smcard.py` で:
+
+```bash
+python tools/smcard.py ls smartmedia.img
+```
+
+```bash
+python tools/smcard.py put smartmedia.img drums.wav
+```
+
+```bash
+python tools/smcard.py get smartmedia.img TAKE001.WAV
+```
+
+`info`（容量と空き）と `rm`（消す）もある。入れた WAV / AIFF は本体の SAMPLING → LOAD → WAV で読み込め、SAMPLING → SAVE → WAV で書いたものは
+`get` で取り出せる。名前は 8.3 だけ（長い名前は作らない）。**gui で差しているカードは書き換えない**こと（gui が 2 秒ごとに書き戻すので、
+どちらかの書き込みが消える）。抜いてから入れ、差し直す。
 
 `render` にも `--card カード.img` がある（終わりに書き戻す）。
 
