@@ -55,6 +55,214 @@ The Audio Unit was also missing its editor — a host could open it but had only
 Apple's generic two-slider panel. It has one now; see
 [The editor](#the-editor) below.
 
+### Since the second merge (upstream `96f9c26`)
+
+65 more commits came in. Most are docs, but the code side needed the macOS
+branch caught up, and three things the merge left as Windows-only are here now.
+
+**What the merge itself needed**
+
+* **The arm64 MEG JIT had to follow upstream's rewrite.** Upstream gave the
+  x86-64 backend the second index (`idx2`), `t` on branch instructions, MULTI
+  COMP, the table reads, the wrap/saturation and rounding fixes and the `e == 0`
+  case in `revram_decode`. `verify` compares the hand-written machine code of the
+  reverb encode/decode and `m1_expand` against the C++ functions over every
+  input, and that is what caught the divergence: it reports **0 mismatches** now.
+* **The arm64 SH2 JIT took the lazy `pc` and the native delay-slot emission**
+  (`SMU2000_SH2_LAZYPC=0` and `SMU2000_SH2_SLOTNATIVE=0` turn them off). Those
+  were most of the instructions that still fell back to the interpreter.
+* **The Audio Unit got an A/D INPUT bus and the card in its saved state.** The
+  host feeds the unit's input bus (element 0, `SetRenderCallback`) and that goes
+  to `engine::fill()`, the same job the VST3's `A/D Input` bus does. The card is
+  remembered in the preset by file name only, as on the VST3 side. The bus is
+  **not counted** in `ElementCount` — that one number decides whether a sandboxed
+  host can render the unit at all, and it is the whole of
+  [the long note below](#the-ad-input-bus-and-the-four-properties-it-needs).
+* **`ARCH=` / `UNIVERSAL=1` now pick their own build directory** (`build-arm64`,
+  `build-x86_64`, `build-universal`). Before this an `ARCH=x86_64 make` after a
+  native build failed in the link step, with a message about which architecture
+  the object files were.
+
+**Three things that were still Windows-only**
+
+* **Branch programs on arm64.** The MEG JIT compiled a program with jumps only
+  on x86-64; on arm64 it handed such a program back to the interpreter (correct,
+  but slower). It compiles them now, reading and writing the delay ring on every
+  instruction instead of committing three instructions later, and clearing the
+  write and storing only the `t` value for an instruction that was jumped over —
+  the same shape as the x86-64 backend and as `meg_state::run_program()`.
+* **The SmartMedia slot in the macOS GUI.** Its menu had the MIDI file player
+  only; it now has new (16/32/64/128MB) / open / eject, writes changed blocks
+  back every two seconds, remembers the card in `gui.ini` and puts it back on the
+  next start. It is the same `src/smartmedia.h` the Windows side uses.
+* **A/D INPUT capture on macOS** (`src/ui/audio_in_mac.cpp`). `ui/audio_in.h` now
+  splits by platform the way `audio_out.h` does: a HAL input AudioUnit, whose
+  input callback runs on CoreAudio's real-time thread, feeds the ring that
+  `pop()` reads. The device's own rate is converted to 44100Hz with the same
+  `ui::resampler` the Windows side uses. The device is chosen from the port menu
+  (`ui::audio_in::list()`), remembered by name in `gui.ini`, and `gui --list`
+  prints the list.
+
+**The regression suite grew two things**
+
+* A `lofi` case (`tools/make_test_midi.py`) that selects the XG insertion effect
+  `LO-FI` (type `5E-00`), whose MEG program is the one with the seven jumps. No
+  song in the suite reached that path before.
+* Step 4, **JIT on/off**: every song is rendered twice, with both JITs and with
+  neither, and the two WAVs are compared byte for byte. The fingerprint in
+  `tests/*.json` is a single hash and cannot catch that on its own.
+
+One bug turned up while wiring the menus, and it is worth knowing about: the
+A/D INPUT and SmartMedia menu ids sat inside `ID_OUTMU_BASE + 256`, so picking an
+input device selected a MIDI OUT instead and the tick never moved to what was
+picked. They have ranges of their own now, on both platforms (`gui.cpp` had the
+same defect).
+
+Checked on arm64, with the ROMs in `roms/`:
+
+| Check | Result |
+|---|---|
+| `make test` | verify **0 mismatches**; statetest packs to **472113** bytes, restore exact; **8** audio fingerprints (including `lofi`); **JIT on/off 8 of 8 byte-identical**; threaded matches; `xg` 526 round-trips, 0 mismatches; sampling 0 |
+| `lofi` (LO-FI insertion, 7 jumps) | arm64 JIT vs arm64 interpreter: WAV byte-identical; arm64 and x86-64 renders identical too |
+| the other 7 songs | JIT on vs off: byte-identical |
+| `ui::audio_in` (standalone smoke test) | 2 devices listed; `Micro MacBook Pro` opens at 44100 Hz 1 ch → no conversion, real signal captured; the 48000 Hz device → resampled to 44100, ring fills |
+| `gui roms` with `smartmedia=…` in `gui.ini` | `SmartMedia を差した: …（16MB）` before the window opens |
+| `gui roms` with `audio_in=Micro MacBook Pro` | `A/D INPUT: Micro MacBook Pro（CoreAudio / 44100 Hz 1 ch float32 → 44100 Hz）` |
+| `gui --list` | prints the MIDI ports, the outputs and the **input** devices |
+| `make ARCH=x86_64 build-x86_64/render` / `…/gui` | both build in their own directory |
+| `blocktime` (see doc/benchmarks.md) | arm64 both JITs: 0.865 ms per 256-frame block, **14.9%** of real time, worst 71%, 0 overruns |
+
+Not checked here: the card and input-picking **menus** were not clicked (that
+needs someone at the machine), so what is verified is the code behind them — the
+ids reach the right handler (checked by simulating the dispatch chain), the card
+is loaded into the machine at startup, and the input device opens and delivers
+audio. The card file written by the machine was not compared against a real card.
+
+## The front ends, diffed against the Windows one
+
+`diff src/gui.cpp src/gui_mac.cpp` (comparing function lists, then the bodies of
+the functions both have) is the way to tell a platform difference from a feature
+that was left behind. Most of what comes out of it is platform:
+
+* `ui::audio_out` has no `late()`, `format_line()`, `latency_line()` or
+  `output_ms()` on macOS. Those read the WASAPI clock (`IAudioClock`,
+  `GetStreamLatency`) and have no CoreAudio counterpart, so the status line says
+  `枯渇` where Windows says `待ち … 遅れ …`. The answer here is `starved()`, which
+  counts the blocks that ran out of sound.
+* There is no MMCSS to register with; the counterpart is CoreAudio's real-time
+  thread, so the line reads `CoreAudio の実時間スレッド`.
+* The PC editor, the overview and the insertion editor (`ui::pc_editor`,
+  `ui::overview`, `ui::fx_editor` — Dear ImGui) are not built for macOS, so
+  `--editor`, `--list-window`, `--fx-window`, `F2`/`F3` and
+  `ui::xgui::set_voice_rom()` have no macOS side.
+* The file panels and the modal dialogs are AppKit, not `GetOpenFileNameW()` /
+  `MessageBoxW()`.
+
+Four things were real gaps and are ported now:
+
+* **Dropping a MIDI file on the window.** Windows catches it with
+  `WM_DROPFILES`; the macOS window registers `NSPasteboardTypeFileURL` and hands
+  the path to a new `ui::mac_app::file_dropped()`, which plays it exactly as
+  `--play` does. The hook is on the `mac_app` interface rather than in the app, so
+  a front end with nothing to do with a drop does not have to say anything.
+* **Ports 3 and 4 of a MIDI file.** `ui::player` already had `ports_used()` and
+  `fold_extra_ports()`; the macOS GUI was not using either. The card menu now
+  carries the same two items as `gui.cpp` (`口 3・4 を A・B に重ねて鳴らす` /
+  `口 3・4 は鳴らさない`), the choice is kept in `gui.ini` as `ports34=` with the
+  same spelling as Windows, and a four-port file says which of the two it did.
+* **All notes off on the way out.** Windows sends all-sound-off/all-notes-off
+  (CC120/CC123, all 16 channels) to the THRU ports before closing them; macOS
+  closed them and left notes held on whatever is listening.
+* **`--nomidi` also means "do not remember".** On Windows it clears every port
+  and sets `keep_settings`, because that is what the test runs use. On macOS it
+  cleared the two inputs only, so a test run wrote its empty port names over the
+  remembered ones.
+
+The same diff over the plug-ins turned up two more. One is a regression the
+last merge introduced:
+
+* **A blank SmartMedia is announced again.** Upstream's Windows view showed
+  `空の SmartMedia を差しました。… UTIL → CARD → Format で書式化してください。` when
+  one was made. Moving card creation into the shared `plug_view::card_make()`
+  dropped that notice, so the VST3 on both platforms and the AU handed the user an
+  unformatted card in silence. `plug_view` says it through
+  `plug_window::alert()` now. The standalone macOS GUI, which never had it, uses a
+  new `ui::alert_modal()`.
+* **The AU did not report its tail.** The VST3 answers `getTailSamples()` with
+  four seconds so a host keeps rendering until the reverb has died; the AU
+  answered nothing for `kAudioUnitProperty_TailTime`, so a host stopped at the
+  last note and clipped the tail. It answers 4.0 seconds now.
+
+The AU **view** cannot diverge from the VST3 one: `editor_mac.mm` builds a
+`vst3::plug_view`, and `src/vst3/view.cpp` and `view_mac.mm` are the same files
+in both bundles (see `AU_SRCS` in the Makefile). What the AU has of its own is
+`au/plugin.cpp` and `au/probe.cpp`, and those were compared against
+`vst3/plugin.cpp` and `vst3/probe.cpp` instead.
+
+Checked on arm64, with the ROMs in `roms/`:
+
+| Check | Result |
+|---|---|
+| `make all au au-probe vst3` | clean; also with `ARCH=x86_64` (`build-x86_64/gui`, `…/S-MU2000.component`) |
+| `make test` | verify **0 mismatches**; 8 fingerprints, JIT on/off **8 of 8 byte-identical**; `lofi` 4.3 s; sampling 0; xg 0 |
+| `make check-au` | **0** problems; `残響の長さ` read back and required to be ≥ 3 s |
+| `make probe` | `遅れ 0 サンプル / 残響 192000 サンプル` (4 s at 48 kHz — the same four seconds the AU now reports) |
+| `gui roms --play` a four-port MIDI | `この曲は 4 口ぶん。…口 3 以降は A・B に重ねて鳴らす` (default) |
+| the same with `ports34=drop` in `gui.ini` | `…口 3 以降は鳴らさない`, and the key is written back unchanged — the load/apply/save round trip |
+| `gui roms --nomidi` with no `gui.ini` | no `gui.ini` is created, so a test run leaves the real one alone |
+
+What is not checked: the drag-and-drop path itself (a drop has to be dragged by
+someone at the machine — what is verified is that the window registers the type
+and the app's `file_dropped()` is the handler behind it), and the two new menu
+items were reached through the dispatch rather than clicked.
+
+## The JIT debug switches, and what they cost
+
+Every switch the two JITs consult is read once into a constant at startup, so a
+switch that is off costs nothing per block. Four did not follow that rule:
+
+* **`meg_jit_run()` is called once per audio sample** (44100 times a second per
+  MEG program), and it read its two switches from function-local statics — a
+  guard check each, every sample. They are file-scope constants now
+  (`g_meg_bake`, `g_meg_check`).
+* **`SMU2000_MEG_JIT_UPTO` was a raw `getenv()` in the code emitter**, and what
+  it does is *truncate the block being compiled*. A stray variable therefore
+  silently made the JIT run a partial program whenever the check harness was
+  off. It is read once now, and ignored unless `SMU2000_MEG_JIT_CHECK` is on —
+  the only situation where it means anything, since the check steps the
+  interpreter the same number of times.
+* **Both copies of `jit::compile()`** (x86-64 and arm64) read `lazy_pc`,
+  `slot_native`, `native_enabled()` and `jit_trace_on()` *per instruction
+  compiled*, the last three through a function call, and `slot_native` was a
+  static sitting inside the compiling loop. All four are read once at the top of
+  `compile()` now. The x86-64 copy is upstream's; the arm64 copy is the port's.
+* **`SMU2000_JIT_DUMP`** (arm64 only, "temporary aid while porting") did a
+  `getenv()` and a `strtoul()` on every block compiled. Removed.
+  `tools/jit_dump.py` only decoded its output, so it is unused now — left in
+  place rather than deleted.
+
+Left alone, because it is upstream's: `sh2.cpp`'s interpreter loop calls
+`jit_trace_on()` once per **interpreted instruction**, tracing or not. With the
+JIT on that is only the fallback path; with `SMU2000_SH2_JIT=0` it is every
+instruction. Hoisting it out of the loop is a one-line change to a file the
+merge already conflicts in, so it is noted rather than done.
+
+`SMU2000_MEG_JIT_CHECK=1` is expensive on purpose: it copies the whole
+`meg_state` and a 256 KB reverb-RAM vector per block, and runs the block twice.
+Two seconds of audio takes about two and a half minutes that way. It reports 0
+mismatches on the current tree, which is what it is for.
+
+Checked with the switches on both architectures (`build/` and `build-x86_64/`,
+`lofi` — the branchy program — and `piano`):
+
+| Check | Result |
+|---|---|
+| `SMU2000_MEG_JIT_UPTO=1` **without** the check | WAV byte-identical to the default, as intended |
+| `SMU2000_MEG_JIT_UPTO=1` **with** `SMU2000_MEG_JIT_CHECK=1` | still bisects: 20 mismatch lines, versus 0 for the check alone |
+| both JITs off, `SMU2000_SH2_LAZYPC=0`, `SMU2000_SH2_SLOTNATIVE=0`, `SMU2000_SH2_JIT=1` | every combination byte-identical to the default |
+| `make test` | verify 0 mismatches, `JIT 入切` 8 of 8 |
+| arm64 vs x86-64 | the same WAV |
+
 ## The core needed one change
 
 `timer_alloc` in `src/compat/mamecompat.h` called `machine().make_timer(...)`
