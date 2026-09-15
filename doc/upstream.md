@@ -711,3 +711,27 @@ firmware の書き込みだけで入力の切り替えが説明できる（実�
 実機で 0x10f がどんな値を返すか（下 8bit が溜まった語数なのか）は分からない。firmware は 0 か 0x4000 かしか見ない。
 
 こちらのコミット: `swp30.cpp` の `wave_access_w` / `wave_busy_r` / `wave_val_r` / `sample_step`
+
+## 28. SH7042 の中速の A/D で、連続変換（SCAN）ができない（直した）
+
+**症状**: MU2000 の SAMPLING → REC の画面で、レベルメーターが動かない。TriggerLvl を上げても「Waiting!」にならず、すぐ録音が始まる。
+
+`sh_adc_device::mode_update()` の中速（`m_is_hs` が偽）の側に 2 つ問題がある。
+
+* ADCSR の **bit 4 が SCAN、bit 3 が CKS**（H8 の `h8_adc_3337_device` と同じ並び）なのに、bit 3 を SCAN として見ている。
+* `m_start_mode` を作らず `m_mode` に直接入れているので、`start_conversion()` が `m_mode = m_start_mode`（0）で上書きし、
+  1 回変換して止まる。SCAN でも回り続けない。
+
+MU2000 の firmware は起動してから ADCSR0 に 0xb3（ADF・ADST・SCAN、AN0-AN3）、ADCSR1 に 0xb0（AN4）を書いて回し続け、
+REC の画面では ADDR0 / ADDR2 の上 8bit（A/D INPUT の大きさ）を直に読む（2.01 の 0x116196）。
+
+直し方: 中速の側で、SCAN が 1 なら `m_start_mode = ACTIVE | REPEAT | ROTATE`、AN0 から CH まで。0 なら `ACTIVE` で CH だけ。
+`timeout()` の REPEAT で ADST が下ろされていたら止める。
+
+ついでに S-MU2000 では、割り込み（ADIE）を使わない連続変換は変換ごとに時計を刻まず、ADDR を読まれたときに入力を読むようにした
+（`free_running()`）。1 変換ごとに刻むと、変換時間が 24 サイクルなので CPU の実行が 1 サンプルあたり 744 → 1607ns に重くなった。
+こちらは MAME に持っていく必要はない（MAME は変換時間の見直しのほうがよい。SH7040 の中速は 1 変換 266 ステートほど）。
+
+この直しで CPU の動くタイミングがわずかに変わり、make test の鳴らし比べの WAV が 1 LSB だけ違うところが出た（指紋を焼き直した）。
+
+こちらのコミット: `sh_adc.cpp` の `mode_update` / `timeout` / `start_conversion` / `addr_r` / `adcsr_r` / `adcsr_w`
