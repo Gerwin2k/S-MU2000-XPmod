@@ -1205,7 +1205,7 @@ int main(int argc, char **argv)
 
 	RECT want{ 0, 0, win_w, win_h };
 	AdjustWindowRect(&want, WS_OVERLAPPEDWINDOW, FALSE);
-	HWND hwnd = CreateWindowA("SMU2000Panel", lcd_only ? "S-MU2000 LCD" : "S-MU2000", WS_OVERLAPPEDWINDOW,
+	HWND hwnd = CreateWindowA("SMU2000Panel", "S-MU2000", WS_OVERLAPPEDWINDOW,
 	                          CW_USEDEFAULT, CW_USEDEFAULT,
 	                          want.right - want.left, want.bottom - want.top,
 	                          nullptr, nullptr, inst, nullptr);
