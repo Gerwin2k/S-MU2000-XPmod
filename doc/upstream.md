@@ -936,6 +936,8 @@ GM 128 音色（送り 0、C4）で、Glockenspiel 5.27 → 0.26、Kalimba 4.96 
 
 こちらのコミット: `swp30.cpp` の `volume_apply`
 
+MAME に投稿した PR（2026-09-15）: [mamedev/mame#16144](https://github.com/mamedev/mame/pull/16144)。MAME（ほかの直しの入っていない状態）でも GM 128 音色の帯の食い違いの平均が 0.733 → 0.647dB になり、悪くなった音色は 0.05dB 以内。
+
 ## 35. 逆向きに鳴らすサンプルの補間で、4 つの値の並びが逆のまま（直した）
 
 **症状**: XG の Electro Kit・Analog Kit の 28 番（8bit のサンプルを逆向きに、約 0.41 倍の速さで鳴らす）で、
