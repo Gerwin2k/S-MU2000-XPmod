@@ -387,6 +387,72 @@ int run_torture(IPluginFactory *fac, const TUID cid)
 		c->release();
 	}
 
+	// 3.4 setActive(true) を抜けた直後の音。**新しい個体**でやる。
+	// ホストは setActive を抜けたら演奏を始めてよいことになっているので、
+	// 起動が終わっていなければ最初の音が溜められて曲の頭が崩れる（issue #19）
+	{
+		IComponent *c = nullptr;
+		fac->createInstance(reinterpret_cast<FIDString>(cid),
+		                    reinterpret_cast<FIDString>(IComponent::iid.toTUID()), (void **)&c);
+		IAudioProcessor *p = nullptr;
+		if (c) c->queryInterface(IAudioProcessor::iid.toTUID(), (void **)&p);
+		if (c && p) {
+			c->initialize(nullptr);
+			c->activateBus(kAudio, kOutput, 0, true);
+			for (int32 b = 0; b < c->getBusCount(kEvent, kInput); b++)
+				c->activateBus(kEvent, kInput, b, true);
+			ProcessSetup su{};
+			su.processMode = kRealtime;
+			su.symbolicSampleSize = kSample32;
+			su.maxSamplesPerBlock = 512;
+			su.sampleRate = 44100.0;
+			p->setupProcessing(su);
+			c->setActive(true);
+			p->setProcessing(true);
+
+			std::vector<float> l(512), rr(512);
+			float *ch[2] = { l.data(), rr.data() };
+			AudioBusBuffers ab{};
+			ab.numChannels = 2; ab.channelBuffers32 = ch;
+			event_list elist;
+			Event ev{};
+			ev.busIndex = 0; ev.sampleOffset = 0; ev.flags = Event::kIsLive;
+			ev.type = Event::kNoteOnEvent;
+			ev.noteOn.channel = 0; ev.noteOn.pitch = 60;
+			ev.noteOn.velocity = 100.0f / 127.0f; ev.noteOn.noteId = -1;
+			elist.addEvent(ev);
+
+			ProcessData pd{};
+			pd.symbolicSampleSize = kSample32;
+			pd.numOutputs = 1; pd.outputs = &ab;
+			pd.numSamples = 512;
+			pd.inputEvents = &elist;
+
+			// 100ms ぶん回して、音が出ているか見る
+			double peak = 0;
+			for (int i = 0; i < 9; i++) {
+				std::fill(l.begin(), l.end(), 0.0f);
+				std::fill(rr.begin(), rr.end(), 0.0f);
+				p->process(pd);
+				pd.inputEvents = nullptr;     // ノートオンは 1 回だけ
+				for (int k = 0; k < 512; k++)
+					peak = std::max(peak, double(std::fabs(l[k])));
+			}
+			if (peak < 0.001) {
+				std::printf("NG: setActive(true) の直後のノートオンで音が出ない"
+				            "（起動を待っていない。issue #19）\n");
+				bad++;
+			} else {
+				std::printf("OK: setActive(true) の直後のノートオンで音が出る（頂 %.3f）\n", peak);
+			}
+			p->setProcessing(false);
+			c->setActive(false);
+			c->terminate();
+		}
+		if (p) p->release();
+		if (c) c->release();
+	}
+
 	// 3.5 状態の保存と復元。**新しい個体**でやる。使い回すと起動の途中で
 	// 止められていたりして、機械の中身が入らない
 	{
