@@ -102,6 +102,7 @@ void pc_trace(u32 pc, const char *regs);
 // 追跡と違って JIT を止めないので、速さを測りながら使える
 extern u32 *g_pc_prof;                 // 0x40 ごとの数え上げ。ROM 4MB ぶん
 extern u64 g_pc_prof_why[5];           // 0 遅延枠 / 1 割り込みの印 / 2 番地が外 / 3 ブロックに入った / 4 進んだ命令数
+extern u64 g_slow_mem[2];              // JIT の速い道から外れたメモリ操作（0 読み / 1 書き）
 void pc_prof_start();                  // 環境変数を見て用意する。無ければ何もしない
 void pc_prof_report();                 // 多い順に出す
 }

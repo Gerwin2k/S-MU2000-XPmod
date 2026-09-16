@@ -43,6 +43,7 @@ void pc_hash(u32 pc, u64 regs)
 
 u32 *g_pc_prof = nullptr;
 u64 g_pc_prof_why[5] = {};
+u64 g_slow_mem[2] = {};
 static std::vector<u32> s_pc_prof;
 static int s_pc_prof_top = 0;
 
@@ -79,6 +80,8 @@ void pc_prof_report()
 	std::printf("  入り直し %llu 回で %llu 命令 = 1 回あたり %.1f 命令\n",
 	            (unsigned long long)g_pc_prof_why[3], (unsigned long long)g_pc_prof_why[4],
 	            g_pc_prof_why[3] ? double(g_pc_prof_why[4]) / double(g_pc_prof_why[3]) : 0.0);
+	std::printf("  JIT の速い道から外れたメモリ: 読み %llu / 書き %llu\n",
+	            (unsigned long long)g_slow_mem[0], (unsigned long long)g_slow_mem[1]);
 	for (int k = 0; k < s_pc_prof_top && k < int(idx.size()); k++)
 		std::printf("  %08x  %10u  %5.1f%%\n", idx[k] * 0x40,
 		            s_pc_prof[idx[k]], 100.0 * s_pc_prof[idx[k]] / double(total));

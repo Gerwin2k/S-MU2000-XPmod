@@ -194,12 +194,12 @@ void sh2_device::jit_irq(sh2_device *c)
 	c->m_test_irq = 0;
 }
 
-u32 sh2_device::jit_rb(sh2_device *c, u32 a) { return c->read_byte(a); }
-u32 sh2_device::jit_rw(sh2_device *c, u32 a) { return c->read_word(a); }
-u32 sh2_device::jit_rl(sh2_device *c, u32 a) { return c->read_long(a); }
-void sh2_device::jit_wb(sh2_device *c, u32 a, u32 v) { c->write_byte(a, u8(v)); }
-void sh2_device::jit_ww(sh2_device *c, u32 a, u32 v) { c->write_word(a, u16(v)); }
-void sh2_device::jit_wl(sh2_device *c, u32 a, u32 v) { c->write_long(a, v); }
+u32 sh2_device::jit_rb(sh2_device *c, u32 a) { if (smu2000::g_pc_prof) smu2000::g_slow_mem[0]++; return c->read_byte(a); }
+u32 sh2_device::jit_rw(sh2_device *c, u32 a) { if (smu2000::g_pc_prof) smu2000::g_slow_mem[0]++; return c->read_word(a); }
+u32 sh2_device::jit_rl(sh2_device *c, u32 a) { if (smu2000::g_pc_prof) smu2000::g_slow_mem[0]++; return c->read_long(a); }
+void sh2_device::jit_wb(sh2_device *c, u32 a, u32 v) { if (smu2000::g_pc_prof) smu2000::g_slow_mem[1]++; c->write_byte(a, u8(v)); }
+void sh2_device::jit_ww(sh2_device *c, u32 a, u32 v) { if (smu2000::g_pc_prof) smu2000::g_slow_mem[1]++; c->write_word(a, u16(v)); }
+void sh2_device::jit_wl(sh2_device *c, u32 a, u32 v) { if (smu2000::g_pc_prof) smu2000::g_slow_mem[1]++; c->write_long(a, v); }
 
 bool sh2_device::jit_run()
 {
