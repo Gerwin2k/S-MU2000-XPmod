@@ -1017,7 +1017,7 @@ int main(int argc, char **argv)
 	std::string dir, shot_path;
 	// -2 未指定（覚えているものを使う）/ -1 使わない
 	int in_dev[mu2000::MIDI_PORTS] = { -2, -2, -2, -2 };
-	bool usb_host = false;             // 口 C・D を使う（USB の口で起動する）
+	bool usb_host = true;              // USB の口で起動する（口 C・D が使える）。--host-midi で切る
 	int moutb_dev = -2;                // MIDI OUT B
 	int mout_dev = -2;
 	int moutmu_dev = -2;               // MIDI OUT（本体）
@@ -1084,6 +1084,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--lcd")) lcd_only = true;
 		else if (!std::strcmp(argv[i], "--fast-midi")) fast_midi = true;
 		else if (!std::strcmp(argv[i], "--usb")) usb_host = true;
+		else if (!std::strcmp(argv[i], "--host-midi")) usb_host = false;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot")) boot_for_shot = true;
 		else if (!std::strcmp(argv[i], "--grid")) grid = true;
@@ -1140,7 +1141,7 @@ int main(int argc, char **argv)
 		std::fprintf(stderr,
 			"使い方: gui <rom ディレクトリ> [--midi 番号] [--midi-b 番号] [--midi-c 番号] [--midi-d 番号]"
 			" [--midiout 番号] [--midiout-b 番号] [--midiout-mu 番号]"
-			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid] [--lcd] [--fast-midi] [--usb]\n"
+			" [--latency ミリ秒] [--exclusive] [--layout panel.txt] [--play 曲.mid] [--lcd] [--fast-midi] [--host-midi]\n"
 			"        [--factory]   覚えている設定を捨てて工場出荷状態で起動する\n"
 			"        [--editor]    PC エディタも開く（窓では F2 か右クリック）\n"
 			"        [--list-window] 一覧の窓も開く（窓では F3 か右クリック）\n"
@@ -1256,16 +1257,13 @@ int main(int argc, char **argv)
 		br.set_gain(volume);
 		g_win.play_file.set_fold_extra_ports(fold34);
 
-		// 口 C・D は実機では USB だけの口で、firmware は HOST SELECT が USB の
-		// ときしか通さない。**起動する前に**決めないといけないので、覚えている
-		// 口か --midi-c / --midi-d を見てここで切り替える。
-		// USB のときは A・B も USB 側を通る（実機で DIN が黙るのと同じ）
-		bool want_usb = usb_host || in_dev[2] >= 0 || in_dev[3] >= 0;
-		if (!g_win.keep_settings)
-			want_usb = want_usb || !ins[2].empty() || !ins[3].empty();
-		if (want_usb)
-			std::printf("MIDI IN C・D を使うので USB の口で起動する（パート 33-64 まで届く）\n");
-		eng.mu.set_usb_host(want_usb);
+		// **既定は USB の口**（実機を PC に繋ぐときと同じ姿）。口 C・D は実機では
+		// USB だけの口で、firmware は HOST SELECT が USB のときしか通さない。
+		// USB のときは A・B も USB 側を通る（実機で DIN が黙るのと同じ）。
+		// --host-midi を付けると DIN の口 A・B だけになる
+		eng.mu.set_usb_host(usb_host);
+		std::printf(usb_host ? "MIDI は USB の口（A-D の 64 パート）\n"
+		                     : "--host-midi: DIN の口 A・B だけ（パート 1-32）\n");
 	}
 
 	eng.publish();

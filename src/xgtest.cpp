@@ -107,9 +107,9 @@ int main(int argc, char **argv)
 	std::vector<std::string> problems;
 
 	// ---- 1. 書いて読み返す
-	const int PARTS[] = { 0, 16, 31 };            // パート 1、17（口 B の最初）、32
+	const int PARTS[] = { 0, 16, 32, 63 };        // 口 A・B・C・D から 1 つずつ（1、17、33、64）
 	for (const xg::param &p : xg::params()) {
-		const int nparts = p.where == xg::area::part ? 3 : 1;
+		const int nparts = p.where == xg::area::part ? 4 : 1;
 		for (int k = 0; k < nparts; k++) {
 			const int part = p.where == xg::area::part ? PARTS[k] : 0;
 			int original = 0;
@@ -324,7 +324,7 @@ int main(int argc, char **argv)
 	{
 		int n = 0, diff = 0;
 		// 既定のままだと 0 が多くて偶然合うので、少し散らしておく
-		const int RAM_PARTS[] = { 0, 9, 16, 25, 31 };   // RAM では 10 と 26 が口の先頭にある
+		const int RAM_PARTS[] = { 0, 9, 16, 25, 31, 32, 41, 48, 63 };   // RAM では 10 と 26 が口の先頭にある
 		for (int part : RAM_PARTS) {
 			g.send(xg::param_change(*xg::find("part.volume"), part, 37 + part));
 			g.send(xg::param_change(*xg::find("part.pan"), part, 20 + part));

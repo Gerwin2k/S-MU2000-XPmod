@@ -288,14 +288,24 @@ void engine::boot()
 	// DAW の中では、DAW が管理しない糸が 1 本増える。嫌う DAW や、自分でコアを割り振りたい人のために、
 	// %LOCALAPPDATA%\S-MU2000\plugin.ini に threaded=0 と書けば 1 本で回す
 	bool threaded = true;
+	// MIDI IN の口 C・D（パート 33-64）は実機では USB だけの口で、firmware は
+	// HOST SELECT が USB のときしか通さない。**既定は USB**（実機を PC に繋ぐときと
+	// 同じ姿）。A・B も USB 側を通り、バイトの届き方が DIN の 31250bps から
+	// 実機の USB の速さになる。plugin.ini に usb=0 と書けば DIN に戻る
+	bool usb = true;
 	if (const std::string local = smu2000::config_dir(); !local.empty())
 		if (std::FILE *f = std::fopen(smu2000::join(local, "plugin.ini").c_str(), "rb")) {
 			char line[256];
-			while (std::fgets(line, sizeof(line), f))
+			while (std::fgets(line, sizeof(line), f)) {
 				if (!std::strncmp(line, "threaded=", 9))
 					threaded = line[9] != '0';
+				if (!std::strncmp(line, "usb=", 4))
+					usb = line[4] != '0';
+			}
 			std::fclose(f);
 		}
+	mu->set_usb_host(usb);
+	logf(usb ? "MIDI は USB の口（A-D の 64 パート）" : "plugin.ini: usb=0（DIN の口 A・B だけ）");
 	mu->set_threaded(threaded);
 	if (!threaded)
 		logf("plugin.ini: threaded=0（スレーブを別スレッドにしない）");
@@ -427,7 +437,8 @@ void engine::one_sample(float &l, float &r)
 
 void engine::midi(const uint8_t *bytes, size_t n, int port)
 {
-	port = port == 1 ? 1 : 0;
+	if (port < 0 || port >= mu2000::MIDI_PORTS)
+		port = 0;
 	const status s = state();
 	if (s == status::failed)
 		return;
@@ -454,10 +465,9 @@ void engine::midi(const uint8_t *bytes, size_t n, int port)
 	pending.insert(pending.end(), bytes, bytes + n);
 }
 
-void engine::all_notes_off(uint16_t mask_a, uint16_t mask_b)
+void engine::all_notes_off(const uint16_t *mask, int ports)
 {
-	const uint16_t mask[2] = { mask_a, mask_b };
-	for (int port = 0; port < 2; port++)
+	for (int port = 0; port < ports && port < mu2000::MIDI_PORTS; port++)
 		for (int ch = 0; ch < 16; ch++) {
 			if (!((mask[port] >> ch) & 1))
 				continue;

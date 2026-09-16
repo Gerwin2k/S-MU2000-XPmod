@@ -62,6 +62,8 @@ inline u64 key(const mu2000 &mu)
 	}
 	for (int k = 0; k < 4; k++)
 		h = mix(h, u8(mu2000::state_version() >> (k * 8)));
+	// HOST SELECT（USB か MIDI か）でも起動後の姿が変わる
+	h = mix(h, u8(mu.usb_host() ? 1 : 0));
 	return h;
 }
 
@@ -142,6 +144,7 @@ inline bool refresh(const mu2000 &live)
 	fresh.set_program_rom(live.program_rom());
 	fresh.set_wave_rom(live.wave_rom());
 	fresh.set_sintab_rom(live.sintab_rom());
+	fresh.set_usb_host(live.usb_host());
 	if (!fresh.set_nvram(ram.data(), ram.size()))
 		return false;
 
