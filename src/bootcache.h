@@ -58,14 +58,26 @@ inline void write_envelope(std::vector<u8> &out, u32 flags)
 }
 
 // True for a current, settled snapshot. Anything else (older generation,
-// raw blob, corruption) must be rebuilt, never loaded
+// raw blob, corruption, or a state blob from another save-format version)
+// must be rebuilt, never loaded. The version pins to exactly what this
+// build writes: unlike DAW project states (which stay readable back to
+// STATE_VERSION_OLDEST), a snapshot is only an optimization, and loading
+// one saved under different semantics (e.g. before the M37640 host
+// command existed, leaving the firmware parked on its host-status LCD)
+// trades one slow boot for a permanently wrong one
 inline bool check_envelope(const u8 *data, size_t n)
 {
-	if (n < kEnvSize)
+	if (n < kEnvSize + 8)
 		return false;
 	u32 h[3];
 	std::memcpy(h, data, kEnvSize);
-	return h[0] == kEnvMagic && h[1] == kEnvVersion && (h[2] & kEnvSettled);
+	if (h[0] != kEnvMagic || h[1] != kEnvVersion || !(h[2] & kEnvSettled))
+		return false;
+	u32 magic = 0, version = 0;
+	std::memcpy(&magic, data + kEnvSize, 4);
+	std::memcpy(&version, data + kEnvSize + 4, 4);
+	// Magic and layout match mu2000.cpp (STATE_MAGIC "S2MU", then version)
+	return magic == 0x554d3253u && version == mu2000::state_version();
 }
 
 // 鍵。プログラム ROM・ワーク RAM・波形 ROM・状態の版から作る。
@@ -201,10 +213,10 @@ inline bool refresh(const mu2000 &live)
 		std::fseek(f, 0, SEEK_END);
 		const long size = std::ftell(f);
 		std::fseek(f, 0, SEEK_SET);
-		u8 head[kEnvSize] = {};
-		const bool current = size >= (long)kEnvSize &&
-		                     std::fread(head, 1, kEnvSize, f) == kEnvSize &&
-		                     check_envelope(head, kEnvSize);
+		u8 head[kEnvSize + 8] = {};
+		const bool current = size >= (long)sizeof(head) &&
+		                     std::fread(head, 1, sizeof(head), f) == sizeof(head) &&
+		                     check_envelope(head, sizeof(head));
 		std::fclose(f);
 		if (current)
 			return false;
