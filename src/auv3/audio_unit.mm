@@ -82,6 +82,22 @@ void emit_one(void *ctx, const uint8_t *bytes, size_t n)
 		e->block(e->when, 0, NSInteger(n), bytes);
 }
 
+// Silence only the channels that sounded (see scratch::sounded): hushing
+// every channel would cost 61ms of 31250bps serial per port (issue #15)
+void hush_engine(smu2000::plug::engine *eng, scratch *sc)
+{
+	if (!eng || !sc)
+		return;
+	uint16_t mask[mu2000::MIDI_PORTS] = {};
+	bool any = false;
+	for (int p = 0; p < PORTS; p++) {
+		mask[p] = sc->sounded[p].exchange(0);
+		any = any || mask[p];
+	}
+	if (any)
+		eng->all_notes_off(mask, mu2000::MIDI_PORTS);
+}
+
 // UMP（MIDI 1.0）の event-list を昔のバイト列に戻して engine へ。
 // 声とシステムはそのまま渡し、SysEx7 は組み立ててから渡す。
 // cable が口の番号。UMP の group も同じ意味なので、cable が変なときだけ見る
@@ -466,21 +482,37 @@ static NSString *const kStateKey = @"S-MU2000.nvram";
 	return s;
 }
 
+// The one factory preset, like the AUv2's. Choosing it puts the defaults
+// back; anything else is ignored
+- (NSArray<AUAudioUnitPreset *> *)factoryPresets
+{
+	AUAudioUnitPreset *p = [[AUAudioUnitPreset alloc] init];
+	p.number = 0;
+	p.name = @"S-MU2000";
+	return @[p];
+}
+
+- (AUAudioUnitPreset *)currentPreset
+{
+	return self.factoryPresets.firstObject;
+}
+
+- (void)setCurrentPreset:(AUAudioUnitPreset *)currentPreset
+{
+	if (!currentPreset || currentPreset.number != 0)
+		return;
+	if (_engine) {
+		_engine->panel().set_gain(1.0f);
+		hush_engine(_engine.get(), _scratch.get());
+	}
+}
+
 // Silence whatever is still ringing (host stopped us). Only the channels
 // that sounded get all-sound-off + all-notes-off; see the note on scratch::sounded
 - (void)reset
 {
 	if (_engine) {
-		if (_scratch) {
-			uint16_t mask[mu2000::MIDI_PORTS] = {};
-			bool any = false;
-			for (int p = 0; p < PORTS; p++) {
-				mask[p] = _scratch->sounded[p].exchange(0);
-				any = any || mask[p];
-			}
-			if (any)
-				_engine->all_notes_off(mask, mu2000::MIDI_PORTS);
-		}
+		hush_engine(_engine.get(), _scratch.get());
 		_engine->flush_resampler();
 	}
 	if (_scratch) {
