@@ -1465,15 +1465,18 @@ bool swp30_device::envelope_block::active() const
 	return m_envelope_level != 0x3fff || m_envelope_mode != RELEASE;
 }
 
-u16 swp30_device::envelope_block::level_step(u32 level, u32 sample_counter)
+u16 swp30_device::envelope_block::level_step(s32 level, u32 sample_counter)
 {
 	// Phase is incorrect, and very weird
 
 	if(level >= 0x78)
 		return 0x7f;
 
-	u32 k0 = level >> 3;
-	u32 k1 = level & 7;
+	// S-MU2000: level は負にもなる（ピッチ EG は 16 段遅らせて引く）。
+	// 算術シフトなので k0 がそのまま増え、8 段下がるごとに半分の速さになる。
+	// 下は -16（k0 = 10）までしか来ない
+	s32 k0 = level >> 3;
+	u32 k1 = u32(level) & 7;
 
 	if(level >= 0x48) {
 		k0 -= 9;
@@ -1491,13 +1494,13 @@ u16 swp30_device::envelope_block::level_step(u32 level, u32 sample_counter)
 		return (mx[k1] >> s1) & 1;
 	}
 
-	k0 = 8 - k0;
+	const u32 sh = u32(8 - k0);       // 負の level ではここが 8 より大きくなる
 
-	if(sample_counter & util::make_bitmask<u32>(k0))
+	if(sample_counter & util::make_bitmask<u32>(sh))
 		return 0;
 
 	static const u16 mx[8] = { 0x5555, 0x5557, 0x5757, 0x5777, 0x7777, 0x777f, 0x7f7f, 0x7fff };
-	return (mx[k1] >> ((sample_counter >> k0) & 0xf)) & 1;
+	return (mx[k1] >> ((sample_counter >> sh) & 0xf)) & 1;
 }
 
 u16 swp30_device::envelope_block::step(u32 sample_counter)
@@ -2488,7 +2491,12 @@ void swp30_device::peg_rate_w(offs_t offset, u16 data)
 
 // 今の値を目標へ、速さ（スロット 0x0B の bit 14-8）で近づける。刻みは音量の EG と同じ表を
 // 16 段遅らせて引く（4 分の 1 の速さ）。DuckLead の -375 セント → +100 → 0 と Bund、VoxLead の
-// 鳴り始めが実機と合う。16 より小さい速さは 0 にしている（実機で確かめていない）
+// 鳴り始めが実機と合う。
+//
+// S-MU2000: 16 より小さい速さは 0 で止めていたが、実機はそこから下も続いていた。
+// XG の SFX「Starship」（バンク 64 の 88 番）は速さ 8 を使う。止めていたころは
+// ピッチの登りが実機の 2 倍（+1.55 半音 / 実機 +0.75 半音）になっていた。
+// 表は 8 段下がるごとに半分の速さなので、符号付きのまま引けばそのまま伸びる
 void swp30_device::peg_step(int chan)
 {
 	const s32 target = s32(util::sext(u32(m_pitch_offset[chan] & 0x3fff), 14));
@@ -2497,7 +2505,7 @@ void swp30_device::peg_step(int chan)
 		m_peg_reached[chan] = 1;
 		return;
 	}
-	const int rate = std::max(int((m_peg_rate[chan] >> 8) & 0x7f) - 16, 0);
+	const int rate = int((m_peg_rate[chan] >> 8) & 0x7f) - 16;
 	const s32 step = m_envelope[chan].level_step(rate, m_meg->m_sample_counter);
 	if(cur < target) {
 		cur += step;

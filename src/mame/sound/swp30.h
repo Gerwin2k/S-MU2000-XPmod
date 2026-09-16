@@ -257,7 +257,9 @@ private:
 		u16 decay2_r() const;
 		u16 release_glo_r() const;
 
-		u16 level_step(u32 speed, u32 sample_counter);
+		// S-MU2000: speed は符号付き。ピッチ EG は 16 段遅らせて引くので、
+		// もとの表より下（負）まで伸びる。8 段下がるごとに半分の速さ
+		u16 level_step(s32 speed, u32 sample_counter);
 	};
 
 	struct lfo_block {
