@@ -1310,7 +1310,12 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	// ring): those tables sit ~12KB into meg_state, past what the halfword
 	// imm12 form reaches, so every access through MS pays an add_off first.
 	// m_m/m_r and the delay rings stay within reach and keep using MS.
+	// KLO/KMN/PMX hold the saturation limits the x86 backend keeps in
+	// registers (its rdi/rbp/r9/r10): -0x800001 and -0x800000 for pack24 and
+	// 0x3fffffffff for the clamp. Only three callee-saved registers are left,
+	// so P_MIN (-0x4000000000, two instructions) stays materialized.
 	const u8 MS = X19, SWP = X20, P = X21, SC = X22, RAM = X23, SEED = X24, CB = X25;
+	const u8 KLO = X26, KMN = X27, PMX = X28;
 	const u8 A = HA, C = HC, D = HD, E = HE, T = X6;
 
 	// [base + disp] with disp known at build time. Each size reaches further
@@ -1362,6 +1367,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	a.stp_x(X21, X22, X31, -16, true);
 	a.stp_x(X23, X24, X31, -16, true);
 	a.stp_x(X25, X30, X31, -16, true);
+	a.stp_x(X26, X27, X31, -16, true);
+	a.stp_x(X28, X29, X31, -16, true);   // x29 is never touched; it only pads the pair
 	a.mov_x(MS, X0);
 	a.mov_x(SWP, X1);
 	a.mov_x(RAM, X2);
@@ -1369,6 +1376,9 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	ldw(SC, MS, o_sample);
 	ldw(SEED, SWP, o_seed);
 	a.add_off(CB, MS, u32(o_const));
+	a.mov_imm64(KMN, u64(s64(-0x800000)));
+	a.sub_imm64(KLO, KMN, 1);            // -0x800001, one past the low limit
+	a.mov_imm64(PMX, 0x3fffffffff);
 	if (branchy)
 		stw(WZR, SWP, o_skip);
 
@@ -1386,10 +1396,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		a.cmp_x(A, C);
 		a.mov_imm64(D, 0x7fffff);
 		a.csel_x(A, D, A, EQ);
-		a.mov_imm64(C, u64(s64(-0x800001)));
-		a.cmp_x(A, C);
-		a.mov_imm64(D, u64(s64(-0x800000)));
-		a.csel_x(A, D, A, EQ);
+		a.cmp_x(A, KLO);
+		a.csel_x(A, KMN, A, EQ);
 		a.lsl_imm(A, A, 8);
 		a.sar_imm(A, A, 8);
 	};
@@ -1610,17 +1618,15 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.mov_imm64(C, u64(s64(-0x4000000000)));
 				a.cmp_x(A, C);
 				a.csel_x(A, C, A, LT);
-				a.mov_imm64(C, 0x3fffffffff);
-				a.cmp_x(A, C);
-				a.csel_x(A, C, A, GT);
+				a.cmp_x(A, PMX);
+				a.csel_x(A, PMX, A, GT);
 				break;
 			case 2:
 				a.eor_reg(C, C, C);
 				a.cmp_x(A, C);
 				a.csel_x(A, C, A, LT);
-				a.mov_imm64(C, 0x3fffffffff);
-				a.cmp_x(A, C);
-				a.csel_x(A, C, A, GT);
+				a.cmp_x(A, PMX);
+				a.csel_x(A, PMX, A, GT);
 				break;
 			default:
 				a.mov_x(D, A);
@@ -1628,9 +1634,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.cmp_x(D, X31);
 				a.csel_x(D, A, D, MI);
 				a.mov_x(A, D);
-				a.mov_imm64(C, 0x3fffffffff);
-				a.cmp_x(A, C);
-				a.csel_x(A, C, A, GT);
+				a.cmp_x(A, PMX);
+				a.csel_x(A, PMX, A, GT);
 				break;
 			}
 			a.mov_x(P, A);
@@ -1844,6 +1849,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	// exit
 	stx(P, MS, o_p);
 	stw(SEED, SWP, o_seed);
+	a.ldp_x(X28, X29, X31, 16, true);
+	a.ldp_x(X26, X27, X31, 16, true);
 	a.ldp_x(X25, X30, X31, 16, true);
 	a.ldp_x(X23, X24, X31, 16, true);
 	a.ldp_x(X21, X22, X31, 16, true);
