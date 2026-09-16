@@ -160,6 +160,7 @@ int main(int argc, char **argv)
 	bool duration_given = false;
 	bool trace_midi = false;
 	bool fast_midi = false;
+	bool usb_host  = false;
 	const char *forced_reset = nullptr;
 	const char *swptrace = nullptr;
 	bool single = false;   // スレーブを別スレッドにしない
@@ -200,6 +201,8 @@ int main(int argc, char **argv)
 			trace_midi = true;
 		else if (!std::strcmp(argv[i], "--fast-midi"))
 			fast_midi = true;
+		else if (!std::strcmp(argv[i], "--usb"))
+			usb_host = true;
 		else if (!std::strcmp(argv[i], "--reset")) {
 			if (i + 1 >= argc) {
 				std::fprintf(stderr, "--reset requires gm, gs, or xg\n");
@@ -270,6 +273,7 @@ int main(int argc, char **argv)
 
 	mu.set_threaded(!single);
 	mu.set_fast_midi(fast_midi);
+	mu.set_usb_host(usb_host);
 	mu.reset();
 
 	const u32 rate = 44100;
@@ -328,7 +332,10 @@ int main(int argc, char **argv)
 				port = std::clamp(int(ev[1]) - 1, 0, mu2000::MIDI_PORTS - 1);
 			else {
 				// ファイルの口 3・4 は gui の既定と同じく A・B に重ねる
-				const int to = port >= 0 ? port : smf::mu_port(events[next].port, true);
+				// USB の口を使うときは C・D まで届くので、ファイルの口をそのまま使う
+				const int to = port >= 0 ? port
+					: usb_host ? std::min<int>(events[next].port, mu2000::MIDI_PORTS - 1)
+					: smf::mu_port(events[next].port, true);
 				if (trace_midi)
 					trace_event(next, events[next], to);
 				if (const char *reset = reset_name(ev))
