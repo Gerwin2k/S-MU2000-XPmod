@@ -1306,7 +1306,11 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	// E and T are all caller-saved and hold nothing across a helper call.
 	// SEED keeps the rand() state across the block the way the x86 backend
 	// keeps it in rsi: every dithered write would otherwise load and store it.
-	const u8 MS = X19, SWP = X20, P = X21, SC = X22, RAM = X23, SEED = X24;
+	// CB addresses the constant region (m_const/m_offset/m_lfo/m_t and the t
+	// ring): those tables sit ~12KB into meg_state, past what the halfword
+	// imm12 form reaches, so every access through MS pays an add_off first.
+	// m_m/m_r and the delay rings stay within reach and keep using MS.
+	const u8 MS = X19, SWP = X20, P = X21, SC = X22, RAM = X23, SEED = X24, CB = X25;
 	const u8 A = HA, C = HC, D = HD, E = HE, T = X6;
 
 	// [base + disp] with disp known at build time. Each size reaches further
@@ -1332,19 +1336,39 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	const auto stw   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 16380) a.str_w(rt, base, d); else { a.add_off(T, base, d); a.str_w(rt, T, 0); } };
 	const auto ldx   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 32760) a.ldr_x(rt, base, d); else { a.add_off(T, base, d); a.ldr_x(rt, T, 0); } };
 	const auto stx   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 32760) a.str_x(rt, base, d); else { a.add_off(T, base, d); a.str_x(rt, T, 0); } };
+	// [CB + (d - o_const)]: the constant region, addressed from o_const. The
+	// call sites keep passing absolute struct offsets; the else branch is the
+	// old MS-based path and only guards against the struct layout drifting
+	// past the imm12 reach unnoticed.
+	const s32 o_cbias = o_const;
+	const auto cdh   = [&](u32 rt, s32 d) { const s32 r = d - o_cbias; if (r >= 0 && r <= 8190)  a.ldrh(rt, CB, r);  else { a.add_off(T, MS, d); a.ldrh(rt, T, 0); } };
+	const auto cdh_s = [&](u32 rt, s32 d) {
+		const s32 r = d - o_cbias;
+		if (r >= 0 && r <= 8190)
+			a.ldrsh(rt, CB, r);
+		else {
+			a.add_off(T, MS, d);
+			a.ldrsh(rt, T, 0);
+		}
+		a.sxtw64(rt, rt);
+	};
+	const auto csth   = [&](u32 rt, s32 d) { const s32 r = d - o_cbias; if (r >= 0 && r <= 8190)  a.strh(rt, CB, r);  else { a.add_off(T, MS, d); a.strh(rt, T, 0); } };
 
 	// entry: x0 = ms, x1 = swp, x2 = the reverb RAM. x30 is saved because the
-	// LFO is fetched with BLR, and x19-x24 because they carry the block state.
+	// LFO is fetched with BLR, and x19-x25 because they carry the block state
+	// (x29 is untouched by both the JIT and the helpers, so its save slot
+	// goes to x25 instead).
 	a.stp_x(X19, X20, X31, -16, true);
 	a.stp_x(X21, X22, X31, -16, true);
 	a.stp_x(X23, X24, X31, -16, true);
-	a.stp_x(X29, X30, X31, -16, true);
+	a.stp_x(X25, X30, X31, -16, true);
 	a.mov_x(MS, X0);
 	a.mov_x(SWP, X1);
 	a.mov_x(RAM, X2);
 	ldx(P, MS, o_p);
 	ldw(SC, MS, o_sample);
 	ldw(SEED, SWP, o_seed);
+	a.add_off(CB, MS, u32(o_const));
 	if (branchy)
 		stw(WZR, SWP, o_skip);
 
@@ -1521,15 +1545,15 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			if (o.m1_from_t == 2) {
 				// MULTI COMP follows its envelope: t when the last latch was
 				// negative, the constant otherwise (meg_state::step, doc/upstream.md #29)
-				ldh_s(A, MS, o_t + 2 * o.t);
-				ldh_s(C, MS, o_const + 2 * s32(k));
+				cdh_s(A, o_t + 2 * o.t);
+				cdh_s(C, o_const + 2 * s32(k));
 				ldb(D, SWP, o_flag_n);
 				a.cmp_reg(D, WZR);
 				a.csel_x(A, A, C, NE);
 			} else if (o.m1_from_t)
-				ldh_s(A, MS, o_t + 2 * o.t);
+				cdh_s(A, o_t + 2 * o.t);
 			else
-				ldh_s(A, MS, o_const + 2 * s32(k));
+				cdh_s(A, o_const + 2 * s32(k));
 			if (o.m1_expand)
 				emit_m1_expand(a);
 			switch (o.mmode) {
@@ -1699,10 +1723,10 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		// ---- t ----
 		if (o.t_write) {
 			if (o.t_from_p)
-				ldh(A, MS, o_t_value + 2 * slot2(k));
+				cdh(A, o_t_value + 2 * slot2(k));
 			else
-				ldh(A, MS, o_const + 2 * s32(k));
-			sth(A, MS, o_t + 2 * o.t);
+				cdh(A, o_const + 2 * s32(k));
+			csth(A, o_t + 2 * o.t);
 		}
 		if (need_tval[k]) {
 			a.mov_x(A, P);
@@ -1718,7 +1742,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.cmp_x(A, C);
 				a.csel_x(A, C, A, GT);
 			}
-			sth(A, MS, o_t_value + 2 * slot2(k));
+			csth(A, o_t_value + 2 * slot2(k));
 		}
 
 		// ---- memory operation ----
@@ -1727,7 +1751,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			// A read marked with bit 0x23 addresses the reverb RAM absolutely: the
 			// firmware writes the wave or curve table straight into it, so the
 			// sample counter must not be subtracted (meg_state::step, doc/upstream.md #24)
-			ldh(A, MS, o_offset + 2 * s32(o.offset_index));
+			cdh(A, o_offset + 2 * s32(o.offset_index));
 			if (o.mem_use_index) {
 				ldw(C, MS, o_ram_index);
 				a.add_reg(A, A, C);
@@ -1745,7 +1769,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			table_done = a.b();
 		}
 		if (o.memop) {
-			ldh(A, MS, o_offset + 2 * s32(o.offset_index));
+			cdh(A, o_offset + 2 * s32(o.offset_index));
 			if (o.mem_use_index) {
 				ldw(C, MS, o_ram_index);
 				a.add_reg(A, A, C);
@@ -1791,10 +1815,10 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			// write it would have left in the ring and store only its t value
 			if (o.jump && o.t_write) {
 				if (o.t_from_p)
-					ldh(A, MS, o_t_value + 2 * slot2(k));
+					cdh(A, o_t_value + 2 * slot2(k));
 				else
-					ldh(A, MS, o_const + 2 * s32(k));
-				sth(A, MS, o_t + 2 * o.t);
+					cdh(A, o_const + 2 * s32(k));
+				csth(A, o_t + 2 * o.t);
 			}
 			stb(WZR, MS, o_mw_reg + slot3(k));
 			stb(WZR, MS, o_rw_reg + slot3(k));
@@ -1810,7 +1834,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				a.mov_imm64(C, 0x7fff);
 				a.cmp_x(A, C);
 				a.csel_x(A, C, A, GT);
-				sth(A, MS, o_t_value + 2 * slot2(k));
+				csth(A, o_t_value + 2 * slot2(k));
 			}
 			if (normal_done)
 				a.patch(normal_done);
@@ -1820,7 +1844,7 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	// exit
 	stx(P, MS, o_p);
 	stw(SEED, SWP, o_seed);
-	a.ldp_x(X29, X30, X31, 16, true);
+	a.ldp_x(X25, X30, X31, 16, true);
 	a.ldp_x(X23, X24, X31, 16, true);
 	a.ldp_x(X21, X22, X31, 16, true);
 	a.ldp_x(X19, X20, X31, 16, true);
