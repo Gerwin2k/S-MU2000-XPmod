@@ -38,6 +38,14 @@ PYTHON   ?= python
 # （素の PowerShell など）では起動に失敗して何も言わずに終わる
 LDFLAGS  ?= -static -static-libgcc -static-libstdc++
 EXE      := .exe
+# 32 ビット MinGW (i686) は既定で浮動小数を x87 の 80 ビット中間値で計算する
+# (__FLT_EVAL_METHOD__=2)。x86-64/arm64 は SSE2 の 64 ビットなので、
+# 同じ C++ でも丸めが微妙に違い、サンプル精度の render がゴールデンからズレる
+# （約 9 秒後に ±1 LSB ずつ現れる兆候）。SSE2 演算に寄せて x64 と
+# ビット一致させる。x86-64 では既に既定なので実質 no-op、arm64 には当てない。
+ifneq (,$(filter i386 i486 i586 i686,$(firstword $(subst -, ,$(shell $(CXX) -dumpmachine 2>/dev/null)))))
+CXXFLAGS += -mfpmath=sse -msse2
+endif
 else
 # `CXX ?= clang++` would not work: make already has CXX set (to c++), and `?=`
 # leaves a defined variable alone. So swap it only while it is still the default
