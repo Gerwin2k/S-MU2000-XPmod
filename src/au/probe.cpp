@@ -31,6 +31,7 @@
 #include <objc/runtime.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -57,6 +58,26 @@ constexpr OSType kManufacturer = 'Trbh';
 // complains on the way out
 extern "C" void *objc_autoreleasePoolPush(void);
 extern "C" void  objc_autoreleasePoolPop(void *pool);
+
+// How many times a host-side input procedure was called. A file-scope counter
+// because an AURenderCallbackStruct carries a plain function pointer and a
+// reference the probe would otherwise have to keep alive by hand
+std::atomic<int> g_input_pulls{0};
+
+// What a host hands its input bus over from: silence (the probe has no A/D
+// source), and a count of the times it was asked
+OSStatus host_input_into_silence(void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *,
+                                 UInt32, UInt32 frames, AudioBufferList *io)
+{
+	g_input_pulls++;
+	for (UInt32 i = 0; i < io->mNumberBuffers; i++) {
+		AudioBuffer &b = io->mBuffers[i];
+		if (b.mData)
+			std::memset(b.mData, 0,
+			            std::min<size_t>(b.mDataByteSize, size_t(frames) * sizeof(float)));
+	}
+	return noErr;
+}
 
 long long now_ms()
 {
@@ -534,19 +555,17 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				}
 				ts.mSampleTime += 256;
 			}
-			// The A/D INPUT bus is **not offered** on the AU: ElementCount for the
-			// input scope is 0 and the input scope answers nothing, the way Apple's
-			// own aumu instruments behave. Two regressions to keep out:
-			//
-			// 1. a bus that is answerable but not counted. auval's real-time-safety
-			//    harness treats any input-scope answer as a bus to configure and
-			//    pull, while it builds its per-bus bookkeeping from the element
-			//    count -- with the count at 0 its own input callback dereferences a
-			//    record that was never made, and auvaltool dies mid render test
-			// 2. a counted bus. An out-of-process host (AUHostingService -- every
-			//    sandboxed host, GarageBand among them) then makes a node whose
-			//    input nobody connected, and every render comes back
-			//    kAudioUnitErr_NoConnection (-10876)
+			// The A/D INPUT bus is not counted until a host asks for it (step 9
+			// checks the asking): ElementCount on the input scope is 0, and the
+			// engine gets no input, whatever the scope holds. The scope itself is
+			// still *configurable* while uncounted -- format, callback and
+			// connection all answer -- because SupportedNumChannels says {2, 2}
+			// and auval configures the promised stereo input right away (the way
+			// a JUCE plug-in's "disabled" bus still accepts a stereo layout).
+			// The regression to keep out of this default state is a *counted* bus:
+			// an out-of-process host (AUHostingService) then builds its graph with
+			// an input element nobody connected, and every render comes back
+			// kAudioUnitErr_NoConnection (-10876)
 			UInt32 inputs = 99;
 			UInt32 isize = sizeof(inputs);
 			if (AudioUnitGetProperty(u, kAudioUnitProperty_ElementCount,
@@ -554,11 +573,16 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				std::printf("NG: 入力の口の数が %u（0 でなくてはならない）\n", unsigned(inputs));
 				bad++;
 			}
+			// The configurable-but-uncounted scope: format answers, and setting a
+			// callback or connection succeeds (as a no-op until the bus is asked
+			// for). Refusing any of these with {2, 2} declared is what auval
+			// rejects with -10879 ("Cannot Set Input Num Channels:2 when unit says
+			// it can")
 			AudioStreamBasicDescription in_fmt{};
 			isize = sizeof(in_fmt);
-			if (AudioUnitGetPropertyInfo(u, kAudioUnitProperty_StreamFormat,
-			                             kAudioUnitScope_Input, 0, &isize, nullptr) == noErr) {
-				std::printf("NG: 入力スコープが形式に答えてしまう\n");
+			if (AudioUnitGetProperty(u, kAudioUnitProperty_StreamFormat,
+			                         kAudioUnitScope_Input, 0, &in_fmt, &isize) != noErr) {
+				std::printf("NG: 入力スコープが形式に答えない\n");
 				bad++;
 			}
 			AURenderCallbackStruct stray{};
@@ -568,8 +592,8 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 			for (AudioUnitPropertyID id : { kAudioUnitProperty_SetRenderCallback,
 			                                kAudioUnitProperty_MakeConnection }) {
 				if (AudioUnitSetProperty(u, id, kAudioUnitScope_Input, 0,
-				                         &stray, sizeof(stray)) == noErr) {
-					std::printf("NG: 入力のない器が %u を受け入れてしまった\n", unsigned(id));
+				                         &stray, sizeof(stray)) != noErr) {
+					std::printf("NG: 入力スコープが %u を受け取れない\n", unsigned(id));
 					bad++;
 				}
 			}
@@ -651,12 +675,15 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				std::printf("NG: 入出力の本数を読めない\n");
 				bad++;
 			} else {
-				// The matrix has to agree with the scopes: no input bus is offered,
-				// so the required-input count has to be 0. auval configures against
-				// this number; anything else and it wires an input the unit says it
-				// does not have (see the render-test note above)
-				if (chans[0].inChannels != 0 || chans[0].outChannels != 2) {
-					std::printf("NG: 本数の名乗りが [%d, %d]（[0, 2] でなくてはならない）\n",
+				// The matrix has to say {2, 2}: per AUComponent.h an entry declares
+				// a *supported* configuration ("the audio unit will support a
+				// channel configuration of 2 channels on an input and 2 channels
+				// on an output"), which the machine genuinely is -- the A/D INPUT
+				// runs through its filters. The element gate (ElementCount 0 until
+				// a host asks) is what keeps unconnected elements out of a host's
+				// graph; the capability matrix is not a promise of an element
+				if (chans[0].inChannels != 2 || chans[0].outChannels != 2) {
+					std::printf("NG: 本数の名乗りが [%d, %d]（[2, 2] でなくてはならない）\n",
 					            int(chans[0].inChannels), int(chans[0].outChannels));
 					bad++;
 				}
@@ -910,12 +937,170 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				} else if (peak <= 0.0) {
 					std::printf("NG: 別プロセスでは音が出ない\n");
 					bad++;
+				} else {
+					std::printf("OK: 別プロセス（AUHostingService）でも Render できた\n");
 				}
+
+				// The other half of the same table: the host *asks* for the A/D INPUT
+				// bus and connects its own procedure to it -- the promise kept. Out of
+				// process that has to render like the default case above; with the bus
+				// counted and *nothing* connected it is -10876 on every block, which is
+				// why the unit does not count it unless a host asks.
+				//
+				// The ask comes between Uninitialize and Initialize, the way a host
+				// that offers a side-chain input configures one: the layer that hosts
+				// this out of process builds its graph when the unit is initialised,
+				// so asking afterwards leaves that graph without the element --
+				// measured, it answers -10877 (InvalidElement) on every block and the
+				// host's procedure is never called
+				AudioUnitUninitialize(u);
+				{
+					const UInt32 want = 1;
+					const OSStatus es = AudioUnitSetProperty(u, kAudioUnitProperty_ElementCount,
+					                                         kAudioUnitScope_Input, 0, &want, sizeof(want));
+					AURenderCallbackStruct cb{};
+					cb.inputProcRefCon = nullptr;
+					cb.inputProc = host_input_into_silence;
+					const OSStatus cs = es == noErr
+					    ? AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback,
+					                           kAudioUnitScope_Input, 0, &cb, sizeof(cb))
+					    : es;
+					AudioUnitInitialize(u);
+					UInt32 added = 0;
+					UInt32 asize = sizeof(added);
+					const OSStatus rs = AudioUnitGetProperty(u, kAudioUnitProperty_ElementCount,
+					                                         kAudioUnitScope_Input, 0, &added, &asize);
+					if (es != noErr || cs != noErr || rs != noErr || added != 1) {
+						std::printf("NG: 別プロセスで入力の口を頼めない（%d / %d / %d、数 %u）\n",
+						            int(es), int(cs), int(rs), unsigned(added));
+						bad++;
+					} else {
+						g_input_pulls = 0;
+						OSStatus in_err = noErr;
+						for (int blk = 0; blk < 44100 / int(frames); blk++) {
+							AudioUnitRenderActionFlags f2 = 0;
+							const OSStatus st = AudioUnitRender(u, &f2, &ts, 0, frames, &bufs.list);
+							if (st != noErr && in_err == noErr)
+								in_err = st;
+							ts.mSampleTime += frames;
+						}
+						if (in_err != noErr || g_input_pulls.load() == 0) {
+							std::printf("NG: 入力を繋いだ別プロセスの Render が %d（引かれた %d 回）\n",
+							            int(in_err), g_input_pulls.load());
+							bad++;
+						} else {
+							std::printf("OK: 別プロセスでも、入力の口を頼めば Render できる（引かれた %d 回）\n",
+							            g_input_pulls.load());
+						}
+					}
+				}
+
 				AudioUnitUninitialize(u);
 				AudioComponentInstanceDispose(u);
-				std::printf("OK: 別プロセス（AUHostingService）でも Render できた\n");
 			}
 		}
+	}
+
+	// 9. the A/D INPUT bus is the host's to ask for. Step 3 checks that a host
+	//    which does not ask sees nothing; this checks the asking itself: write 1
+	//    and the count, the format and the render callback all come with it, then
+	//    write 0 and the unit is exactly as it was
+	{
+		AudioUnit u = nullptr;
+		AudioComponentInstanceNew(comp, &u);
+		const AudioStreamBasicDescription fmt = float_format(44100.0, 2);
+		AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0,
+		                     &fmt, sizeof(fmt));
+		const UInt32 maxf = 1024;
+		AudioUnitSetProperty(u, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0,
+		                     &maxf, sizeof(maxf));
+
+		const UInt32 on = 1;
+		const OSStatus es = AudioUnitSetProperty(u, kAudioUnitProperty_ElementCount,
+		                                        kAudioUnitScope_Input, 0, &on, sizeof(on));
+		AudioUnitInitialize(u);
+
+		UInt32 count = 0;
+		UInt32 csize = sizeof(count);
+		AudioUnitGetProperty(u, kAudioUnitProperty_ElementCount, kAudioUnitScope_Input, 0,
+		                     &count, &csize);
+		AudioStreamBasicDescription in_fmt{};
+		UInt32 fsize = sizeof(in_fmt);
+		const OSStatus fs = AudioUnitGetProperty(u, kAudioUnitProperty_StreamFormat,
+		                                        kAudioUnitScope_Input, 0, &in_fmt, &fsize);
+		AURenderCallbackStruct cb{};
+		cb.inputProcRefCon = nullptr;
+		cb.inputProc = host_input_into_silence;
+		const OSStatus cs = AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback,
+		                                        kAudioUnitScope_Input, 0, &cb, sizeof(cb));
+		AUChannelInfo chans[2] = {};
+		UInt32 chsize = sizeof(chans);
+		AudioUnitGetProperty(u, kAudioUnitProperty_SupportedNumChannels, kAudioUnitScope_Global, 0,
+		                     chans, &chsize);
+		if (es != noErr || count != 1 || fs != noErr || cs != noErr || chans[0].inChannels != 2) {
+			std::printf("NG: 入力の口を頼めない（%d、数 %u、形式 %d、callback %d、本数 %d）\n",
+			            int(es), unsigned(count), int(fs), int(cs), int(chans[0].inChannels));
+			bad++;
+		} else {
+			// Rendered with the host's input connected: the callback has to be
+			// pulled, and the unit has to render
+			std::vector<float> l(1024), r(1024);
+			audio_buffers_2 bufs{};
+			bufs.list.mNumberBuffers = 2;
+			for (int i = 0; i < 2; i++) {
+				bufs.list.mBuffers[i].mNumberChannels = 1;
+				bufs.list.mBuffers[i].mDataByteSize = 1024 * 4;
+				bufs.list.mBuffers[i].mData = i == 0 ? (void *)l.data() : (void *)r.data();
+			}
+			AudioTimeStamp ts{};
+			ts.mFlags = kAudioTimeStampSampleTimeValid;
+			g_input_pulls = 0;
+			OSStatus in_err = noErr;
+			for (int blk = 0; blk < 8; blk++) {
+				AudioUnitRenderActionFlags flags = 0;
+				const OSStatus st = AudioUnitRender(u, &flags, &ts, 0, 256, &bufs.list);
+				if (st != noErr && in_err == noErr)
+					in_err = st;
+				ts.mSampleTime += 256;
+			}
+			if (in_err != noErr || g_input_pulls.load() == 0) {
+				std::printf("NG: 入力を繋いだ Render が %d（引かれた %d 回）\n",
+				            int(in_err), g_input_pulls.load());
+				bad++;
+			} else {
+				std::printf("OK: 入力の口を頼むと形式も callback も通り、Render が引く（%d 回）\n",
+				            g_input_pulls.load());
+			}
+
+			// Handed back: the count is 0 again, the stored callback is dropped,
+			// and the unit still renders. The scope stays configurable (it always
+			// was, under the {2, 2} matrix) -- what the hand-back takes away is
+			// the bus itself, so the engine sees no input from here on
+			const UInt32 off = 0;
+			AudioUnitSetProperty(u, kAudioUnitProperty_ElementCount, kAudioUnitScope_Input, 0,
+			                     &off, sizeof(off));
+			csize = sizeof(count);
+			count = 99;
+			AudioUnitGetProperty(u, kAudioUnitProperty_ElementCount, kAudioUnitScope_Input, 0,
+			                     &count, &csize);
+			AURenderCallbackStruct gone{};
+			UInt32 gsize = sizeof(gone);
+			const OSStatus cb_gone =
+			    AudioUnitGetProperty(u, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
+			                         0, &gone, &gsize);
+			AudioUnitRenderActionFlags flags = 0;
+			const OSStatus still = AudioUnitRender(u, &flags, &ts, 0, 256, &bufs.list);
+			if (count != 0 || cb_gone != noErr || gone.inputProc != nullptr || still != noErr) {
+				std::printf("NG: 入力の口を返せない（数 %u、callback %d、Render %d）\n",
+				            unsigned(count), int(cb_gone), int(still));
+				bad++;
+			} else {
+				std::printf("OK: 入力の口を返すと、元の（入力のない）器に戻る\n");
+			}
+		}
+
+		AudioUnitUninitialize(u);
+		AudioComponentInstanceDispose(u);
 	}
 
 	std::printf("---- 悪いところ %d 件 ----\n", bad);

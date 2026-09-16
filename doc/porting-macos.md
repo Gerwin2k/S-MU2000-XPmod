@@ -75,9 +75,12 @@ branch caught up, and three things the merge left as Windows-only are here now.
   host feeds the unit's input bus (element 0, `SetRenderCallback`) and that goes
   to `engine::fill()`, the same job the VST3's `A/D Input` bus does. The card is
   remembered in the preset by file name only, as on the VST3 side. The bus is
-  **not counted** in `ElementCount` — that one number decides whether a sandboxed
-  host can render the unit at all, and it is the whole of
-  [the long note below](#the-ad-input-bus-and-the-four-properties-it-needs).
+  declared in `SupportedNumChannels` as `[2, 2]` and its scope configures
+  always (format, callback, connection), but it is **not counted in
+  `ElementCount` until the host asks for it** — the count is the only gate, and
+  a host that writes `1` there gets the bus and the input pulled with it.
+  The whole of
+  [the note below](#the-ad-input-bus).
 * **`ARCH=` / `UNIVERSAL=1` now pick their own build directory** (`build-arm64`,
   `build-x86_64`, `build-universal`). Before this an `ARCH=x86_64 make` after a
   native build failed in the link step, with a message about which architecture
@@ -986,195 +989,60 @@ a promise the AU cannot keep here.
   question comes up, ask the reference: the pairs above were read off
   DLSMusicDevice rather than guessed.
 
-### The A/D INPUT bus, and the four properties it needs
+### The A/D INPUT bus
 
 Upstream's VST3 build has an `A/D Input` bus (the machine samples from it in
-`engine::fill()`), and the merge gave the AU an input bus to match. A bus is not
-only a buffer: a host configures it through five properties before it renders
-anything, and `AUBase` is not in the way here — this wrapper answers them by
-hand. Each of the five was a separate hole.
+`engine::fill()`), and the AU has the same bus. It is stereo at element 0 on
+the input scope, and the scope answers always: `SupportedNumChannels` says
+`[2, 2]`, the stream format reads and sets at any rate (the input is resampled
+at the output rate), and `SetRenderCallback` and `MakeConnection` are both
+accepted. A graph connection is stored as the `AudioUnitConnection` it is,
+never folded into the callback struct.
 
-| what the host does | what was missing |
-|---|---|
-| reads `SupportedNumChannels`, sees `[2, 2]` | — |
-| `GetPropertyInfo(StreamFormat, Input)` | answered `noErr` with `size = 0`, `writable = false` |
-| `SetProperty(StreamFormat, Input, 2 ch)` | refused, because of the line above |
-| `GetPropertyInfo(SetRenderCallback, Input)` | not answered at all (`kAudioUnitErr_InvalidProperty`) |
-| `SetProperty(SetRenderCallback, Input, cb)` | — |
-| `SetProperty(MakeConnection, Input, cb)` (a graph connection) | not answered, not accepted |
-| renders, expecting the callback to see the render's timestamp | the callback was handed `mSampleTime = 0` |
-| expecting a callback's error to come back out of `AURender` | swallowed; the block was silenced and `noErr` returned |
+The one gate is `ElementCount` on the input scope: 0 by default, and while it
+is 0 the engine is handed no input and the unit renders from MIDI alone. A
+host that wants the bus writes `1`, which switches the pull on and feeds the
+machine's A/D INPUT; writing `0` hands the bus back and drops the stored
+callback.
 
-The first row was the first regression. A unit that says "that property is here"
-and then "not writable, size 0" is read as one that **cannot be configured at
-all**: `auval` reports
-`Cannot Set Input Num Channels:2 when unit says it can` (`kAudioUnitErr_PropertyNotWritable`,
--10865) and fails the format tests before it ever reaches the render tests. Most
-hosts check validation when they scan for plug-ins and refuse to instantiate
-the unit, so from outside it looked like the AU had died — **no audio and no
-editor**, exactly as reported. Nothing about the engine or the editor was wrong.
-`MakeConnection` is the same shape of problem one step later: `auval` checks it
-under *connection semantics*, and a host that cannot connect the AU to a graph
-will not use it.
+Two contract details the pull keeps (both probed): the render's timestamp
+travels with the pull (`auval`: `AU is not passing time stamp correctly`
+otherwise), and a failing callback's error comes back out of `AURender` with
+the block silenced rather than playing stale buffers.
 
-Two more things about the bus that are easy to get wrong, both now checked:
+Asking for the bus after the unit is initialised does not work in an
+out-of-process host: its graph is built at initialise time, so the element is
+missing from it and every render fails with `-10877` (`InvalidElement`). A
+host adds the bus between `Uninitialize` and `Initialize`.
 
-- **The render's timestamp travels with the pull.** It says where in the stream
-the block sits, and a host handed `0` in its place lines the input up wrongly
-(`auval`: `AU is not passing time stamp correctly`).
-- **A failing callback's error is returned from `AURender`.** The block it did
-not fill is silenced rather than playing whatever the buffers held, and the
-status goes up (`auval`: `Render Input returned an error, but was not returned
-to the caller of AURender`).
+`aubprobe --torture` checks both states. Step 9 is the round trip in process:
+ask for the bus, and the count, the format, the callback and the channel
+matrix all answer, and the callback is pulled once per block; hand it back,
+and the callback is dropped with the unit still rendering. Step 8 is the
+out-of-process side: it instantiates the *installed* component with
+`kAudioComponentInstantiation_LoadOutOfProcess` — the road a sandboxed host
+takes, and the one place a counted-but-unconnected input element fails, since
+that hosting layer builds its graph from the unit's bus counts and every
+render then comes back `-10876` (`NoConnection`). The default unit renders
+there, and a second instantiation that asks for the bus before initialising
+renders with its input pulled (86 times over a second of 512-frame blocks).
+Step 8 needs `make install-au` first, and makes the `S_MU2000_ROMS` path
+absolute — the service inherits the environment but not the working directory.
+(`auval` likewise only looks at `~/Library/Audio/Plug-Ins/Components`, so
+`make install-au` first or its verdict is about the copy installed last time;
+the probes are the other way round — `build/aubprobe` opens the bundle it is
+handed.)
 
-`aubprobe --torture` grew a check for each: both properties answer writable with
-`sizeof(AURenderCallbackStruct)` on the input bus, the callback sees the sample
-time the render was given, and a callback returning
-`kAudioUnitErr_InvalidParameter` makes `AURender` return exactly that. Put any of
-the three bugs back and the probe reports it (two `NG` lines per sample rate) —
-verified by reverting the fix and building, then restoring it.
+#### The real-time-safety harness
 
-#### The element count, and the second regression
-
-There was a worse one behind those, and it only shows up in a **sandboxed** host.
-GarageBand cannot load a plug-in bundle into its own process, so AudioToolbox
-hosts the unit for it, out of process in `AUHostingService`
-(`kAudioComponentInstantiation_LoadOutOfProcess`). That layer builds its graph
-from the unit's **bus counts**, and a unit that counts an input bus nobody
-connected makes a node whose input has no source. Every render then comes back
-`kAudioUnitErr_NoConnection` (-10876): no audio, and the machine never advances,
-so the panel sits on `PowerOn MU2000 EX / Checking PLG` forever. It looked like a
-dead plug-in in GarageBand and a perfectly healthy one everywhere else.
-
-Everything below was measured on this machine, on the same build, changing one
-thing at a time:
-
-| | in process | out of process |
-|---|---|---|
-| `ElementCount(Input) = 1` (input bus counted) | renders, sounds | **`-10876` on every render** |
-| the same, with a callback connected to that bus | renders, sounds | renders, sounds |
-| `ElementCount(Input) = 0` (bus answerable, not counted) | renders, sounds | renders, sounds |
-| `ElementCount(Input) = 0`, `SupportedNumChannels` still `[2, 2]` | renders, sounds | renders, sounds |
-| Apple's `DLSMusicDevice` (`aumu`, no input bus) | renders, sounds | renders, sounds |
-| Apple's `AUMIDISynth` (`aumu`, answers `[0, -16]`) | renders, sounds | renders, sounds |
-
-Three things follow, and the third is the one that matters:
-
-- **`SupportedNumChannels` is not the trigger — for the out-of-process
-  failure.** `[2, 2]` with the bus not counted renders fine out of process,
-  `[0, 2]` with the bus counted still fails. Only the element count moves that
-  needle. It does move another one: the real-time-safety harness below.
-- **An input bus is a promise to have it connected.** With one connected, the
-  identical unit renders out of process — so nothing about the plugin's code is
-  wrong, it is the declaration. An instrument in GarageBand never gets its input
-  connected, so for the AU that promise can only be broken.
-- **The half-way house survives plain `auval` and dies in its real-time
-  harness.** With the bus answerable but not counted, plain `auval -v` passes
-  and GarageBand renders — but `auval -real-time-safety` crashes inside itself
-  (the next section). The AU now goes the whole way: the input scope answers
-  nothing, as Apple's own instruments do not. The VST3 and CLAP builds still
-  advertise and feed the input bus; the standalone GUI captures A/D INPUT as it
-  always did. For the AU, a plug-in that runs beats an input that is listed.
-
-Why it went unnoticed for a while is worth writing down: **`auval` and
-`aubprobe` both run in process.** They open the bundle with `CFBundle` and
-register its factory with `AudioComponentRegister`, which is the road a
-non-sandboxed host takes — so every check in this file passed while GarageBand
-was silent. The probe now has an eighth step that instantiates the *installed*
-component with `kAudioComponentInstantiation_LoadOutOfProcess`, waits for the
-machine over the same round trip, plays a note and requires sound. It runs when
-the bundle it was handed is in a standard components directory, and says so when
-it is not (a bundle in the build tree is not one the registrar can hand out), so
-`make install-au` comes first:
-
-```
-make install-au
-S_MU2000_ROMS=roms build/aubprobe ~/Library/Audio/Plug-Ins/Components/S-MU2000.component --torture
-  ...
-  OK: 別プロセス（AUHostingService）でも Render できた
-  ---- 悪いところ 0 件 ----
-```
-
-Putting the input bus back into the count makes it say
-`NG: 別プロセスの Render が -10876 で落ちる` instead — checked by doing that and
-building, then restoring.
-
-One more thing the check needed before it told the truth: the service inherits
-the environment but not the working directory, so `S_MU2000_ROMS=roms` (relative)
-cannot be resolved from there. The probe now makes that path absolute before it
-hands the work over, and waits for `Status` to reach 1 before playing, or it
-would be measuring the boot rather than the unit.
-
-#### The real-time-safety harness, and the third regression
-
-`auval` grew a deeper check than plain validation: `auval -real-time-safety`.
-It wires the unit the way a real host would, renders through a real-time
-thread, and watches every call the unit makes for allocation, locks and
-file traffic (via dtrace). Against the half-way house above it did not report
-a failure — it **died**:
-
-```
-auval -real-time-safety -v aumu SMU2 Trbh
-  ...
-  Render Test at 512 frames
-  (auvaltool exits with SIGSEGV)
-```
-
-The crash report lands in `~/Library/Logs/DiagnosticReports/auvaltool-*.ips`
-with the faulting frame inside auvaltool itself, one call below this AU's
-`Render`. What it is doing there, read off the disassembly and confirmed under
-lldb: the harness keeps a record per input bus, **built from the unit's input
-element count** — which this unit answers 0, on purpose, for GarageBand. But it
-also checks the input scope's `StreamFormat`, and any unit that answers it gets
-its input callback wired and pulled. The half-way house answers, so the harness
-pulled bus 0 of a record list that was never built: a null dereference inside
-auvaltool, on every machine, reproducibly — with plain `auval -v` passing the
-same build in the same minute.
-
-Plain `auval -v` does not do this: its render tests read the channel matrix,
-see `[0, 2]` or `[2, 2]`, configure inputs accordingly, and never touch the
-input scope of a unit that claims no inputs. The RTS harness is the stricter
-of the two, and it is the one Logic's scan and GarageBand's out-of-process
-host behave like.
-
-The fix is to stop answering the input scope at all — which is also what
-Apple's own instruments do. `AUMIDISynth` (`aumu msyn appl`) answers
-`[0, -16]` on `SupportedNumChannels`, refuses `StreamFormat` on the input
-scope, prints no `Input Format:` line in auval's render tests, and passes
-`-real-time-safety` cleanly. DLSMusicDevice behaves the same. The AU now:
-
-- answers `SupportedNumChannels` as `[0, 2]` (0 required inputs — an `aumu`
-  has no MIDI-driven need for audio in — and 2 out),
-- refuses `StreamFormat`, `SetRenderCallback` and `MakeConnection` on the
-  input scope with `kAudioUnitErr_InvalidProperty`,
-- keeps `ElementCount(Input) = 0`, so the GarageBand fix is untouched,
-- and has no pull path in its render loop at all: `engine::fill` gets null
-  input buffers, which is what the standalone engine does without a host
-  feeding it.
-
-After the change:
-
-```
-auval -v aumu SMU2 Trbh                 → AU VALIDATION SUCCEEDED
-auval -real-time-safety -v aumu SMU2 Trbh → AU VALIDATION SUCCEEDED
-S_MU2000_ROMS=roms build/aubprobe ... --torture → 悪いところ 0 件
-```
-
-`aubprobe --torture` grew checks for each piece of this: the input element
-count is 0, the input scope answers nothing, `SetRenderCallback` and
-`MakeConnection` are refused there, and the channel matrix is `[0, 2]`. Put
-any input-scope answer back and the probe reports it. What was **lost** with
-the input bus: a host can no longer feed A/D INPUT through the AU. That
-capability lives on in the VST3 and CLAP builds and in the standalone GUI's
-capture path; on the AU the choice was an input nobody can render with or a
-plug-in hosts refuse to load.
-
-One more thing the check needed before it told the truth: the service inherits
-
-`auval` only ever looks at `~/Library/Audio/Plug-Ins/Components`, so a fresh
-`build/S-MU2000.component` means nothing to it: `make install-au` first, or the
-verdict is about the copy installed last time. The probes are the other way
-round — `build/aubprobe` opens the bundle it is handed.
+`auval -real-time-safety` — a deeper harness that renders on a real-time
+thread under dtrace — no longer completes on current macOS (it hangs), so
+plain `auval -v` is the validator that runs today. While it still worked it
+taught one thing worth keeping: it built per-bus bookkeeping from the element
+count while wiring whatever the input scope answered, so a unit whose scope
+answered but whose bus was not counted made it crash inside itself. The
+current design is untouched by that either way — the scope answers, the count
+decides whether the engine is fed — and the harness is retired.
 
 ### Where the ROMs are looked for
 

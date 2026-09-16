@@ -573,7 +573,7 @@ install-au: $(AU_BIN)
 	mkdir -p "$(AU_INSTALL)"
 	cp -r $(AU_DIR) "$(AU_INSTALL)/"
 	@echo "入れた: $(AU_INSTALL)/S-MU2000.component"
-	@echo "auval -v aumu SMU2 Trbh と auval -real-time-safety -v aumu SMU2 Trbh で確かめられる"
+	@echo "auval -v aumu SMU2 Trbh で確かめられる (auval -real-time-safety は最近の OS では動かない)"
 
 # Small host that runs the AU without a DAW. -lobjc is for the editor check:
 # it makes the view class the way a host does, with NSClassFromString
