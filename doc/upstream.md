@@ -1114,3 +1114,8 @@ MIDI の頭でリバーブを HALL 1・送り 40 と明に揃えて録り直す�
 つまり firmware が黙らせるのはインサーションを通る道だけで、系のリバーブはそのまま続く。
 
 MAME も `m_revram_enable` を使っていないので、同じパルスが出るはず。
+
+MAME に投稿した PR（2026-09-16）: [mamedev/mame#16154](https://github.com/mamedev/mame/pull/16154)（ブランチ `swp30-revram-bank-enable`）。
+MAME にはインタプリタと DRC の両方に同じメモリ処理があるので、両方で区画の有効ビットを見るようにした
+（DRC は命令ごとに区画が決まるが、レジスタは実行中に変わるので、生成した機械語の中で毎回試す）。
+区画を選ぶところは `resolve_address` と同じ選び方を `map_bank` に切り出した。
