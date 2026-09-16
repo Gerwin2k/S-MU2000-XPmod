@@ -450,7 +450,7 @@ void mu2000::build_bus()
 		d.r16 = [this, &dev, base](offs_t a) {
 			const u16 v = dev.read16((a - base) >> 1);
 			if (m_swp_trace && m_swp_trace_reads)
-				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x\n", base, (a - base) >> 1, v, m_cpu->pc());
+				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x  t=%.6f\n", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
 			return v;
 		};
 		// 幅の内訳を数える。MAME は 16bit ハンドラに mem_mask を渡せるが
@@ -471,10 +471,10 @@ void mu2000::build_bus()
 			m_swp_w32++;
 			const offs_t reg = (a - base) >> 1;
 			if (m_swp_trace) {
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
-				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc());
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
-				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc());
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
+				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
+				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
 			}
 			dev.write16(reg, u16(v >> 16));
 			dev.write16(reg + 1, u16(v));
@@ -483,8 +483,8 @@ void mu2000::build_bus()
 		d.w16 = [this, &dev, base, hold](offs_t a, u16 v) {
 			m_swp_w16++;
 			if (m_swp_trace)
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
-				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc());
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
+				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
 			dev.write16((a - base) >> 1, v);
 			hold((a - base) >> 1);
 		};
@@ -604,6 +604,16 @@ void mu2000::start_devices()
 
 void mu2000::reset()
 {
+	// 実機の M37640 は、PC に繋がっていると「ホストが居る」を知らせてくる
+	// （状態の bit6 を立てて F4 03 01 01 01。0x43810 が受け、0x43DAD1 を 1 にする）。
+	// これが来ないと、HOST SELECT が USB のとき firmware は起動の途中（0x1167CE）で
+	// 液晶に「HOST Is Offline!」を出す。エミュでは PC が常に繋がっているので、起動時に 1 回送る
+	m_usb.cmd.clear();
+	m_usb.cur_cmd = false;
+	if (m_usb_host)
+		for (u8 b : { 0xf4, 0x03, 0x01, 0x01, 0x01 })
+			m_usb.cmd.push_back(b);
+
 	// ポート A。MAME の mu500_state::pa_r は 0xffff を返すだけだったが、
 	// そこに付いていた覚え書きに配線が書いてある。
 	//   21 出力（前面と背面の MIDI A を切り替える）
@@ -834,10 +844,13 @@ void mu2000::usb_step(u64 now)
 	// （doc/dump/usb.md の実測）。DIN の 3,125 byte/s より 6 倍速いが、
 	// 発音の間隔は firmware 側が頭打ちなので実測とは食い違わない。
 	// 4 つの口が 1 本の流れを分け合うので、遅くすると互いに待たせてしまう
-	if (!u.have && !u.rx.empty() && now >= u.next) {
-		u.cur  = u.rx.front();
+	if (!u.have && now >= u.next && (!u.cmd.empty() || !u.rx.empty())) {
+		// コマンドを先に渡す
+		std::deque<u8> &q = u.cmd.empty() ? u.rx : u.cmd;
+		u.cur_cmd = !u.cmd.empty();
+		u.cur  = q.front();
 		u.have = true;
-		u.rx.pop_front();
+		q.pop_front();
 		u.next = now + (m_fast_midi ? 0 : USB_BYTE_CYCLES);
 	}
 	// 送信の線を一度下ろす。下で上げ直すので、山は 1 標本ぶんになる
@@ -863,7 +876,7 @@ u8 mu2000::usb_r(offs_t a)
 {
 	usb_line &u = m_usb;
 	if (a & 1)
-		return u.have ? 0x01 : 0x00;   // bit0 = 受信あり、bit6 = コマンド（使わない）
+		return u.have ? (u.cur_cmd ? 0x41 : 0x01) : 0x00;   // bit0 = 受信あり、bit6 = コマンド
 	// 受け取られたのでその場で線を下ろす。次の標本まで待つと、その隙に
 	// 割り込みがもう一度入って同じバイトを二度読まれてしまう
 	u.have = false;
@@ -1037,7 +1050,7 @@ namespace {
 
 // 保存の形。中身の並びを変えたら上げる
 constexpr u32 STATE_MAGIC   = 0x554d3253;   // "S2MU"
-constexpr u32 STATE_VERSION = 9;   // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG / 4: サンプリングの録音の位置 / 5: SmartMedia の命令の途中 / 6: MEG の印と 2 つ目の idx / 7: USB の口（C・D）の受け取り途中 / 8: 2 つ目の A/D 変換器（AN4 = HOST SELECT） / 9: SWP30 の書き込みの待ち
+constexpr u32 STATE_VERSION = 10;  // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG / 4: サンプリングの録音の位置 / 5: SmartMedia の命令の途中 / 6: MEG の印と 2 つ目の idx / 7: USB の口（C・D）の受け取り途中 / 8: 2 つ目の A/D 変換器（AN4 = HOST SELECT） / 9: SWP30 の書き込みの待ち / 10: USB のコマンド（M37640 からの知らせ）
 constexpr u32 STATE_VERSION_OLDEST = 2;
 
 } // namespace
@@ -1110,6 +1123,22 @@ void mu2000::state(state_io &s)
 			}
 		}
 		s.v(m_usb.in_port); s.v(m_usb.next); s.v(m_usb.have); s.v(m_usb.cur); s.v(m_usb.tx_next);
+		if (s.version() >= 10) {
+			u32 c = u32(m_usb.cmd.size());
+			s.v(c);
+			if (s.writing()) {
+				for (u8 b : m_usb.cmd)
+					s.v(b);
+			} else {
+				m_usb.cmd.clear();
+				for (u32 i = 0; i < c && s.ok(); i++) {
+					u8 b = 0;
+					s.v(b);
+					m_usb.cmd.push_back(b);
+				}
+			}
+			s.v(m_usb.cur_cmd);
+		}
 	}
 }
 

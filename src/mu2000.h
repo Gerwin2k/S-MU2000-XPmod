@@ -161,7 +161,7 @@ public:
 	// A・B も USB 側を通る（実機で DIN が黙るのと同じ）
 	void set_usb_host(bool on) { m_usb_host = on; }
 	bool usb_host() const { return m_usb_host; }
-	bool usb_idle() const { return m_usb.rx.empty() && !m_usb.have; }
+	bool usb_idle() const { return m_usb.rx.empty() && m_usb.cmd.empty() && !m_usb.have; }
 	// firmware が USB へ出したバイト。口は 0 始まり（-1 は口の指定より前）
 	bool usb_out_take(u8 &v, int &port);
 
@@ -373,6 +373,8 @@ private:
 		u64  next     = 0;      // 次のバイトを渡してよい時刻
 		bool have     = false;  // 渡したバイトをまだ読まれていない
 		u8   cur      = 0;
+		std::deque<u8> cmd;     // M37640 からのコマンド。状態の bit6 を立てて渡す
+		bool cur_cmd  = false;  // 渡しているバイトがコマンドか
 		u64  tx_next  = 0;
 		std::deque<u8> tx;      // firmware が出した MIDI バイト（F5 込み）
 		int  out_port = -1;     // 取り出し側が見ている口
