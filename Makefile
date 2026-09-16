@@ -589,6 +589,147 @@ au-probe: $(BUILD)/aubprobe$(EXE) $(AU_BIN)
 check-au: $(BUILD)/aubprobe$(EXE) $(AU_BIN)
 	S_MU2000_ROMS=$(ROMS) $(BUILD)/aubprobe$(EXE) $(AU_DIR) --torture
 
+# ---- AUv3 plug-in (macOS)
+#
+# The hardware jacks become ports as-is:
+#   out MAIN OUT L/R / in A/D INPUT / MIDI in cable 0=IN A, 1=IN B / MIDI out MIDI OUT
+#
+# An AUv3 is only recognized by the system inside an app, so a silent
+# container app is built alongside it. Launch it once and the unit shows
+# up in DAW lists.
+# The subtype differs from AUv2 (SMU3/Trbh vs SMU2/Trbh), so installing
+# both never confuses them.
+#
+#   make auv3           build build/S-MU2000.app (with the .appex inside)
+#   make install-auv3   copy it to ~/Applications and launch once (registers it)
+#   make auval3         validate the plug-in (aumu SMU3 Trbh)
+
+AUV3_APP   := $(BUILD)/S-MU2000.app
+AUV3_APPEX := $(AUV3_APP)/Contents/PlugIns/S-MU2000AU.appex
+AUV3_BIN   := $(AUV3_APPEX)/Contents/MacOS/S-MU2000AU
+AUV3_HOST  := $(AUV3_APP)/Contents/MacOS/S-MU2000
+
+# The sound engine is the same one VST3 uses (no VST3 types in it).
+# The UI is the same panel VST3 and AUv2 show (view_controller.mm hosts plug_view)
+AUV3_SRCS := src/auv3/audio_unit.mm src/auv3/factory.mm src/auv3/view_controller.mm \
+             src/vst3/engine.cpp src/vst3/iids.cpp \
+             $(PANEL_VIEW_SRCS) $(PANEL_SRCS) $(VST3_SDK_SRCS)
+AUV3_OBJS := $(AUV3_SRCS:%.cpp=$(BUILD)/auv3obj/%.o)
+AUV3_OBJS := $(AUV3_OBJS:%.mm=$(BUILD)/auv3obj/%.o)
+
+# Certificate for signing. Ad-hoc (-) registers fine (the sandbox
+# entitlements are what matter). Use a Developer ID for distribution.
+#   security find-identity -v -p codesigning   lists local certificates
+CODESIGN_ID ?= -
+
+# Copy ROMs into the bundle.
+#
+# A sandboxed extension can only read its own bundle. The AUv3 extension
+# lives in a sandbox (it would not register otherwise), so $HOME points
+# at the container and neither ~/Library/Application Support nor whatever
+# roms.txt names is reachable. Baking ROMs in is the only way an AUv3 sings.
+#
+#   make auv3 AUV3_ROMS=roms
+#
+# ROMs are never redistributed, so they stay out by default (without them
+# the unit registers and renders, silently)
+AUV3_ROMS ?=
+
+AUV3_FLAGS := -fobjc-arc
+AUV3_FW    := -framework Foundation -framework AudioToolbox -framework AVFoundation \
+              -framework CoreAudio -framework CoreMIDI -framework Cocoa -framework CoreAudioKit
+
+$(BUILD)/auv3obj/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VST3_INC) -c -o $@ $<
+
+$(BUILD)/auv3obj/%.o: %.mm
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(VST3_INC) $(AUV3_FLAGS) -ObjC++ -c -o $@ $<
+
+# Bundle finishing (ROMs in, then sign) runs every time. Doing it only
+# when binaries rebuild would ignore a later-added AUV3_ROMS.
+# Without AUV3_ROMS the contents stay as they are (so a bare install-auv3
+# never wipes baked ROMs). Write AUV3_ROMS=none to take them out
+auv3: $(AUV3_HOST) $(BUILD)/autest$(EXE)
+	# ROMs into the bundle. Before signing (adding them later breaks the seal).
+	# Without AUV3_ROMS the contents stay (a bare install never wipes them).
+	# AUV3_ROMS=none takes them out
+ifeq ($(AUV3_ROMS),none)
+	@rm -rf $(AUV3_APPEX)/Contents/Resources/roms
+	@rm -rf $(AUV3_APPEX)/Contents/Resources/bootcache
+	@echo "ROM を抜いた"
+endif
+ifneq ($(AUV3_ROMS),)
+ifneq ($(AUV3_ROMS),none)
+	@rm -rf $(AUV3_APPEX)/Contents/Resources/roms
+	@mkdir -p $(AUV3_APPEX)/Contents/Resources
+	@cp -R $(AUV3_ROMS) $(AUV3_APPEX)/Contents/Resources/roms
+	@echo "ROM を入れた: $(AUV3_ROMS)"
+	# Boot the image once here and bake the snapshot, so first insert never waits.
+	# A sandboxed plug-in owns no NVRAM (empty container), so build it under an
+	# empty HOME to match keys. Otherwise local settings leak in, the key
+	# changes, and the baked snapshot goes unused
+	@rm -rf $(AUV3_APPEX)/Contents/Resources/bootcache
+	@tmp=$$(mktemp -d); \
+	 HOME=$$tmp S_MU2000_ROMS=$(AUV3_ROMS) $(BUILD)/autest$(EXE) --state $$tmp/state.bin >/dev/null 2>&1; \
+	 if [ -d "$$tmp/Library/Application Support/S-MU2000/bootcache" ]; then \
+	   mkdir -p $(AUV3_APPEX)/Contents/Resources/bootcache; \
+	   cp "$$tmp/Library/Application Support/S-MU2000/bootcache/"*.bin \
+	      $(AUV3_APPEX)/Contents/Resources/bootcache/ 2>/dev/null; \
+	   echo "起動の写しを焼いた: $$(ls $(AUV3_APPEX)/Contents/Resources/bootcache | head -1)"; \
+	 else echo "起動の写しを作れなかった（初回は待たされる）"; fi; \
+	 rm -rf "$$tmp"
+endif
+endif
+	# Info.plists are refreshed here. The copies in the binary rules alone
+	# would leave a plist-only edit stale under its signature
+	@cp -f packaging/auv3-appex-Info.plist $(AUV3_APPEX)/Contents/Info.plist
+	@cp -f packaging/auv3-app-Info.plist $(AUV3_APP)/Contents/Info.plist
+	# The App Sandbox entitlement is required. A macOS app extension outside
+	# the sandbox never registers. Certificate kind does not matter (ad-hoc works)
+	@codesign --force --sign "$(CODESIGN_ID)" --timestamp=none \
+	          --entitlements packaging/auv3-appex.entitlements $(AUV3_APPEX)
+	@codesign --force --sign "$(CODESIGN_ID)" --timestamp=none \
+	          --entitlements packaging/auv3-app.entitlements $(AUV3_APP)
+	@echo "出来た: $(AUV3_APP)"
+
+# The .appex itself. Entry point is NSExtensionMain (it owns no main())
+$(AUV3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(AUV3_OBJS)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(AUV3_FW) \
+	       -e _NSExtensionMain -fapplication-extension
+	@cp -f packaging/auv3-appex-Info.plist $(AUV3_APPEX)/Contents/Info.plist
+
+# The container app. Silent. Exists only to carry the .appex into registration
+$(AUV3_HOST): $(AUV3_BIN) $(BUILD)/auv3obj/src/auv3/main_app.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $(BUILD)/auv3obj/src/auv3/main_app.o $(LDFLAGS) -framework Cocoa
+	@cp -f packaging/auv3-app-Info.plist $(AUV3_APP)/Contents/Info.plist
+	@mkdir -p $(AUV3_APP)/Contents/Resources
+	@cp -f LICENSE $(AUV3_APP)/Contents/Resources/LICENSE.txt
+	@cp -f NOTICE.txt $(AUV3_APP)/Contents/Resources/NOTICE.txt
+
+# Register it. Place under ~/Applications and launch once
+install-auv3: auv3
+	rm -rf "$(HOME)/Applications/S-MU2000.app"
+	@mkdir -p "$(HOME)/Applications"
+	cp -R $(AUV3_APP) "$(HOME)/Applications/"
+	@echo "入れた: $(HOME)/Applications/S-MU2000.app"
+	@echo "一度起動すると DAW の一覧に出る（open してよいか聞かれたら許可する）"
+
+# Register in-process (no .appex) to check ports and sound on the spot
+$(BUILD)/autest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(AUV3_OBJS) \
+                       $(BUILD)/auv3obj/src/auv3/autotest.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(AUV3_FW)
+
+autest: $(BUILD)/autest$(EXE)
+
+auval3: install-auv3
+	@sleep 2
+	auval -v aumu SMU3 Trbh
+
 endif # windows / macOS
 
 $(BUILD)/%.o: %.cpp
