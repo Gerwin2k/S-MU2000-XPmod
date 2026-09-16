@@ -22,6 +22,7 @@
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
+#include "pluginterfaces/vst/ivstunits.h"
 
 #include "probe_host.h"
 #include "smf.h"
@@ -634,6 +635,61 @@ int run_torture(IPluginFactory *fac, const TUID cid)
 			std::printf("NG: 違う口・チャンネルが同じパラメータに割り当たっている\n"); bad++;
 		}
 		std::printf("OK: MIDI の割り当ては %d 通り（2 口 × 16ch × 131）\n", mapped);
+
+		// Cubase がプログラムチェンジを渡す道。MIDI チャンネル → ユニット（getUnitByBus）→
+		// そのユニットのプログラム一覧 → 同じユニットに属し kIsProgramChange の付いたパラメータ
+		IUnitInfo *u = nullptr;
+		c->queryInterface(IUnitInfo::iid, (void **)&u);
+		if (!u) {
+			std::printf("NG: IUnitInfo が無い（Cubase で MIDI のプログラムチェンジが捨てられる）\n"); bad++;
+		} else {
+			std::map<UnitID, ProgramListID> lists;
+			for (int32 i = 0; i < u->getUnitCount(); i++) {
+				UnitInfo ui{};
+				if (u->getUnitInfo(i, ui) == kResultOk)
+					lists[ui.id] = ui.programListId;
+			}
+			int32 programs = 0;
+			for (int32 i = 0; i < u->getProgramListCount(); i++) {
+				ProgramListInfo li{};
+				if (u->getProgramListInfo(i, li) == kResultOk && li.id == 1)
+					programs = li.programCount;
+			}
+			std::map<UnitID, int> pc_params;
+			for (int32 i = 0; i < e->getParameterCount(); i++) {
+				ParameterInfo pi2{};
+				if (e->getParameterInfo(i, pi2) == kResultOk && (pi2.flags & ParameterInfo::kIsProgramChange))
+					pc_params[pi2.unitId]++;
+			}
+			int good = 0, bus_count = c->getBusCount(kEvent, kInput);
+			for (int32 bus = 0; bus < bus_count; bus++)
+				for (int32 ch = 0; ch < 16; ch++) {
+					UnitID unit = -1;
+					if (u->getUnitByBus(kEvent, kInput, bus, ch, unit) != kResultTrue)
+						continue;
+					auto l = lists.find(unit);
+					if (l == lists.end() || l->second == kNoProgramListId)
+						continue;
+					if (pc_params[unit] != 1)
+						continue;
+					// そのパラメータと IMidiMapping の 130 番が同じものか
+					ParamID via_map = 0;
+					m->getMidiControllerAssignment(bus, int16(ch), CtrlNumber(130), via_map);   // kCtrlProgramChange
+					ParameterInfo pi3{};
+					bool same = false;
+					for (int32 i = 0; i < e->getParameterCount() && !same; i++)
+						if (e->getParameterInfo(i, pi3) == kResultOk && pi3.id == via_map)
+							same = (pi3.flags & ParameterInfo::kIsProgramChange) && pi3.unitId == unit;
+					good += same;
+				}
+			if (good != bus_count * 16 || programs != 128) {
+				std::printf("NG: プログラムチェンジのユニット %d / %d、一覧 %d 音\n", good, bus_count * 16, programs);
+				bad++;
+			} else {
+				std::printf("OK: プログラムチェンジは %d 口 × 16ch ともユニットと 128 音の一覧に繋がる\n", bus_count);
+			}
+			u->release();
+		}
 
 		c->terminate();
 		e->release();
