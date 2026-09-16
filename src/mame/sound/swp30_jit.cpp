@@ -1275,6 +1275,8 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	const s32 o_ram_write = off(&ms, &ms.m_ram_write);
 	const s32 o_ram_index = off(&ms, &ms.m_ram_index);
 	const s32 o_sample   = off(&ms, &ms.m_sample_counter);
+	const s32 o_lfo      = off(&ms, ms.m_lfo.data());
+	const s32 o_lfo_counter = off(&ms, ms.m_lfo_counter.data());
 	const s32 o_seed     = off(&swp, &swp.m_rand_seed);
 	const s32 o_flag_n   = off(&swp, &swp.m_meg_flag_n);
 	const s32 o_flag_z   = off(&swp, &swp.m_meg_flag_z);
@@ -1289,6 +1291,9 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	    sizeof(swp.m_meg_flag_n) != 1 || sizeof(ms.m_t_value[0]) != 2 || sizeof(ms.m_const[0]) != 2 ||
 	    sizeof(ms.m_offset[0]) != 2 || sizeof(ms.m_m[0]) != 4 || sizeof(ms.m_r[0]) != 4)
 		return false;
+	// The LFO goes inline only with a full quarter-wave table (0x8000
+	// entries), same rule as the x86-64 backend; otherwise call the helper.
+	const u16 *sintab = swp.m_sintab.count() >= 0x8000 ? swp.m_sintab.target() : nullptr;
 
 	// instructions that must leave a t value in the ring (2 later one is read), plus the tail
 	bool need_tval[0x180] = {};
@@ -1710,11 +1715,76 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		if (o.dm) {
 			switch (o.dm_src) {
 			case 0: case 1: case 2: case 3:
-				a.mov_x(X0, MS);
-				a.mov_imm32(X1, o.lfo);
-				a.mov_imm64(X17, u64(uintptr_t(&meg_jit::call_lfo)));
-				a.blr(X17);
-				a.mov_reg(A, W0);                        // the result comes back in w0
+				if (sintab && o.lfo < 0x18) {
+					// meg_state::get_lfo in machine code, no call (same shape
+					// as the x86-64 backend). Output A. C, D and E are scratch.
+					static constexpr u32 lfo_offsets[16] = {
+						0x00000, 0x02aaa, 0x04000, 0x05555, 0x08000, 0x0aaaa, 0x0c000, 0x0d555,
+						0x10000, 0x12aaa, 0x14000, 0x15555, 0x18000, 0x1aaaa, 0x1c000, 0x1d555,
+					};
+					ldw(A, MS, o_lfo_counter + 4 * s32(o.lfo));
+					a.lsr_imm(A, A, 5);
+					cdh(D, o_lfo + 2 * s32(o.lfo));
+					a.mov_reg(C, D);
+					a.lsr_imm(C, C, 8);
+					a.and_imm(C, C, 3);
+					a.lslv(A, A, C);
+					a.mov_reg(C, D);
+					a.lsr_imm(C, C, 12);
+					a.mov_imm64(E, u64(uintptr_t(lfo_offsets)));
+					a.ldr_w_sr(C, E, C);
+					a.add_reg(A, A, C);
+					a.and_imm(A, A, 0x1ffff);
+					a.lsr_imm(D, D, 10);
+					a.and_imm(D, D, 3);
+					std::vector<size_t> done;
+					a.cmp_imm(D, 0);
+					const size_t not_sine = a.b_cond(NE);
+					{   // sine
+						a.mov_reg(C, A);
+						a.and_imm(C, C, 0x7fff);
+						a.tst_imm(A, 0x8000);
+						const size_t no_rev = a.b_cond(EQ);
+						a.eor_imm(C, C, 0x7fff);
+						a.patch(no_rev);
+						a.mov_imm64(E, u64(uintptr_t(sintab)));
+						a.mov_reg(D, A);
+						a.ldrh_sr(A, E, C);
+						a.tst_imm(D, 0x10000);
+						const size_t no_neg = a.b_cond(EQ);
+						a.eor_imm(A, A, 0xffff);
+						a.patch(no_neg);
+						done.push_back(a.b());
+					}
+					a.patch(not_sine);
+					a.cmp_imm(D, 1);
+					const size_t not_tri = a.b_cond(NE);
+					{   // tri
+						a.add_imm(A, A, 8, 1);               // +0x8000 via imm12 << 12
+						a.and_imm(A, A, 0x1ffff);
+						a.tst_imm(A, 0x10000);
+						const size_t no_fold = a.b_cond(EQ);
+						a.eor_imm(A, A, 0x1ffff);
+						a.patch(no_fold);
+						done.push_back(a.b());
+					}
+					a.patch(not_tri);
+					a.cmp_imm(D, 2);
+					const size_t not_up = a.b_cond(NE);
+					a.lsr_imm(A, A, 1);                              // saw up
+					done.push_back(a.b());
+					a.patch(not_up);
+					a.eor_imm(A, A, 0x1ffff);                        // saw down
+					a.lsr_imm(A, A, 1);
+					for (size_t d : done) a.patch(d);
+					a.lsl_imm(A, A, 7);
+				} else {
+					a.mov_x(X0, MS);
+					a.mov_imm32(X1, o.lfo);
+					a.mov_imm64(X17, u64(uintptr_t(&meg_jit::call_lfo)));
+					a.blr(X17);
+					a.mov_reg(A, W0);                        // the result comes back in w0
+				}
 				break;
 			case 4:
 				ldw(A, MS, o_ram_read);
