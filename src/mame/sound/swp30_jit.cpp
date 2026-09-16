@@ -1304,7 +1304,9 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	// A carries the value a program instruction computes, E holds an address
 	// across the revram helpers, T takes a materialized struct address; A, C, D,
 	// E and T are all caller-saved and hold nothing across a helper call.
-	const u8 MS = X19, SWP = X20, P = X21, SC = X22, RAM = X23;
+	// SEED keeps the rand() state across the block the way the x86 backend
+	// keeps it in rsi: every dithered write would otherwise load and store it.
+	const u8 MS = X19, SWP = X20, P = X21, SC = X22, RAM = X23, SEED = X24;
 	const u8 A = HA, C = HC, D = HD, E = HE, T = X6;
 
 	// [base + disp] with disp known at build time. Each size reaches further
@@ -1332,15 +1334,17 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 	const auto stx   = [&](u32 rt, u32 base, s32 d) { if (d >= 0 && d <= 32760) a.str_x(rt, base, d); else { a.add_off(T, base, d); a.str_x(rt, T, 0); } };
 
 	// entry: x0 = ms, x1 = swp, x2 = the reverb RAM. x30 is saved because the
-	// LFO is fetched with BLR, and x19-x23 because they carry the block state.
+	// LFO is fetched with BLR, and x19-x24 because they carry the block state.
 	a.stp_x(X19, X20, X31, -16, true);
 	a.stp_x(X21, X22, X31, -16, true);
-	a.stp_x(X23, X30, X31, -16, true);
+	a.stp_x(X23, X24, X31, -16, true);
+	a.stp_x(X29, X30, X31, -16, true);
 	a.mov_x(MS, X0);
 	a.mov_x(SWP, X1);
 	a.mov_x(RAM, X2);
 	ldx(P, MS, o_p);
 	ldw(SC, MS, o_sample);
+	ldw(SEED, SWP, o_seed);
 	if (branchy)
 		stw(WZR, SWP, o_skip);
 
@@ -1365,14 +1369,14 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		a.lsl_imm(A, A, 8);
 		a.sar_imm(A, A, 8);
 	};
-	// one step of swp30_device::rand. Output A
+	// one step of swp30_device::rand. Output A; the state lives in SEED
 	const auto rnd = [&]() {
-		ldw(A, SWP, o_seed);
+		a.mov_reg(A, SEED);
 		a.mov_imm32(T, 1664525);
 		a.mul(A, A, T);
 		a.mov_imm32(D, 1013904223);
 		a.add_reg(A, A, D);
-		stw(A, SWP, o_seed);
+		a.mov_reg(SEED, A);
 		a.ror_imm(A, A, 16);
 	};
 	// p plus noise, packed (dm 6, and dr's p). Output A
@@ -1815,7 +1819,9 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 
 	// exit
 	stx(P, MS, o_p);
-	a.ldp_x(X23, X30, X31, 16, true);
+	stw(SEED, SWP, o_seed);
+	a.ldp_x(X29, X30, X31, 16, true);
+	a.ldp_x(X23, X24, X31, 16, true);
 	a.ldp_x(X21, X22, X31, 16, true);
 	a.ldp_x(X19, X20, X31, 16, true);
 	a.ret();
