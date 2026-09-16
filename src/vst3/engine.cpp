@@ -376,6 +376,19 @@ void engine::boot()
 		return;
 	}
 
+	// Run past midi_ready until the firmware settles: at midi_ready the LCD
+	// still shows the mid-boot transient, and that frame is what the snapshot
+	// keeps. A host that never renders would show the restored transient
+	// forever, so only save once the steady screen is up
+	for (int64_t j = 0; j < int64_t(2.0 * NATIVE_RATE); j++) {
+		if (!(j & 4095) && m_abort.load(std::memory_order_relaxed)) {
+			delete mu;
+			return;
+		}
+		s32 l = 0, r = 0;
+		mu->run_sample(l, r);
+	}
+
 	const double wall = std::chrono::duration<double>(
 	    std::chrono::steady_clock::now() - t0).count();
 	logf("起動: 音 %.2f 秒ぶん / 実時間 %.2f 秒", double(i) / NATIVE_RATE, wall);

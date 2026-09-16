@@ -167,6 +167,12 @@ inline bool refresh(const mu2000 &live)
 	}
 	if (i >= limit)
 		return false;
+	// Settle past the mid-boot LCD transient before saving, for the same
+	// reason the plug-in boot does: the snapshot keeps whatever frame is up
+	for (u64 j = 0; j < 2 * 44100; j++) {
+		s32 l = 0, r = 0;
+		fresh.run_sample(l, r);
+	}
 	return save(fresh, k);
 }
 
