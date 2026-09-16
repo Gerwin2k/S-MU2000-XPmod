@@ -29,6 +29,7 @@
 
 #include "compat/paths.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -122,8 +123,75 @@ inline bool save(const mu2000 &mu, u64 k)
 		std::remove(tmp.c_str());
 		return false;
 	}
-	std::remove(p.c_str());
-	return std::rename(tmp.c_str(), p.c_str()) == 0;
+	return smu2000::replace_file(tmp, p);
+}
+
+// 設定（ワーク RAM）を書き戻したあとに呼ぶ。その設定で起動した写しがまだ
+// 無ければ、まっさらな機械を 1 台起こして作っておく。**次の起動が速いまま**になる
+// （やらないと、設定をいじった次の 1 回だけ起動が遅くなる）。
+//
+// live は終わるときの機械。ROM はそのまま借り、ワーク RAM だけ写して起こす。
+// 音は出さないので別スレッドにもしない。作れたら true
+inline bool refresh(const mu2000 &live)
+{
+	const std::vector<u8> &ram = live.nvram();
+	if (ram.empty() || !live.program_rom())
+		return false;
+
+	mu2000 fresh;
+	fresh.set_program_rom(live.program_rom());
+	fresh.set_wave_rom(live.wave_rom());
+	fresh.set_sintab_rom(live.sintab_rom());
+	if (!fresh.set_nvram(ram.data(), ram.size()))
+		return false;
+
+	const u64 k = key(fresh);
+	// もう有るなら何もしない
+	const std::string p = path(k);
+	if (p.empty())
+		return false;
+	if (std::FILE *f = std::fopen(p.c_str(), "rb")) {
+		std::fclose(f);
+		return false;
+	}
+
+	fresh.reset();
+	const u64 limit = 30 * 44100;
+	u64 i = 0;
+	for (; i < limit && !fresh.midi_ready(); i++) {
+		s32 l = 0, r = 0;
+		fresh.run_sample(l, r);
+	}
+	if (i >= limit)
+		return false;
+	return save(fresh, k);
+}
+
+// 写しは 1 つ 6MB ほどある。設定を変えるたびに鍵が変わるので、
+// 放っておくと溜まる。新しいほうから keep 個だけ残す
+inline void prune(int keep = 4)
+{
+	const std::string base = smu2000::config_dir();
+	if (base.empty())
+		return;
+	const std::string dir = smu2000::join(base, "boot");
+	if (!smu2000::is_dir(dir))
+		return;
+	std::vector<smu2000::dir_entry> files;
+	for (const smu2000::dir_entry &e : smu2000::list_dir(dir)) {
+		// 鍵の名前のものだけ。人が置いた物は触らない
+		if (e.name.size() == 20 && e.name.compare(16, 4, ".bin") == 0 &&
+		    e.name.find_first_not_of("0123456789abcdef") == 16)
+			files.push_back(e);
+	}
+	if (int(files.size()) <= keep)
+		return;
+	std::sort(files.begin(), files.end(),
+	          [](const smu2000::dir_entry &a, const smu2000::dir_entry &b) {
+		          return a.mtime > b.mtime;   // 新しい順
+	          });
+	for (size_t i = size_t(keep); i < files.size(); i++)
+		std::remove(smu2000::join(dir, files[i].name).c_str());
 }
 
 } // namespace bootcache

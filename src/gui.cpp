@@ -21,6 +21,7 @@
 // エンコーダがあり、VALUE -/+ のボタンと同じ働きをする。
 
 #include "mu2000.h"
+#include "bootcache.h"
 #include "nvram.h"
 #include "smf.h"
 #include "ui/audio_out.h"
@@ -1425,6 +1426,14 @@ int main(int argc, char **argv)
 	// 音はもう止まっている。起動できていたときだけ残す
 	if (eng.state.load() == 1 && !smu2000::nvram::save(eng.mu))
 		std::fprintf(stderr, "設定を残せなかった: %s\n", smu2000::nvram::path(eng.mu).c_str());
+	// 残した設定で起動した写しも用意しておく（src/bootcache.h）。無いと、
+	// 設定をいじった次の 1 回だけ起動が遅くなる。1 秒ほどかかるが、
+	// 窓はもう閉じているので待たせない。溜まった古い写しはここで間引く
+	if (eng.state.load() == 1) {
+		if (smu2000::bootcache::refresh(eng.mu))
+			std::printf("次の起動ぶんの写しを作った\n");
+		smu2000::bootcache::prune();
+	}
 	g_win.play_file.stop();
 	for (ui::midi_in &m : midi_ports)
 		m.close();
