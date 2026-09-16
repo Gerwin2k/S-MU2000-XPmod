@@ -304,7 +304,11 @@ public:
 	tresult PLUGIN_API setActive(TBool state) override
 	{
 		if (state) {
-			m_engine.start();
+			// **ここで起動を待ちきる。**setActive は本スレッドで呼ばれ、時間がかかって
+			// よいところなので、ここで待たないとホストは起動中の機械へ MIDI を流し始める。
+			// 流された分は溜めてあとでまとめて出すので、曲の頭が崩れる（issue #19）
+			if (!m_engine.wait_ready(30000))
+				m_engine.log_line("起動が終わらないまま演奏に入る");
 		} else {
 			m_hush.store(true);
 			m_engine.set_processing(false);
@@ -360,8 +364,7 @@ public:
 			return kResultOk;
 
 		// 起動が終わっていないと戻せない。終わるまで待つ
-		for (int i = 0; i < 300 && m_engine.state() == smu2000::vst3::status::loading; i++)
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		m_engine.wait_ready(3000);
 		m_engine.load_state(blob.data(), blob.size());
 
 		// 版 3 から: 差していた SmartMedia のファイル（UTF-8）。無くなっていたら差さない

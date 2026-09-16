@@ -320,7 +320,10 @@ private:
 	// 命令の途中で止まれず走りすぎた分。次の呼び出しから引く
 	u64 m_overrun = 0;
 	// SWP30 のレジスタに書いたので、このサンプルの残りは CPU を止める（run_cycles の説明）
-	bool m_swp_hold = false;
+	// マスタの SWP30 へ 1 本書くと CPU が待たされるサイクル数（build_bus の説明）。
+	// 実機で測った 61.4 サンプルに合う値（doc/upstream.md の 36）
+	static constexpr u64 SWP_WRITE_CYCLES = 440;
+	u64 m_swp_wait = 0;      // まだ消化していない待ち
 	bool m_profile = false;
 
 	// スレーブ用のスレッド。合図は atomic の回し合いで、錠は使わない。
