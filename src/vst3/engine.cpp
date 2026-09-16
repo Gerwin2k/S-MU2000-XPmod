@@ -6,6 +6,7 @@
 #include "bootcache.h"
 #include "nvram.h"
 #include "smartmedia.h"
+#include "ui/xg_ui.h"
 
 #include "compat/paths.h"
 #include "compat/platform.h"
@@ -304,6 +305,9 @@ void engine::boot()
 			}
 			std::fclose(f);
 		}
+	// 一覧やエディタで音色の名前と楽器の絵を利用者の ROM から読む（xg/voices.h）。
+	// gui.exe と同じ
+	ui::xgui::set_voice_rom(mu->program_rom());
 	mu->set_usb_host(usb);
 	logf(usb ? "MIDI は USB の口（A-D の 64 パート）" : "plugin.ini: usb=0（DIN の口 A・B だけ）");
 	mu->set_threaded(threaded);
