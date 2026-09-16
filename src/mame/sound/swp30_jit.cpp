@@ -1002,13 +1002,23 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 					for (size_t d : done) a.patch(d);
 					a.shl32(RAX, 7);
 				} else {
-					// NOTE: Windows x64 専用 (RCX/RDX)。SysV (macOS/Linux の x86-64)
-					// では引数は RDI/RSI のため、sin 表が無く helper を呼ぶと落ちる
-					// (Rosetta で exit 139 を確認。SEED=RSI/K_MAX=RDI も SysV では
-					// helper に壊される)。直すなら sh2_jit.cpp の sysv 対応と同じ形に。
-					a.mov64(RCX, MS);
-					a.imm32(RDX, o.lfo);
+					// sin 表が無いときは補助関数を呼ぶ。引数は規約に合わせて ARG0 = ms、ARG1 = LFO の番号。
+					// 以前は Windows x64 の RCX/RDX に決め打ちで、SysV（macOS・Linux の x86-64）では
+					// 引数が渡らず落ちていた（Rosetta で exit 139。PR #21 の注記）。
+					// SysV では rsi・rdi は呼ぶ先が壊してよいので、そこに置いている SEED と K_MAX を
+					// 積んで戻す（2 つで 16 バイトなので揃えは崩れない）。Windows x64 では呼ぶ先が守るうえ、
+					// 呼ぶ先が影の 32 バイトに書くので積まない
+					if constexpr (sysv_abi) {
+						a.push(SEED);
+						a.push(K_MAX);
+					}
+					a.mov64(ARG0, MS);
+					a.imm32(ARG1, o.lfo);
 					a.call_abs(reinterpret_cast<void *>(&meg_jit::call_lfo));
+					if constexpr (sysv_abi) {
+						a.pop(K_MAX);
+						a.pop(SEED);
+					}
 					load_p_limits();
 				}
 				break;

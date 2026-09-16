@@ -297,12 +297,23 @@ re-tries them:
   Four instructions saved per memory op against a six-`mov` prologue on every
   block — the prologue eats the saving on blocks with few memory ops.
 
-One thing the porting turned up is noted in the code, not fixed here:
-`swp30_jit.cpp`'s x86-64 LFO helper call hardcodes the Windows convention
+One thing the porting turned up was fixed right after the merge:
+`swp30_jit.cpp`'s x86-64 LFO helper call hardcoded the Windows convention
 (`RCX`/`RDX`), and `SEED`/`K_MAX` sit in SysV-volatile `RSI`/`RDI` — without
-`sin-table.bin` the helper path runs and the binary segfaults (exit 139 under
-Rosetta; arm64 is unaffected). The Rosetta rows in `doc/benchmarks.md` look
-sane only because the table keeps that path dormant.
+`sin-table.bin` the helper path ran and the binary segfaulted (exit 139 under
+Rosetta; arm64 is unaffected). The call now puts its arguments in
+`ARG0`/`ARG1`, and under SysV pushes `SEED` and `K_MAX` around the call
+(two pushes, so the 16-byte alignment holds; Windows x64 doesn't push, since
+there the callee preserves them and owns the 32-byte shadow space above the
+return address). The Windows code bytes are unchanged.
+
+It was checked on Windows by building the MEG JIT with the SysV argument
+registers and calling both the generated block and `call_lfo` through
+`__attribute__((sysv_abi))`, rendering without `sin-table.bin` so every LFO op
+goes through the helper: the code before the fix dies with an access violation
+(0xC0000005), the fix matches the interpreter byte for byte on effects, dense,
+chord and lofi, and the same build with the two pushes removed does not — so
+the test does see a clobbered `SEED`/`K_MAX`.
 
 ## The core needed one change
 
