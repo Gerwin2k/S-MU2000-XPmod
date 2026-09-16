@@ -1020,7 +1020,7 @@ namespace {
 
 // 保存の形。中身の並びを変えたら上げる
 constexpr u32 STATE_MAGIC   = 0x554d3253;   // "S2MU"
-constexpr u32 STATE_VERSION = 6;   // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG / 4: サンプリングの録音の位置 / 5: SmartMedia の命令の途中 / 6: MEG の印と 2 つ目の idx
+constexpr u32 STATE_VERSION = 7;   // 2: MIDI の入口が A/B の 2 口になった / 3: SWP30 のピッチ EG / 4: サンプリングの録音の位置 / 5: SmartMedia の命令の途中 / 6: MEG の印と 2 つ目の idx / 7: USB の口（C・D）の受け取り途中
 constexpr u32 STATE_VERSION_OLDEST = 2;
 
 } // namespace
@@ -1072,6 +1072,30 @@ void mu2000::state(state_io &s)
 		}
 		s.v(m.bit); s.v(m.cur); s.v(m.next);
 	}
+
+	// 版 7 から: USB の口（C・D）の受け取り途中。firmware へ渡す前のバイト列
+	if (s.version() >= 7) {
+		s.tag("usb");
+		u32 n = u32(m_usb.rx.size());
+		s.v(n);
+		if (s.writing()) {
+			for (u8 b : m_usb.rx)
+				s.v(b);
+		} else {
+			m_usb.rx.clear();
+			for (u32 i = 0; i < n && s.ok(); i++) {
+				u8 b = 0;
+				s.v(b);
+				m_usb.rx.push_back(b);
+			}
+		}
+		s.v(m_usb.in_port); s.v(m_usb.next); s.v(m_usb.have); s.v(m_usb.cur); s.v(m_usb.tx_next);
+	}
+}
+
+u32 mu2000::state_version()
+{
+	return STATE_VERSION;
 }
 
 std::vector<u8> mu2000::save_state() const

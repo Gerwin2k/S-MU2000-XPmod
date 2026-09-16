@@ -26,6 +26,7 @@
 #include "midi_in.h"
 #include "midi_out.h"
 #include "mu2000.h"
+#include "bootcache.h"
 #include "nvram.h"
 
 #include "compat/platform.h"
@@ -85,7 +86,17 @@ struct engine {
 		mu.set_threaded(true);
 		if (use_nvram && smu2000::nvram::load(mu))
 			std::printf("設定: %s\n", smu2000::nvram::path(mu).c_str());
+		// 鍵は起動に使うワーク RAM も混ぜるので、reset() の前に作る
+		const u64 key = smu2000::bootcache::key(mu);
 		mu.reset();
+		// 前に起動し切った姿を取ってあれば、そこから始める（bootcache.h）。
+		// 回した結果と 1 ビットも違わないので、音は同じ。
+		// **reset() のあとで読むこと**（タイマが揃っていないと形が合わない）
+		if (smu2000::bootcache::load(mu, key)) {
+			std::printf("起動: 前の写しから（%s）\n", smu2000::bootcache::path(key).c_str());
+			publish();
+			return true;
+		}
 		const size_t limit = size_t(30.0 * AUDIO_RATE);
 		size_t i = 0;
 		s32 l, r;
@@ -95,6 +106,8 @@ struct engine {
 			message = "起動しなかった";
 			return false;
 		}
+		if (smu2000::bootcache::save(mu, key))
+			std::printf("起動の写しを残した: %s\n", smu2000::bootcache::path(key).c_str());
 		publish();
 		return true;
 	}

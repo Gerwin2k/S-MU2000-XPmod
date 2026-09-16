@@ -82,6 +82,8 @@ public:
 	std::vector<u8> save_state() const;
 	void state(state_io &s);
 	bool load_state(const u8 *p, size_t n, std::string &err);
+	// いま書き出す形の版。起動後の写し（bootcache.h）の鍵に混ぜる
+	static u32 state_version();
 
 	// n サイクルぶん進める。周辺のイベントはこの中で挟む
 	void run_cycles(u64 n);

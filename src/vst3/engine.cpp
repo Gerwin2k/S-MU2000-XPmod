@@ -3,6 +3,7 @@
 #include "engine.h"
 
 #include "mu2000.h"
+#include "bootcache.h"
 #include "nvram.h"
 #include "smartmedia.h"
 
@@ -303,7 +304,24 @@ void engine::boot()
 	// 同じファイルを取り合わずに済む
 	if (nvram::load(*mu))
 		logf("設定: %s", nvram::path(*mu).c_str());
+
+	// 鍵は起動に使うワーク RAM も混ぜるので、reset() の前に作る
+	const u64 boot_key = bootcache::key(*mu);
 	mu->reset();
+
+	// 前に起動し切った姿を取ってあれば、そこから始める（bootcache.h）。
+	// 回した結果と 1 ビットも違わないので音は同じで、DAW に何枚挿しても
+	// そのたびに黙ることが無くなる。
+	// **reset() のあとで読むこと**（タイマが揃っていないと形が合わない）
+	if (bootcache::load(*mu, boot_key)) {
+		logf("起動: 前の写しから（%s）", bootcache::path(boot_key).c_str());
+		m_mu = mu;
+		m_message = warn.empty() ? std::string("ROM: ") + dir
+		                         : std::string("ROM: ") + dir + "\n警告: " + warn;
+		m_state.store(status::ready, std::memory_order_release);
+		ui::driver::publish_now(*m_mu, m_bridge, true, nullptr);
+		return;
+	}
 
 	ui::driver::publish_message(m_bridge, "MU2000 起動中");
 
@@ -332,6 +350,9 @@ void engine::boot()
 	const double wall = std::chrono::duration<double>(
 	    std::chrono::steady_clock::now() - t0).count();
 	logf("起動: 音 %.2f 秒ぶん / 実時間 %.2f 秒", double(i) / NATIVE_RATE, wall);
+	// 次からはここまでを飛ばせるように残す
+	if (bootcache::save(*mu, boot_key))
+		logf("起動の写しを残した: %s", bootcache::path(boot_key).c_str());
 
 	m_mu = mu;
 	m_message = warn.empty() ? std::string("ROM: ") + dir
