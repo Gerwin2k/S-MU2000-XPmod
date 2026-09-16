@@ -85,6 +85,15 @@ inline std::string path(u64 k)
 // **reset() の代わりに呼ぶ**（reset() したあとに呼んでも構わない）
 inline bool load(mu2000 &mu, u64 k)
 {
+	// USB の口を使うときは写しから始めない（issue #18）。
+	// 写しから始めると firmware が USB の受信を止める印（ワーク RAM の 0x43dad2）を
+	// 立ててしまい、以後 MIDI を 1 バイトも受け取らなくなる。写しの中身は
+	// 走り続けた機械と 1 ビットも違わないのに、戻した直後の百サンプルほどで
+	// 時計がずれ始めるところまでは掴めたが、まだ元を押さえていない。
+	// 起動が 0.3 → 0.8 秒に戻るだけなので、押さえるまではこちらで止める
+	if (mu.usb_host())
+		return false;
+
 	const std::string p = path(k);
 	if (p.empty())
 		return false;
@@ -138,6 +147,10 @@ inline bool refresh(const mu2000 &live)
 {
 	const std::vector<u8> &ram = live.nvram();
 	if (ram.empty() || !live.program_rom())
+		return false;
+
+	// USB の口のときは load が読まないので、作っても無駄（上の説明）
+	if (live.usb_host())
 		return false;
 
 	mu2000 fresh;
