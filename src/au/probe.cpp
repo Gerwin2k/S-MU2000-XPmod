@@ -534,53 +534,44 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				}
 				ts.mSampleTime += 256;
 			}
-			// The A/D INPUT bus: a host feeds it with a render callback, and two
-			// things about that are easy to get wrong in a way hosts notice.
+			// The A/D INPUT bus is **not offered** on the AU: ElementCount for the
+			// input scope is 0 and the input scope answers nothing, the way Apple's
+			// own aumu instruments behave. Two regressions to keep out:
 			//
-			// 1. the timestamp the render was given has to travel to the callback.
-			//    A host lines the input up with the block it is rendering by it,
-			//    and auval reports a unit that hands over 0 instead ("AU is not
-			//    passing time stamp correctly")
-			// 2. a callback that fails has to be reported out of AURender. A unit
-			//    that answers noErr hides the broken graph (auval: "Render Input
-			//    returned an error, but was not returned to the caller of AURender")
-			struct seen_t { AudioTimeStamp ts; UInt32 calls; } seen{};
-			AURenderCallbackStruct in_cb{};
-			in_cb.inputProcRefCon = &seen;
-			in_cb.inputProc = [](void *ref, AudioUnitRenderActionFlags *, const AudioTimeStamp *t,
-			                     UInt32, UInt32, AudioBufferList *) -> OSStatus {
-				auto *s = static_cast<seen_t *>(ref);
-				s->ts = *t;
-				s->calls++;
-				return noErr;
-			};
-			if (AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
-			                         0, &in_cb, sizeof(in_cb)) != noErr) {
-				std::printf("NG: 入力のコールバックを受けない\n");
+			// 1. a bus that is answerable but not counted. auval's real-time-safety
+			//    harness treats any input-scope answer as a bus to configure and
+			//    pull, while it builds its per-bus bookkeeping from the element
+			//    count -- with the count at 0 its own input callback dereferences a
+			//    record that was never made, and auvaltool dies mid render test
+			// 2. a counted bus. An out-of-process host (AUHostingService -- every
+			//    sandboxed host, GarageBand among them) then makes a node whose
+			//    input nobody connected, and every render comes back
+			//    kAudioUnitErr_NoConnection (-10876)
+			UInt32 inputs = 99;
+			UInt32 isize = sizeof(inputs);
+			if (AudioUnitGetProperty(u, kAudioUnitProperty_ElementCount,
+			                         kAudioUnitScope_Input, 0, &inputs, &isize) != noErr || inputs != 0) {
+				std::printf("NG: 入力の口の数が %u（0 でなくてはならない）\n", unsigned(inputs));
 				bad++;
-			} else {
-				ts.mSampleTime = 4096;
-				flags = 0;
-				AudioUnitRender(u, &flags, &ts, 0, 256, &bufs.list);
-				if (seen.calls != 1 || seen.ts.mSampleTime != 4096.0) {
-					std::printf("NG: 入力に渡った時刻が %g（%u 回呼ばれた）\n",
-					            double(seen.ts.mSampleTime), unsigned(seen.calls));
+			}
+			AudioStreamBasicDescription in_fmt{};
+			isize = sizeof(in_fmt);
+			if (AudioUnitGetPropertyInfo(u, kAudioUnitProperty_StreamFormat,
+			                             kAudioUnitScope_Input, 0, &isize, nullptr) == noErr) {
+				std::printf("NG: 入力スコープが形式に答えてしまう\n");
+				bad++;
+			}
+			AURenderCallbackStruct stray{};
+			stray.inputProcRefCon = nullptr;
+			stray.inputProc = [](void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *,
+			                     UInt32, UInt32, AudioBufferList *) -> OSStatus { return noErr; };
+			for (AudioUnitPropertyID id : { kAudioUnitProperty_SetRenderCallback,
+			                                kAudioUnitProperty_MakeConnection }) {
+				if (AudioUnitSetProperty(u, id, kAudioUnitScope_Input, 0,
+				                         &stray, sizeof(stray)) == noErr) {
+					std::printf("NG: 入力のない器が %u を受け入れてしまった\n", unsigned(id));
 					bad++;
 				}
-			}
-
-			// ...and the same callback, failing, must come back out of Render
-			in_cb.inputProc = [](void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *,
-			                     UInt32, UInt32, AudioBufferList *) -> OSStatus {
-				return kAudioUnitErr_InvalidParameter;
-			};
-			AudioUnitSetProperty(u, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
-			                     0, &in_cb, sizeof(in_cb));
-			flags = 0;
-			const OSStatus fail = AudioUnitRender(u, &flags, &ts, 0, 256, &bufs.list);
-			if (fail != kAudioUnitErr_InvalidParameter) {
-				std::printf("NG: 入力を渡せないとき Render が %d を返した\n", int(fail));
-				bad++;
 			}
 
 			AudioUnitUninitialize(u);
@@ -611,9 +602,9 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 			{ kAudioUnitProperty_SupportedNumChannels, kAudioUnitScope_Global },
 			{ kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output },
 			{ kAudioUnitProperty_ElementCount, kAudioUnitScope_Input },
-			// The input bus is the A/D INPUT, and this unit has one (the VST3 build
-			// has the same bus), so its format is answered rather than refused
-			{ kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input },
+			// The input scope answers nothing: no bus is offered, and auval's
+			// real-time harness turns any input-scope answer into a pull of a bus
+			// whose bookkeeping was never built (the render-test note has it all)
 		};
 		for (const prop_test &p : props) {
 			UInt32 size = 0;
@@ -660,69 +651,14 @@ int run_torture(AudioComponent comp, const std::string &bundle_path)
 				std::printf("NG: 入出力の本数を読めない\n");
 				bad++;
 			} else {
-				// The input bus is the A/D INPUT, so the host asks how big the
-				// property is and whether it may write it before ever setting it
-				UInt32 size = 0;
-				Boolean writable = false;
-				const OSStatus info = AudioUnitGetPropertyInfo(u, kAudioUnitProperty_StreamFormat,
-				                                               kAudioUnitScope_Input, 0,
-				                                               &size, &writable);
-				if (info != noErr || !writable || size < sizeof(AudioStreamBasicDescription)) {
-					std::printf("NG: 入力の形式を書けない（status %d、%u バイト、writable %d）\n",
-					            int(info), unsigned(size), int(writable));
+				// The matrix has to agree with the scopes: no input bus is offered,
+				// so the required-input count has to be 0. auval configures against
+				// this number; anything else and it wires an input the unit says it
+				// does not have (see the render-test note above)
+				if (chans[0].inChannels != 0 || chans[0].outChannels != 2) {
+					std::printf("NG: 本数の名乗りが [%d, %d]（[0, 2] でなくてはならない）\n",
+					            int(chans[0].inChannels), int(chans[0].outChannels));
 					bad++;
-				}
-				// ...and it has to answer with a format a host can take and
-				// change only the channel count of, which is what auval does
-				AudioStreamBasicDescription cur{};
-				size = sizeof(cur);
-				if (AudioUnitGetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input,
-				                         0, &cur, &size) != noErr) {
-					std::printf("NG: 入力の今の形式を読めない\n");
-					bad++;
-				} else {
-					AudioStreamBasicDescription want = cur;
-					want.mChannelsPerFrame = 2;       // what the advert promises
-					if (AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input,
-					                         0, &want, sizeof(want)) != noErr) {
-						std::printf("NG: 入力を 2 本にできない（%d 本と名乗っている）\n",
-						            int(chans[0].inChannels));
-						bad++;
-					}
-					want.mChannelsPerFrame = 1;       // and what it does not
-					if (AudioUnitSetProperty(u, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input,
-					                         0, &want, sizeof(want)) == noErr) {
-						std::printf("NG: 名乗っていない 1 本の入力を通してしまう\n");
-						bad++;
-					}
-				}
-
-				// The two properties a host uses to wire the input bus up. Both carry
-				// an AURenderCallbackStruct, and both have to be answerable *and*
-				// writable: a host asks GetPropertyInfo first and takes a unit that
-				// cannot answer as one it may not connect to at all
-				const AudioUnitPropertyID into[] = { kAudioUnitProperty_SetRenderCallback,
-				                                     kAudioUnitProperty_MakeConnection };
-				for (AudioUnitPropertyID id : into) {
-					UInt32 isize = 0;
-					Boolean iw = false;
-					if (AudioUnitGetPropertyInfo(u, id, kAudioUnitScope_Input, 0, &isize, &iw) != noErr ||
-					    !iw || isize < sizeof(AURenderCallbackStruct)) {
-						std::printf("NG: 入力の %u を書けない（%u バイト、writable %d）\n",
-						            unsigned(id), unsigned(isize), int(iw));
-						bad++;
-						continue;
-					}
-					// and setting it has to stick, so a host can read back what it
-					// connected
-					AURenderCallbackStruct cb{};
-					cb.inputProcRefCon = &cb;
-					cb.inputProc = [](void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *,
-					                  UInt32, UInt32, AudioBufferList *) -> OSStatus { return noErr; };
-					if (AudioUnitSetProperty(u, id, kAudioUnitScope_Input, 0, &cb, sizeof(cb)) != noErr) {
-						std::printf("NG: 入力の %u を設定できない\n", unsigned(id));
-						bad++;
-					}
 				}
 			}
 		}

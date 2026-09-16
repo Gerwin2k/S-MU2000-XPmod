@@ -28,6 +28,7 @@
 //   auval -v aumu SMU2 Trbh                                    (Apple's validator)
 
 #include "editor.h"
+#include "render_watch.h"
 #include "state.h"
 #include "vst3/engine.h"
 
@@ -36,6 +37,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -88,10 +90,21 @@ constexpr size_t kMidiReserveMsgs  = 512;
 // the engine's midi() is audio-thread-only (it touches the pre-boot queue). So
 // events are parked here and drained inside Render, which takes the lock with
 // try_lock: if it is busy they are simply picked up in the next block
+//
+// Short messages (everything but SysEx) are kept inline so the audio thread
+// never touches the allocator while draining: queue() may allocate on the
+// MIDI thread for SysEx only, Render only reads.
 struct msg
 {
 	UInt32 offset = 0;
-	std::vector<UInt8> bytes;
+	UInt32 seq = 0;          // arrival order, for a stable sort by offset
+	UInt8  n = 0;            // inline bytes used (0 when sysex holds the message)
+	UInt8  b[3] = {};
+	std::vector<UInt8> sysex;
+
+	const UInt8 *data() const { return n ? b : (sysex.empty() ? nullptr : sysex.data()); }
+	size_t size() const { return n ? n : sysex.size(); }
+	bool empty() const { return size() == 0; }
 };
 
 AudioStreamBasicDescription default_format()
@@ -130,6 +143,39 @@ struct au_instance
 	// ---- Settings
 	AudioStreamBasicDescription out_format{};
 	UInt32 max_frames = kMaxFramesDefault;
+
+	// What the host is doing: block size, format, MIDI offsets, late blocks.
+	// Silent while everything is in order; the summary comes out on Close.
+	// See au/render_watch.h for what is counted and why
+	smu2000::au::render_watch host_watch;
+
+	// The shape of a block, once, for the watch's first line
+	void note_layout(const AudioBufferList *io)
+	{
+		if (!io || io->mNumberBuffers == 0)
+			return;
+		UInt32 chans[smu2000::au::render_watch::kMaxBuffers] = {};
+		const UInt32 n =
+		    std::min<UInt32>(io->mNumberBuffers, smu2000::au::render_watch::kMaxBuffers);
+		for (UInt32 i = 0; i < n; i++)
+			chans[i] = io->mBuffers[i].mNumberChannels;
+		host_watch.note_layout(io->mNumberBuffers, chans, n,
+		                       io->mBuffers[0].mDataByteSize, io->mBuffers[0].mData);
+	}
+
+	// The end of every block that ran, whatever it produced
+	void watch_end(UInt32 frames, std::chrono::steady_clock::time_point t0)
+	{
+		host_watch.set_rate(out_format.mSampleRate);
+		host_watch.set_last_block(frames, max_frames);
+		host_watch.note_block(frames, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+		                                          std::chrono::steady_clock::now() - t0).count()));
+		char b[320];
+		if (host_watch.layout_line(b, sizeof(b)))
+			eng.log_line(b);
+		if (host_watch.report_line(b, sizeof(b)))
+			eng.log_line(b);
+	}
 	UInt32 render_quality = 0;
 	bool   initialized = false;
 	AudioUnitParameterValue gain = 1.0f;
@@ -146,6 +192,11 @@ struct au_instance
 	std::mutex midi_mutex;
 	std::vector<msg> midi_in;
 	std::vector<msg> midi_work;
+	UInt32 midi_seq = 0;
+	// Output-level ramp state. The target lives in gain (set from any thread);
+	// the audio thread walks gain_now toward it, as the VST3/CLAP builds do,
+	// so automation never steps mid-block.
+	float gain_now = 1.0f;
 
 	void notify_all(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element)
 	{
@@ -164,65 +215,9 @@ struct au_instance
 			std::memset(right, 0, size_t(n) * sizeof(float));
 			return;
 		}
-		// in_l / in_r carry this block of the A/D INPUT bus, if the host fed one
-		eng.fill(left, right, int(n), in_l.empty() ? nullptr : in_l.data(),
-		         in_r.empty() ? nullptr : in_r.data());
-	}
-
-	// ---- A/D INPUT
-	//
-	// The host feeds this with a callback on the input bus
-	// (kAudioUnitProperty_SetRenderCallback). One block is pulled here and handed
-	// to engine::fill(), which resamples it to the machine's rate the way the VST3
-	// build resamples its input bus. Left is AD1 and right is AD2
-	//
-	// The bus is answerable but not counted -- ElementCount for the input scope is
-	// 0. A host that counts buses therefore offers no input and the unit still
-	// renders under a sandboxed host, which is what an instrument has to do; the
-	// full explanation is on that case in prop_get
-	AURenderCallbackStruct in_cb{};
-	bool in_cb_set = false;
-	std::vector<float> in_l, in_r;
-
-	// Returns the host callback's status. A host that fails to hand over input
-	// expects to hear about it from AURender, so the error is passed up rather
-	// than swallowed; the block it did not fill is silenced so nothing stale is
-	// played in its place
-	OSStatus pull_input(UInt32 frames, const AudioTimeStamp *ts)
-	{
-		if (!in_cb_set || !in_cb.inputProc)
-			return noErr;
-		if (in_l.size() < frames) {
-			in_l.resize(frames);
-			in_r.resize(frames);
-		}
-		// AudioBufferList declares room for one buffer, so one more is added by
-		// hand: the unit's input is non-interleaved 32-bit float, which is what
-		// default_format() asks for and what a host rendering into it will have
-		struct { AudioBufferList list; AudioBuffer second; } bl{};
-		bl.list.mNumberBuffers = 2;
-		bl.list.mBuffers[0].mNumberChannels = 1;
-		bl.list.mBuffers[0].mDataByteSize = frames * sizeof(float);
-		bl.list.mBuffers[0].mData = in_l.data();
-		bl.second.mNumberChannels = 1;
-		bl.second.mDataByteSize = frames * sizeof(float);
-		bl.second.mData = in_r.data();
-		AudioUnitRenderActionFlags f = 0;
-		// The render's own timestamp travels with the pull: it says where in the
-		// stream this block sits, and a host handed 0 in its place sees the input
-		// arrive at the wrong time (auval: "AU is not passing time stamp correctly")
-		AudioTimeStamp at = ts ? *ts : AudioTimeStamp{};
-		if (!(at.mFlags & kAudioTimeStampSampleTimeValid)) {
-			at.mSampleTime = 0;
-			at.mFlags |= kAudioTimeStampSampleTimeValid;
-		}
-		const OSStatus rc = in_cb.inputProc(in_cb.inputProcRefCon, &f, &at, 0, frames, &bl.list);
-		if (rc != noErr) {
-			// No input this block: silence, rather than a stale one
-			std::fill(in_l.begin(), in_l.begin() + frames, 0.0f);
-			std::fill(in_r.begin(), in_r.begin() + frames, 0.0f);
-		}
-		return rc;
+		// No input bus is advertised (see the ElementCount note in prop_get), so
+		// there is nothing to hand the engine's input side
+		eng.fill(left, right, int(n), nullptr, nullptr);
 	}
 
 	// Take what has piled up. midi_work is cleared first every time, so a block
@@ -233,17 +228,53 @@ struct au_instance
 		std::unique_lock<std::mutex> lock(midi_mutex, std::try_to_lock);
 		if (lock.owns_lock() && !midi_in.empty())
 			midi_work.swap(midi_in);
+		if (midi_work.size() > 1)
+			std::sort(midi_work.begin(), midi_work.end(),
+			          [](const msg &a, const msg &b) {
+				          return a.offset != b.offset ? a.offset < b.offset : a.seq < b.seq;
+			          });
 	}
 
 	void queue(UInt32 offset, const UInt8 *bytes, size_t n)
 	{
 		std::lock_guard<std::mutex> lock(midi_mutex);
 		if (midi_in.size() >= kMidiReserveMsgs)
-			midi_in.erase(midi_in.begin());     // overflow: drop the oldest
+			midi_in.erase(midi_in.begin());
 		msg m;
 		m.offset = offset;
-		m.bytes.assign(bytes, bytes + n);
+		m.seq = midi_seq++;
+		if (n <= sizeof(m.b)) {
+			m.n = UInt8(n);
+			if (n)
+				std::memcpy(m.b, bytes, n);
+		} else {
+			m.n = 0;
+			m.sysex.assign(bytes, bytes + n);
+		}
 		midi_in.push_back(std::move(m));
+	}
+
+	// ---- The A/D INPUT bus
+	//
+	// Not advertised: ElementCount for the input scope is 0 (what lets an
+	// out-of-process host render the unit at all -- the full story is on the
+	// ElementCount case in prop_get), and the input scope answers nothing, the
+	// way Apple's own aumu instruments do not. The machine's A/D input lives on
+	// in the VST3/CLAP builds and in the standalone GUI's capture path
+
+	void apply_gain(float *left, float *right, UInt32 n)
+	{
+		const float target = gain;
+		if (gain_now == target && target == 1.0f)
+			return;
+		const float step = 1.0f / 512.0f;
+		for (UInt32 i = 0; i < n; i++) {
+			if (gain_now < target) gain_now = std::min(target, gain_now + step);
+			else if (gain_now > target) gain_now = std::max(target, gain_now - step);
+			left[i] *= gain_now;
+			if (right != left)
+				right[i] *= gain_now;
+		}
 	}
 };
 
@@ -262,6 +293,15 @@ OSStatus au_open(void *self, AudioComponentInstance instance)
 	au->instance = instance;
 	au->out_format = default_format();
 	au->eng.set_output_rate(smu2000::vst3::NATIVE_RATE);
+	{
+		char b[256];
+		std::snprintf(b, sizeof(b), "開いた: 既定 %g Hz %u ch %s、上限 %u フレーム",
+		              au->out_format.mSampleRate, unsigned(au->out_format.mChannelsPerFrame),
+		              (au->out_format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) ? "非交錯"
+		                                                                         : "交錯",
+		              unsigned(au->max_frames));
+		au->eng.log_line(b);
+	}
 
 	// Reserve up front so the queue never makes the audio thread allocate
 	au->midi_in.reserve(kMidiReserveMsgs);
@@ -278,6 +318,9 @@ OSStatus au_close(void *self)
 	if (!au)
 		return kAudio_ParamError;
 	au->eng.set_processing(false);
+	char b[320];
+	au->host_watch.summary_line(b, sizeof(b));
+	au->eng.log_line(b);
 	delete au;
 	return noErr;
 }
@@ -317,6 +360,7 @@ void tell_notifies(au_instance *au, UInt32 phase, AudioUnitRenderActionFlags *fl
 OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
                       const AudioTimeStamp *ts, UInt32 frames, AudioBufferList *io)
 {
+	const auto t0 = std::chrono::steady_clock::now();
 	if (!au->initialized) {
 		if (flags)
 			*flags |= kAudioUnitRenderAction_OutputIsSilence;
@@ -326,8 +370,22 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 		return noErr;
 	// A host is required to respect MaximumFramesPerSlice. Rather than quietly
 	// making less, refuse (auval fails a unit that answers noErr here)
-	if (frames > au->max_frames)
+	if (frames > au->max_frames) {
+		// A host asking for more than it promised is worth writing down: the
+		// block is refused and nothing is written, so the host plays whatever
+		// the buffer held -- which sounds like garbage rather than an error
+		au->note_layout(io);
+		au->host_watch.set_last_block(frames, au->max_frames);
+		au->host_watch.note_over_max(frames, au->max_frames);
+		au->host_watch.note_block(frames, 0);
+		char b[320];
+		if (au->host_watch.layout_line(b, sizeof(b)))
+			au->eng.log_line(b);
+		if (au->host_watch.report_line(b, sizeof(b)))
+			au->eng.log_line(b);
 		return kAudioUnitErr_TooManyFramesToProcess;
+	}
+	au->note_layout(io);
 
 	// Interleaved output (one buffer holding both channels) is made into two
 	// scratch buffers and written back. They cannot hold the whole block, so it
@@ -337,48 +395,45 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 	if (interleaved) {
 		tell_notifies(au, kAudioUnitRenderAction_PreRender, flags, ts, frames, io);
 		au->take_midi();
-		const OSStatus in_rc = au->pull_input(frames, ts);
-		if (in_rc != noErr) {
-			// The host could not produce its input: pass its error up (auval fails a
-			// unit that hides it) and hand back silence rather than a stale block
-			if (io->mBuffers[0].mData)
-				std::memset(io->mBuffers[0].mData, 0,
-				            size_t(frames) * ch0 * sizeof(float));
-			if (flags)
-				*flags |= kAudioUnitRenderAction_OutputIsSilence;
-			tell_notifies(au, kAudioUnitRenderAction_PostRender, nullptr, ts, frames, io);
-			return in_rc;
-		}
 
 		float l[256], r[256];
+		float lg[256], rg[256];
 		auto *dst = static_cast<float *>(io->mBuffers[0].mData);
 		UInt32 done = 0;
 		for (const msg &m : au->midi_work) {
+			au->host_watch.note_midi(m.offset, frames);
 			const UInt32 at = std::min<UInt32>(std::max<UInt32>(m.offset, done), frames);
 			while (done < at) {
 				const UInt32 n = std::min<UInt32>(256, at - done);
 				au->produce(l, r, n);
+				std::memcpy(lg, l, n * sizeof(float));
+				std::memcpy(rg, r, n * sizeof(float));
+				au->apply_gain(lg, rg, n);
 				for (UInt32 i = 0; i < n; i++) {
-					dst[(done + i) * ch0 + 0] = l[i] * au->gain;
-					dst[(done + i) * ch0 + 1] = r[i] * au->gain;
+					dst[(done + i) * ch0 + 0] = lg[i];
+					dst[(done + i) * ch0 + 1] = rg[i];
 				}
 				done += n;
 			}
-			if (!m.bytes.empty())
-				au->eng.midi(m.bytes.data(), m.bytes.size());
+			if (!m.empty())
+				au->eng.midi(m.data(), m.size());
 		}
 		while (done < frames) {
 			const UInt32 n = std::min<UInt32>(256, frames - done);
 			au->produce(l, r, n);
+			std::memcpy(lg, l, n * sizeof(float));
+			std::memcpy(rg, r, n * sizeof(float));
+			au->apply_gain(lg, rg, n);
 			for (UInt32 i = 0; i < n; i++) {
-				dst[(done + i) * ch0 + 0] = l[i] * au->gain;
-				dst[(done + i) * ch0 + 1] = r[i] * au->gain;
+				dst[(done + i) * ch0 + 0] = lg[i];
+				dst[(done + i) * ch0 + 1] = rg[i];
 			}
 			done += n;
 		}
 		if (flags)
 			*flags &= ~kAudioUnitRenderAction_OutputIsSilence;
 		tell_notifies(au, kAudioUnitRenderAction_PostRender, nullptr, ts, frames, io);
+		au->watch_end(frames, t0);
 		return noErr;
 	}
 
@@ -390,20 +445,8 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 	tell_notifies(au, kAudioUnitRenderAction_PreRender, flags, ts, frames, io);
 
 	// Take the MIDI the host sent. If the lock is busy it is picked up in the
-	// next block instead, and take this block of the A/D INPUT bus
+	// next block instead
 	au->take_midi();
-	const OSStatus in_rc = au->pull_input(frames, ts);
-	if (in_rc != noErr) {
-		// The host could not produce its input: pass its error up, and silence this
-		// block instead of playing whatever the buffers held
-		std::memset(left, 0, size_t(frames) * sizeof(float));
-		if (right != left)
-			std::memset(right, 0, size_t(frames) * sizeof(float));
-		if (flags)
-			*flags |= kAudioUnitRenderAction_OutputIsSilence;
-		tell_notifies(au, kAudioUnitRenderAction_PostRender, nullptr, ts, frames, io);
-		return in_rc;
-	}
 	if (au->midi_work.empty() && au->eng.state() != smu2000::vst3::status::ready) {
 		std::memset(left, 0, size_t(frames) * sizeof(float));
 		if (right != left)
@@ -411,40 +454,32 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 		if (flags)
 			*flags |= kAudioUnitRenderAction_OutputIsSilence;
 		tell_notifies(au, kAudioUnitRenderAction_PostRender, nullptr, ts, frames, io);
+		au->watch_end(frames, t0);
 		return noErr;
 	}
-
-	std::sort(au->midi_work.begin(), au->midi_work.end(),
-	          [](const msg &a, const msg &b) { return a.offset < b.offset; });
 
 	// In time order: make up to each event, inject it, carry on
 	UInt32 done = 0;
 	for (const msg &m : au->midi_work) {
+		au->host_watch.note_midi(m.offset, frames);
 		const UInt32 at = std::min<UInt32>(std::max<UInt32>(m.offset, done), frames);
 		if (at > done) {
 			au->produce(left + done, right + done, at - done);
 			done = at;
 		}
-		if (!m.bytes.empty())
-			au->eng.midi(m.bytes.data(), m.bytes.size());
+		if (!m.empty())
+			au->eng.midi(m.data(), m.size());
 	}
 	if (done < frames)
 		au->produce(left + done, right + done, frames - done);
 
-	// Output level. The engine's own gain is there for the panel's sake, so it is
-	// applied here as well, where the host can hear it
-	if (au->gain != 1.0f) {
-		for (UInt32 i = 0; i < frames; i++) {
-			left[i] *= au->gain;
-			if (right != left)
-				right[i] *= au->gain;
-		}
-	}
+	au->apply_gain(left, right, frames);
 
 	if (flags)
 		*flags &= ~kAudioUnitRenderAction_OutputIsSilence;
 
 	tell_notifies(au, kAudioUnitRenderAction_PostRender, nullptr, ts, frames, io);
+	au->watch_end(frames, t0);
 	return noErr;
 }
 
@@ -602,20 +637,13 @@ OSStatus prop_info(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope
 		out.writable = false;
 		return noErr;
 
-	// The host's way of feeding the A/D INPUT bus: it sets this, then this unit's
-	// own Render calls the procedure once per block (pull_input). Answering here
-	// matters for the same reason StreamFormat does -- a property that SetProperty
-	// accepts but GetPropertyInfo calls "no such property" is refused for real,
-	// and auval reports the unit as unconfigurable (kAudioUnitErr_InvalidProperty)
+	// No connections and no render callbacks are taken: there is no input bus
+	// (the ElementCount case in prop_get has the whole story), and auval checks
+	// both under its connection-semantics rules -- accepting them would promise
+	// an input that then does not exist
 	case kAudioUnitProperty_SetRenderCallback:
 	case kAudioUnitProperty_MakeConnection:
-		if (scope != kAudioUnitScope_Input)
-			return kAudioUnitErr_InvalidScope;
-		if (element != 0)
-			return kAudioUnitErr_InvalidElement;
-		out.size = sizeof(AURenderCallbackStruct);
-		out.writable = true;
-		return noErr;
+		return kAudioUnitErr_InvalidProperty;
 
 	case kAudioUnitProperty_ParameterList:
 		if (!want_global(scope, element, err))
@@ -654,24 +682,18 @@ OSStatus prop_info(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope
 	// One audio output. The global scope answers the same thing, as
 	// DLSMusicDevice does. **There is no stream format for the MIDI input.**
 	// Answering with a "MIDI stream" here makes auval treat it as the input
-	// format and fail the unit for being initialisable at 3 channels
+	// format and fail the unit for being initialisable at 3 channels.
+	//
+	// The audio input scope is refused outright: the A/D INPUT bus is not counted
+	// (ElementCount for the input scope is 0 -- the full story is on the
+	// ElementCount case in prop_get), and an input-scope answer combined with an
+	// un-counted bus is exactly what crashes auval's real-time-safety harness.
+	// It treats any input-scope StreamFormat answer as a bus to configure and
+	// pull, while it builds its per-bus bookkeeping from the element count -- so
+	// with the count at 0 its own input callback dereferences a record that was
+	// never made (SIGSEGV inside auvaltool, mid render test). Apple's own aumu
+	// instruments answer nothing on the input scope and pass the same test
 	case kAudioUnitProperty_StreamFormat:
-		// The input bus carries the A/D INPUT, at the host's rate like the output.
-		//
-		// **Answering noErr here is not enough.** The caller reads `writable` and
-		// `size` as well as the status, and a unit that says "that property is
-		// there" and then "not writable, size 0" is treated as one that cannot be
-		// configured at all: auval fails on it with "Cannot Set Input Num Channels:2
-		// when unit says it can" (kAudioUnitErr_PropertyNotWritable, -10865) and
-		// reports AU VALIDATION FAILED, after which most hosts refuse to instantiate
-		// the unit -- no audio and no editor, which is exactly what that looks like
-		if (scope == kAudioUnitScope_Input) {
-			if (element != 0)
-				return kAudioUnitErr_InvalidElement;
-			out.size = sizeof(AudioStreamBasicDescription);
-			out.writable = true;
-			return noErr;
-		}
 		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global)
 			return kAudioUnitErr_InvalidScope;
 		if (element != kOutputElement)
@@ -680,7 +702,29 @@ OSStatus prop_info(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope
 		out.writable = true;
 		return noErr;
 
-	// 2 in (the A/D INPUT bus) and 2 out
+	// Legacy sample-rate access. Unlike StreamFormat it carries no bus
+	// configuration semantics, so answering on the input scope is safe
+	// (the StreamFormat case must keep refusing there). Both scopes share
+	// the one rate: the A/D INPUT is resampled at the output rate by
+	// construction, so setting either one sets the unit
+	case kAudioUnitProperty_SampleRate:
+		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global &&
+		    scope != kAudioUnitScope_Input)
+			return kAudioUnitErr_InvalidScope;
+		if (element != kOutputElement)
+			return kAudioUnitErr_InvalidElement;
+		out.size = sizeof(Float64);
+		out.writable = true;
+		return noErr;
+
+	// 0 in and 2 out, as Apple's own aumu instruments answer (AUMIDISynth:
+	// [0, -16]).
+	//
+	// The first number is **required** channels, and it has to agree with what
+	// the scopes answer: the input bus is not counted (ElementCount for the
+	// input scope is 0 -- the full story is on the ElementCount case in
+	// prop_get) and the input scope answers nothing, so "2 in" here would have
+	// a host configure an input bus the unit says it does not have
 	case kAudioUnitProperty_SupportedNumChannels:
 		if (!want_global(scope, element, err))
 			return err;
@@ -840,33 +884,28 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 
 	case kAudioUnitProperty_ElementCount:
 		// aumu's rule: Global is 1 and there is one audio output bus, and **no
-		// input bus**. The A/D INPUT is still there and still works -- the input
-		// scope's format and render callback are answered below, and engine::fill
-		// resamples what the host feeds it -- but it is not *counted*, and that
-		// one number decides whether a sandboxed host can render this unit at all.
+		// input bus**. The A/D INPUT the machine samples from is not offered as an
+		// audio bus at all -- the input scope answers nothing and no connection is
+		// taken -- and that one number decides whether a sandboxed host can render
+		// this unit at all.
 		//
 		// A host that runs out of process (AUHostingService -- every sandboxed
 		// host, GarageBand among them) builds its graph from this count. An input
 		// bus makes for a graph node whose input nobody connected, and then every
 		// AudioUnitRender comes back kAudioUnitErr_NoConnection: no sound, and the
 		// machine never advances, so the panel sits on its power-on screen.
-		// Connecting a callback to that same bus makes the identical unit render
-		// (measured both ways), which is the whole difference. Advertising an
-		// input bus is a promise to be connected, and an instrument in GarageBand
-		// never is
+		// Advertising an input bus is a promise to be connected, and an instrument
+		// in GarageBand never is. The half-way house -- a bus that is answerable
+		// but not counted -- also fails: auval's real-time-safety harness treats
+		// any input-scope answer as a bus to pull, while it builds its per-bus
+		// bookkeeping from the element count, and crashes inside itself. The VST3
+		// and CLAP builds still advertise and feed the input bus; the standalone
+		// GUI captures A/D INPUT as it always did
 		if (*size < sizeof(UInt32))
 			return kAudioUnitErr_InvalidPropertyValue;
 		*static_cast<UInt32 *>(data) =
 		    (scope == kAudioUnitScope_Global || scope == kAudioUnitScope_Output) ? 1u : 0u;
 		*size = sizeof(UInt32);
-		return noErr;
-
-	case kAudioUnitProperty_SetRenderCallback:
-		// Read back so a host can check what it set (the input bus only)
-		if (scope != kAudioUnitScope_Input || element != 0 || *size < sizeof(AURenderCallbackStruct))
-			return kAudioUnitErr_InvalidProperty;
-		*static_cast<AURenderCallbackStruct *>(data) = au->in_cb;
-		*size = sizeof(AURenderCallbackStruct);
 		return noErr;
 
 	case kAudioUnitProperty_PresentPreset: {
@@ -924,27 +963,37 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 	case kAudioUnitProperty_StreamFormat: {
 		if (*size < sizeof(AudioStreamBasicDescription))
 			return kAudioUnitErr_InvalidPropertyValue;
-		// Input element 0 is the A/D INPUT bus. What it answers is the output's
-		// format: the engine resamples the input at the rate the host renders at,
-		// so the two are the same format by construction
-		if (scope == kAudioUnitScope_Input && element != 0)
+		// The output bus only. The input scope answers nothing (see the same case
+		// in prop_info), so prop_info has already refused it before we get here
+		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global)
+			return kAudioUnitErr_InvalidScope;
+		if (element != kOutputElement)
 			return kAudioUnitErr_InvalidElement;
 		*static_cast<AudioStreamBasicDescription *>(data) = au->out_format;
 		*size = sizeof(AudioStreamBasicDescription);
 		return noErr;
 	}
 
+	case kAudioUnitProperty_SampleRate: {
+		if (*size < sizeof(Float64))
+			return kAudioUnitErr_InvalidPropertyValue;
+		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global &&
+		    scope != kAudioUnitScope_Input)
+			return kAudioUnitErr_InvalidScope;
+		if (element != kOutputElement)
+			return kAudioUnitErr_InvalidElement;
+		*static_cast<Float64 *>(data) = au->out_format.mSampleRate;
+		*size = sizeof(Float64);
+		return noErr;
+	}
+
 	case kAudioUnitProperty_SupportedNumChannels: {
 		if (*size < sizeof(AUChannelInfo))
 			return kAudioUnitErr_InvalidPropertyValue;
-		// Two channels each way: the output, and the A/D INPUT the machine samples
-		// from (left is AD1 and right is AD2, as in the VST3 build). The input half
-		// stays described here even though ElementCount answers 0 for that scope:
-		// this is what a host sets its input format from when it does feed the bus,
-		// and it is the honest answer about the unit -- what it must not do is
-		// *count* a bus, which is the number an out-of-process host graphs from
+		// 0 in, 2 out: there is no counted input bus (the ElementCount case in
+		// prop_get has the whole story), matching Apple's own aumu instruments
 		auto *out = static_cast<AUChannelInfo *>(data);
-		out[0] = AUChannelInfo{ 2, 2 };
+		out[0] = AUChannelInfo{ 0, 2 };
 		*size = sizeof(AUChannelInfo);
 		return noErr;
 	}
@@ -963,15 +1012,6 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		break;
 	}
 	return kAudioUnitErr_InvalidProperty;
-}
-
-// Both routes into the A/D INPUT bus -- kAudioUnitProperty_SetRenderCallback and
-// the kAudioUnitProperty_MakeConnection a graph connection arrives as -- carry
-// the same AURenderCallbackStruct, so whichever a host uses lands in one place
-void au_set_input_cb(au_instance *au, const AURenderCallbackStruct &cb)
-{
-	au->in_cb = cb;
-	au->in_cb_set = cb.inputProc != nullptr;
 }
 
 OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
@@ -1036,15 +1076,23 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 			}
 		}
 		return noErr;
-	}
-
-	case kAudioUnitProperty_MaximumFramesPerSlice:
+	}	case kAudioUnitProperty_MaximumFramesPerSlice:
 		if (size < sizeof(UInt32))
 			return kAudioUnitErr_InvalidPropertyValue;
-		au->max_frames = *static_cast<const UInt32 *>(data);
-		// The host is waiting to hear about this. auval changes it and fails a
-		// unit that does not fire the notification
-		au->notify_all(kAudioUnitProperty_MaximumFramesPerSlice, scope, element);
+		{
+			const UInt32 was = au->max_frames;
+	au->max_frames = *static_cast<const UInt32 *>(data);
+			if (au->max_frames != was) {
+				// The block size a host promises to stay under. It is the number
+				// this AU refuses past, so a value smaller than the blocks the
+				// host then asks for is exactly the kind of thing worth seeing
+				char b[128];
+				std::snprintf(b, sizeof(b), "1 回の上限を %u フレームにされた（前は %u）",
+				              unsigned(au->max_frames), unsigned(was));
+				au->eng.log_line(b);
+			}
+		}
+	au->notify_all(kAudioUnitProperty_MaximumFramesPerSlice, scope, element);
 		return noErr;
 
 	case kAudioUnitProperty_RenderQuality:
@@ -1071,41 +1119,23 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		return noErr;
 	}
 
+	// No input bus, so no callbacks or connections are taken (see the same case
+	// in prop_info)
 	case kAudioUnitProperty_SetRenderCallback:
-		// The host's way of feeding the A/D INPUT bus. Kept as it stands: it is
-		// called from this unit's own Render, once per block (pull_input)
-		if (scope != kAudioUnitScope_Input || element != 0 || size < sizeof(AURenderCallbackStruct))
-			return kAudioUnitErr_InvalidProperty;
-		au_set_input_cb(au, *static_cast<const AURenderCallbackStruct *>(data));
-		return noErr;
-
-	// A connection from another node, which is also an AURenderCallbackStruct.
-	// Accepting it is what lets a host wire the AU into a graph at all -- auval
-	// checks this under "connection semantics" and fails the unit without it
 	case kAudioUnitProperty_MakeConnection:
-		if (scope != kAudioUnitScope_Input || element != 0 || size < sizeof(AURenderCallbackStruct))
-			return kAudioUnitErr_InvalidProperty;
-		au_set_input_cb(au, *static_cast<const AURenderCallbackStruct *>(data));
-		return noErr;
-
+		return kAudioUnitErr_InvalidProperty;
 
 	case kAudioUnitProperty_StreamFormat: {
 		if (size < sizeof(AudioStreamBasicDescription))
 			return kAudioUnitErr_InvalidPropertyValue;
 		const auto *f = static_cast<const AudioStreamBasicDescription *>(data);
 
-		// The input bus is only checked, not remembered: the engine resamples the
-		// input to the machine's rate using its output rate, which is the rate the
-		// host renders the unit at anyway (the same arrangement the VST3 uses)
-		if (scope == kAudioUnitScope_Input) {
-			if (element != 0)
-				return kAudioUnitErr_InvalidElement;
-			if (f->mFormatID != kAudioFormatLinearPCM ||
-			    (f->mFormatFlags & kAudioFormatFlagIsFloat) == 0 ||
-			    f->mBitsPerChannel != 32 || f->mChannelsPerFrame != 2)
-				return kAudioUnitErr_FormatNotSupported;
-			return noErr;
-		}
+		// The output bus only; the input scope answers nothing (the same case in
+		// prop_info), so prop_info has already refused it before we get here
+		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global)
+			return kAudioUnitErr_InvalidScope;
+		if (element != kOutputElement)
+			return kAudioUnitErr_InvalidElement;
 
 		// Double precision is refused: the engine is single precision throughout, so
 		// accepting it and pretending would corrupt the output. Exactly 2 channels
@@ -1119,6 +1149,43 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 
 		au->out_format = *f;
 		au->eng.set_output_rate(f->mSampleRate);
+		au->host_watch.set_rate(f->mSampleRate);
+		{
+			char b[256];
+			std::snprintf(b, sizeof(b),
+			              "描き出しの形式: %g Hz %u ch %u bit、flags 0x%x（%s）、1 パケット %u フレーム"
+			              "（scope %u / element %u）",
+			              f->mSampleRate, unsigned(f->mChannelsPerFrame), unsigned(f->mBitsPerChannel),
+			              unsigned(f->mFormatFlags),
+			              (f->mFormatFlags & kAudioFormatFlagIsNonInterleaved) ? "非交錯" : "交錯",
+			              unsigned(f->mFramesPerPacket), unsigned(scope), unsigned(element));
+			au->eng.log_line(b);
+		}
+		au->notify_all(kAudioUnitProperty_StreamFormat, scope, element);
+		return noErr;
+	}
+
+	case kAudioUnitProperty_SampleRate: {
+		if (size < sizeof(Float64))
+			return kAudioUnitErr_InvalidPropertyValue;
+		if (scope != kAudioUnitScope_Output && scope != kAudioUnitScope_Global &&
+		    scope != kAudioUnitScope_Input)
+			return kAudioUnitErr_InvalidScope;
+		if (element != kOutputElement)
+			return kAudioUnitErr_InvalidElement;
+		const Float64 rate = *static_cast<const Float64 *>(data);
+		if (!(rate > 0.0))
+			return kAudioUnitErr_InvalidPropertyValue;
+		au->out_format.mSampleRate = rate;
+		au->eng.set_output_rate(rate);
+		au->host_watch.set_rate(rate);
+		{
+			char b[128];
+			std::snprintf(b, sizeof(b), "標本化周波数を %g Hz にされた（scope %u / element %u）",
+			              rate, unsigned(scope), unsigned(element));
+			au->eng.log_line(b);
+		}
+		au->notify_all(kAudioUnitProperty_SampleRate, scope, element);
 		au->notify_all(kAudioUnitProperty_StreamFormat, scope, element);
 		return noErr;
 	}
@@ -1139,6 +1206,16 @@ OSStatus au_initialize(void *self)
 	if (!au)
 		return kAudio_ParamError;
 	au->initialized = true;
+	{
+		char b[256];
+		std::snprintf(b, sizeof(b),
+		              "初期化: %g Hz %u ch %s、上限 %u フレーム、入力の口 0 / 出力の口 1",
+		              au->out_format.mSampleRate, unsigned(au->out_format.mChannelsPerFrame),
+		              (au->out_format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) ? "非交錯"
+		                                                                         : "交錯",
+		              unsigned(au->max_frames));
+		au->eng.log_line(b);
+	}
 	return noErr;
 }
 

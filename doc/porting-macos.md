@@ -705,6 +705,33 @@ through a private read-only property (`kEngineProperty`, 64000, in the range
 Apple leaves to everyone else) instead, which travels the ordinary property
 dispatch in plugin.cpp and so arrives with the instance already resolved.
 
+One more thing the editor does for its host rather than for itself. A host that
+keeps a plug-in's window in a panel which never takes key focus (Waveform does)
+makes every click into it a "first mouse" click, and AppKit spends such a click
+activating the window instead of handing it to the view: the panel draws, the
+LCD animates, and no button ever fires. So the view answers `acceptsFirstMouse:`
+YES — the click is delivered *and* the window activates — and it asks for first
+responder where the window is finally known, in `viewDidMoveToWindow`, not in
+`attached()`, which runs before the host has put the view anywhere and therefore
+asks nil. Focus is only taken when the window itself owns it, so a host that
+keeps another control in the same window keeps it.
+
+Whether the events arrive at all is the part no host will tell you about, so the
+view writes the first eight clicks to the engine's log with the three answers
+that name the cases: whether the window was key, whether the click arrived on the
+main thread, and which view it hit (a host that puts something over the panel
+takes them all). A run with no such line at all is the other answer — the window
+never became key and the click never got that far.
+
+Waveform 14 is where this was measured, and what a healthy answer looks like:
+
+```
+クリック 1 回目: 窓 あり、key yes、主の糸 yes、当たった先 SMUPlugView
+```
+
+(the window took key focus, the click arrived on the main thread, and the view it
+hit is the panel — three lines and the panel was live again.)
+
 `aubprobe --torture` walks the host's path from C++ through the Objective-C
 runtime and checks that a view comes back with a live subview in it, and `auval`
 reports `VERIFYING CUSTOM UI / Cocoa Views Available: 1 / SMU2000AUViewFactory /
@@ -1029,25 +1056,25 @@ thing at a time:
 | `ElementCount(Input) = 0` (bus answerable, not counted) | renders, sounds | renders, sounds |
 | `ElementCount(Input) = 0`, `SupportedNumChannels` still `[2, 2]` | renders, sounds | renders, sounds |
 | Apple's `DLSMusicDevice` (`aumu`, no input bus) | renders, sounds | renders, sounds |
+| Apple's `AUMIDISynth` (`aumu`, answers `[0, -16]`) | renders, sounds | renders, sounds |
 
 Three things follow, and the third is the one that matters:
 
-- **`SupportedNumChannels` is not the trigger.** `[2, 2]` with the bus not
-  counted renders fine out of process, `[0, 2]` with the bus counted still
-  fails, and `auval` passes either way. Only the element count moves the needle.
+- **`SupportedNumChannels` is not the trigger — for the out-of-process
+  failure.** `[2, 2]` with the bus not counted renders fine out of process,
+  `[0, 2]` with the bus counted still fails. Only the element count moves that
+  needle. It does move another one: the real-time-safety harness below.
 - **An input bus is a promise to have it connected.** With one connected, the
   identical unit renders out of process — so nothing about the plugin's code is
   wrong, it is the declaration. An instrument in GarageBand never gets its input
   connected, so for the AU that promise can only be broken.
-- **The bus stays answerable, and is simply not counted.** `StreamFormat` and
-  `SetRenderCallback` on the input scope still work, `engine::fill` still
-  resamples what a host feeds it, and a host that sets the input up explicitly
-  (moving the format, adding the callback) still gets A/D INPUT. What a host no
-  longer sees is a bus in the enumeration — so GarageBand offers no input, which
-  is exactly the freedom it needs to render at all. The VST3 build has no such
-  constraint and continues to advertise its input bus; the standalone GUI
-  captures A/D INPUT as it always did. For the AU, a plug-in that runs beats an
-  input that is listed.
+- **The half-way house survives plain `auval` and dies in its real-time
+  harness.** With the bus answerable but not counted, plain `auval -v` passes
+  and GarageBand renders — but `auval -real-time-safety` crashes inside itself
+  (the next section). The AU now goes the whole way: the input scope answers
+  nothing, as Apple's own instruments do not. The VST3 and CLAP builds still
+  advertise and feed the input bus; the standalone GUI captures A/D INPUT as it
+  always did. For the AU, a plug-in that runs beats an input that is listed.
 
 Why it went unnoticed for a while is worth writing down: **`auval` and
 `aubprobe` both run in process.** They open the bundle with `CFBundle` and
@@ -1077,6 +1104,72 @@ the environment but not the working directory, so `S_MU2000_ROMS=roms` (relative
 cannot be resolved from there. The probe now makes that path absolute before it
 hands the work over, and waits for `Status` to reach 1 before playing, or it
 would be measuring the boot rather than the unit.
+
+#### The real-time-safety harness, and the third regression
+
+`auval` grew a deeper check than plain validation: `auval -real-time-safety`.
+It wires the unit the way a real host would, renders through a real-time
+thread, and watches every call the unit makes for allocation, locks and
+file traffic (via dtrace). Against the half-way house above it did not report
+a failure — it **died**:
+
+```
+auval -real-time-safety -v aumu SMU2 Trbh
+  ...
+  Render Test at 512 frames
+  (auvaltool exits with SIGSEGV)
+```
+
+The crash report lands in `~/Library/Logs/DiagnosticReports/auvaltool-*.ips`
+with the faulting frame inside auvaltool itself, one call below this AU's
+`Render`. What it is doing there, read off the disassembly and confirmed under
+lldb: the harness keeps a record per input bus, **built from the unit's input
+element count** — which this unit answers 0, on purpose, for GarageBand. But it
+also checks the input scope's `StreamFormat`, and any unit that answers it gets
+its input callback wired and pulled. The half-way house answers, so the harness
+pulled bus 0 of a record list that was never built: a null dereference inside
+auvaltool, on every machine, reproducibly — with plain `auval -v` passing the
+same build in the same minute.
+
+Plain `auval -v` does not do this: its render tests read the channel matrix,
+see `[0, 2]` or `[2, 2]`, configure inputs accordingly, and never touch the
+input scope of a unit that claims no inputs. The RTS harness is the stricter
+of the two, and it is the one Logic's scan and GarageBand's out-of-process
+host behave like.
+
+The fix is to stop answering the input scope at all — which is also what
+Apple's own instruments do. `AUMIDISynth` (`aumu msyn appl`) answers
+`[0, -16]` on `SupportedNumChannels`, refuses `StreamFormat` on the input
+scope, prints no `Input Format:` line in auval's render tests, and passes
+`-real-time-safety` cleanly. DLSMusicDevice behaves the same. The AU now:
+
+- answers `SupportedNumChannels` as `[0, 2]` (0 required inputs — an `aumu`
+  has no MIDI-driven need for audio in — and 2 out),
+- refuses `StreamFormat`, `SetRenderCallback` and `MakeConnection` on the
+  input scope with `kAudioUnitErr_InvalidProperty`,
+- keeps `ElementCount(Input) = 0`, so the GarageBand fix is untouched,
+- and has no pull path in its render loop at all: `engine::fill` gets null
+  input buffers, which is what the standalone engine does without a host
+  feeding it.
+
+After the change:
+
+```
+auval -v aumu SMU2 Trbh                 → AU VALIDATION SUCCEEDED
+auval -real-time-safety -v aumu SMU2 Trbh → AU VALIDATION SUCCEEDED
+S_MU2000_ROMS=roms build/aubprobe ... --torture → 悪いところ 0 件
+```
+
+`aubprobe --torture` grew checks for each piece of this: the input element
+count is 0, the input scope answers nothing, `SetRenderCallback` and
+`MakeConnection` are refused there, and the channel matrix is `[0, 2]`. Put
+any input-scope answer back and the probe reports it. What was **lost** with
+the input bus: a host can no longer feed A/D INPUT through the AU. That
+capability lives on in the VST3 and CLAP builds and in the standalone GUI's
+capture path; on the AU the choice was an input nobody can render with or a
+plug-in hosts refuse to load.
+
+One more thing the check needed before it told the truth: the service inherits
 
 `auval` only ever looks at `~/Library/Audio/Plug-Ins/Components`, so a fresh
 `build/S-MU2000.component` means nothing to it: `make install-au` first, or the

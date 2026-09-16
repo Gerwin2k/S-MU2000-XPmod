@@ -17,8 +17,10 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -409,6 +411,18 @@ void engine::build_table()
 	}
 }
 
+bool engine::wait_ready(double seconds)
+{
+	const auto limit = std::chrono::nanoseconds(int64_t(seconds * 1e9));
+	const auto t0 = std::chrono::steady_clock::now();
+	while (state() == status::loading) {
+		if (std::chrono::steady_clock::now() - t0 > limit)
+			return false;
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+	}
+	return state() == status::ready;
+}
+
 void engine::set_output_rate(double rate)
 {
 	// 変換器の入れ物を作り直すので、音声スレッドと重ならないようにする
@@ -523,6 +537,28 @@ void engine::push_input(const float *in_l, const float *in_r, int n)
 	}
 }
 
+// Holds what pump_out() hands over. On overflow the oldest byte goes
+void engine::tx_push(uint8_t v)
+{
+	const int next = (m_tx_w + 1) & TX_MASK;
+	if (next == m_tx_r)
+		m_tx_r = (m_tx_r + 1) & TX_MASK;
+	m_tx[m_tx_w] = v;
+	m_tx_w = next;
+}
+
+size_t engine::midi_out(uint8_t *dst, size_t max)
+{
+	if (!dst || !max)
+		return 0;
+	size_t n = 0;
+	while (n < max && m_tx_r != m_tx_w) {
+		dst[n++] = m_tx[m_tx_r];
+		m_tx_r = (m_tx_r + 1) & TX_MASK;
+	}
+	return n;
+}
+
 void engine::fill(float *left, float *right, int n, const float *in_l, const float *in_r)
 {
 	if (n <= 0)
@@ -553,7 +589,7 @@ void engine::fill(float *left, float *right, int n, const float *in_l, const flo
 	if (m_direct) {
 		for (int i = 0; i < n; i++)
 			one_sample(left[i], right[i]);
-		m_drv.pump_out(*m_mu, m_bridge);
+		m_drv.pump_out(*m_mu, m_bridge, [this](u8 v) { tx_push(v); });
 		m_drv.publish(*m_mu, m_bridge, u32(n), u32(NATIVE_RATE), true, nullptr);
 		return;
 	}
@@ -590,7 +626,7 @@ void engine::fill(float *left, float *right, int n, const float *in_l, const flo
 	}
 
 	// firmware が MIDI OUT から送り出したもの（画面の問い合わせの返事）
-	m_drv.pump_out(*m_mu, m_bridge);
+	m_drv.pump_out(*m_mu, m_bridge, [this](u8 v) { tx_push(v); });
 	m_drv.publish(*m_mu, m_bridge, u32(n), u32(NATIVE_RATE), true, nullptr);
 
 	// 桁が落ちる前に原点を戻す。RING の倍数だけずらせば環の並びは変わらない

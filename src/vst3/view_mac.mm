@@ -16,6 +16,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 
 using namespace Steinberg;
@@ -77,6 +78,7 @@ using smu2000::vst3::PLUG_KEY_NONE;
 	plug_view *_owner;
 @private
 	NSTimer *_timer;
+	int _clicks;
 }
 - (instancetype)initWithOwner:(plug_view *)owner width:(int)w height:(int)h;
 - (void)tick:(NSTimer *)timer;
@@ -101,6 +103,17 @@ using smu2000::vst3::PLUG_KEY_NONE;
 - (BOOL)isFlipped { return YES; }
 - (BOOL)acceptsFirstResponder { return YES; }
 
+// A host that keeps a plug-in's editor in a panel which does not take key focus
+// (Waveform does) makes every click into it a "first mouse" click, and AppKit
+// hands that click to the window to activate rather than to the view -- so the
+// panel draws and animates but no button ever fires. Saying yes here is what
+// lets the click through as well as activating the window
+- (BOOL)acceptsFirstMouse:(NSEvent *)event
+{
+	(void)event;
+	return YES;
+}
+
 - (void)drawRect:(NSRect)dirty
 {
 	(void)dirty;
@@ -124,7 +137,15 @@ using smu2000::vst3::PLUG_KEY_NONE;
 - (void)viewDidMoveToWindow
 {
 	[super viewDidMoveToWindow];
-	if ([self window]) {
+	NSWindow *win = [self window];
+	// The key notification is observed per window, and the window is only known
+	// here: a plug-in view is built before the host has put it anywhere, so
+	// asking for [self window] while attaching answers nil -- and nil there means
+	// "every window", which is not the question being asked
+	[[NSNotificationCenter defaultCenter] removeObserver:self
+	                                                name:NSWindowDidResignKeyNotification
+	                                              object:nil];
+	if (win) {
 		if (!_timer) {
 			_timer = [NSTimer timerWithTimeInterval:1.0 / 30.0
 			                                 target:self
@@ -133,18 +154,71 @@ using smu2000::vst3::PLUG_KEY_NONE;
 			                                repeats:YES];
 			[[NSRunLoop currentRunLoop] addTimer:_timer forMode:NSRunLoopCommonModes];
 		}
+		[[NSNotificationCenter defaultCenter] addObserver:self
+		                                         selector:@selector(resignKeyWindow:)
+		                                             name:NSWindowDidResignKeyNotification
+		                                           object:win];
+
+		// Keyboard focus is asked for here and not in attached(), because this is
+		// the first moment the window is known: a view is built before the host
+		// has put it anywhere, so asking [self window] there answers nil and the
+		// ask goes nowhere. Only when the window itself owns the focus -- a host
+		// that keeps another control in the same window keeps it
+		id first = [win firstResponder];
+		if (!first || first == win)
+			[win makeFirstResponder:self];
 	} else {
 		[_timer invalidate];
 		_timer = nil;
 	}
 }
 
+// Window notifications arrive as a message to the observer, and the selector is
+// named above. **NSView has no -resignKeyWindow** (NSWindow does), so without
+// this the notification would send an unrecognised selector and take the host
+// down with it the first time the editor window lost focus
+- (void)resignKeyWindow:(NSNotification *)note
+{
+	(void)note;
+	if (_owner)
+		_owner->focus_lost();
+}
+
 // ---- mouse
+
+// What a host did with a click is not visible from outside the view: the panel
+// draws and animates either way, so "it is on screen, updating, and answering
+// nothing" can only be told apart by writing down what arrived. The first few
+// clicks go to the log with the three answers that name the cases:
+//
+//   key no       the window never takes key focus, so AppKit spends the click
+//                activating it and the view is never asked -- this is the one
+//                -acceptsFirstMouse fixes, and the one that leaves no line here
+//                at all when the host is stubborn
+//   main no      the click came in on a thread that must not touch views
+//   hit other    something the host put on top took the click first
+- (void)noteClick:(NSEvent *)event
+{
+	if (!_owner || _clicks >= 8)
+		return;
+	_clicks++;
+
+	NSWindow *win = [self window];
+	NSView *hit = win ? [[win contentView] hitTest:[event locationInWindow]] : nil;
+	char b[200];
+	std::snprintf(b, sizeof(b), "クリック %d 回目: 窓 %s、key %s、主の糸 %s、当たった先 %s",
+	              _clicks, win ? "あり" : "なし",
+	              (win && [win isKeyWindow]) ? "yes" : "no",
+	              [NSThread isMainThread] ? "yes" : "no",
+	              hit ? NSStringFromClass([hit class]).UTF8String : "なし");
+	_owner->log_line(b);
+}
 
 - (void)mouseDown:(NSEvent *)event
 {
 	if (!_owner)
 		return;
+	[self noteClick:event];
 	NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
 	_owner->mouse_down((int)p.x, (int)p.y);
 	[self setNeedsDisplay:YES];
@@ -223,6 +297,7 @@ using smu2000::vst3::PLUG_KEY_NONE;
 {
 	if (!_owner)
 		return;
+	[self noteClick:event];
 	NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
 	_owner->mouse_right((int)p.x, (int)p.y);
 }
@@ -379,13 +454,15 @@ bool mac_window::attach(void *parent, int w, int h)
 	// things around us
 	[host addSubview:m_view];
 	[m_view setFrame:NSMakeRect(0, 0, w, h)];
-	[[m_view window] makeFirstResponder:m_view];
+	// First responder is asked for from viewDidMoveToWindow: the window is not
+	// known here yet (this runs before the host has shown the view), and asking
+	// then answers nil. Waiting until the view is somewhere can tell a host's own
+	// window from ours, which is what keeps the editor from pulling the keyboard
+	// away from whatever the host holds focus with
 
-	// Losing key focus must not leave a panel button held down
-	[[NSNotificationCenter defaultCenter] addObserver:m_view
-	                                         selector:@selector(resignKeyWindow:)
-	                                             name:NSWindowDidResignKeyNotification
-	                                           object:[m_view window]];
+	// Losing key focus must not leave a panel button held down. The observer is
+	// registered by the view itself in viewDidMoveToWindow, which is where the
+	// window it belongs to is known
 	return true;
 }
 

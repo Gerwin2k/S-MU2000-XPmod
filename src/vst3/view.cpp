@@ -312,6 +312,10 @@ void plug_view::key(int code, bool down)
 
 void plug_view::focus_lost() { m_engine.panel().release_all(); }
 
+// The window has no logger of its own, and what it wants to record is about the
+// host rather than the panel -- see the click note in view_mac.mm
+void plug_view::log_line(const char *text) { m_engine.log_line(text); }
+
 
 // ---- SmartMedia (the card slot)
 
