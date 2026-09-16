@@ -424,18 +424,6 @@ void engine::build_table()
 	}
 }
 
-bool engine::wait_ready(double seconds)
-{
-	const auto limit = std::chrono::nanoseconds(int64_t(seconds * 1e9));
-	const auto t0 = std::chrono::steady_clock::now();
-	while (state() == status::loading) {
-		if (std::chrono::steady_clock::now() - t0 > limit)
-			return false;
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
-	}
-	return state() == status::ready;
-}
-
 void engine::set_output_rate(double rate)
 {
 	// 変換器の入れ物を作り直すので、音声スレッドと重ならないようにする

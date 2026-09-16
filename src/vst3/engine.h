@@ -71,13 +71,6 @@ public:
 	bool wait_ready(int ms);
 
 	status state() const { return m_state.load(std::memory_order_acquire); }
-	// Wait until boot finishes (or fails). True when ready.
-	// Never call from the audio thread. Call while preparing resources
-	// (AUv3 allocateRenderResources and the like). Starting to render
-	// without waiting returns silence until boot ends while incoming MIDI
-	// only piles up. On hosts running faster than realtime that silence
-	// becomes a dozen silent seconds at the head of the song
-	bool wait_ready(double seconds);
 	// state() が failed のときの理由。ready でも「代用品を使った」等が入る
 	std::string message() const;
 

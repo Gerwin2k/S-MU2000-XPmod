@@ -253,7 +253,7 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 	// 待たずに始めると、起動が終わるまで無音を返し続け、その間の MIDI は溜まるだけになる。
 	// 実時間より速く回すホストでは、その無音が曲の頭の十数秒ぶんに化けて、そこにあった音符も失われる。
 	// 写しがあれば数ミリ秒で戻ってくる。起動しなかった（ROM が無いなど）ときも器は作る
-	(void)_engine->wait_ready(120.0);
+	(void)_engine->wait_ready(120 * 1000);
 
 	_engine->set_processing(true);
 	return YES;
