@@ -613,12 +613,10 @@ void swp30_device::streaming_block::read_8(memory_access<25, 2, -2, ENDIANNESS_L
 	scale_and_clamp(val0, val1, val2, val3);
 }
 
-void swp30_device::streaming_block::dpcm_step(u8 input)
+// S-MU2000: mode・scale・limit は m_address から決まり、展開の輪の中では変わらない。
+// 呼ぶ側（read_8c）が輪の外で 1 回だけ作って渡す。中身の計算は変えていない
+void swp30_device::streaming_block::dpcm_step(u8 input, u32 mode, u32 scale, s32 limit)
 {
-	u32 mode = (m_address >> 25) & 3;
-	u32 scale = (m_address >> 27) & 7;
-	s32 limit = max_value[scale];
-
 	m_dpcm_s0 = m_dpcm_s1;
 	m_dpcm_s1 = m_dpcm_s2;
 	m_dpcm_s2 = m_dpcm_s3;
@@ -681,12 +679,15 @@ void swp30_device::streaming_block::read_8c(memory_access<25, 2, -2, ENDIANNESS_
 		val3 = m_dpcm_s3;
 		return;
 	} else {
+		const u32 mode  = (m_address >> 25) & 3;
+		const u32 scale = (m_address >> 27) & 7;
+		const s32 limit = max_value[scale];
 		s32 spos =  m_dpcm_pos;
 		base_address += spos >> 2;
 		u32 cv = wave.read_dword(base_address);
 		while(spos != m_pos + 4) {
 			u8 input = cv >> ((spos & 3) << 3);
-			dpcm_step(input);
+			dpcm_step(input, mode, scale, limit);
 			spos++;
 			if((spos & 3) == 0) {
 				base_address ++;

@@ -145,7 +145,7 @@ private:
 		void read_8(memory_access<25, 2, -2, ENDIANNESS_LITTLE>::cache &wave, s16 &val0, s16 &val1, s16 &val2, s16 &val3);
 		void read_8c(memory_access<25, 2, -2, ENDIANNESS_LITTLE>::cache &wave, s16 &val0, s16 &val1, s16 &val2, s16 &val3);
 
-		void dpcm_step(u8 input);
+		void dpcm_step(u8 input, u32 mode, u32 scale, s32 limit);
 		void update_loop_size();
 		void scale_and_clamp_one(s16 &val, u32 scale, s32 limit);
 		void scale_and_clamp(s16 &val0, s16 &val1, s16 &val2, s16 &val3);
