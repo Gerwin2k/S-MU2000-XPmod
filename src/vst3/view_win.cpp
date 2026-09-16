@@ -17,6 +17,7 @@
 #include "ui/part_shapes.h"
 #include "ui/pc_editor.h"
 #include "ui/overview.h"
+#include "ui/pc_host.h"
 #include "ui/pc_window.h"
 #include "ui/text.h"
 
@@ -266,20 +267,8 @@ void win_window::open_pc(ui::pc_window &w)
 // パネルを描き直すのと同じ周期で呼ばれる。見えていない窓は何もしない
 void win_window::pc_frame(::xg::model &m, const ::ui::xg_snapshot &ram, ::ui::bridge &br)
 {
-	m_list.frame(m, ram, br);
-	m_editor.frame(m, ram, br);
-	m_fx.frame(m, ram, br);
-	m_shapes.frame(m, ram, br);
-	m_master.frame(m, ram, br);
-	// 一覧でインサーションの欄をダブルクリックされたら設定の窓を、
-	// VIB・FILTER・EG・EQ の絵をダブルクリックされたらパートの音色の窓を、
-	// マスターの行（MASTER の名前、MASTER EQ）をダブルクリックされたらマスターの窓を出す
-	if (ui::xgui::take_fx_request())
-		open_pc(m_fx);
-	if (ui::xgui::take_part_request())
-		open_pc(m_shapes);
-	if (ui::xgui::take_master_request())
-		open_pc(m_master);
+	ui::pc_frame_all(m_list, m_editor, m_fx, m_shapes, m_master, m, ram, br,
+	                 [this](ui::pc_window &w) { open_pc(w); });
 }
 
 LRESULT win_window::handle(HWND h, UINT msg, WPARAM wp, LPARAM lp)

@@ -16,9 +16,11 @@
 #import <Cocoa/Cocoa.h>
 
 #include "ui/fx_editor.h"
+#include "ui/master_editor.h"
 #include "ui/overview.h"
 #include "ui/part_shapes.h"
 #include "ui/pc_editor.h"
+#include "ui/pc_host.h"
 #include "ui/pc_window_mac.h"
 #include "ui/xg_ui.h"
 
@@ -389,12 +391,13 @@ public:
 private:
 	plug_view &m_owner;
 	SMUPlugView *m_view = nil;
-	// The PC windows gui.exe shows (overview, editor, insertion, part voice).
-	// Same content as on Windows; only the hosting window differs
+	// The PC windows gui.exe shows (overview, editor, insertion, part voice,
+	// master). Same content as on Windows; only the hosting window differs
 	ui::pc_window m_list{ std::make_unique<ui::overview>() };
 	ui::pc_window m_editor{ std::make_unique<ui::pc_editor>() };
 	ui::pc_window m_fx{ std::make_unique<ui::fx_editor>() };
 	ui::pc_window m_shapes{ std::make_unique<ui::part_shapes>() };
+	ui::pc_window m_master{ std::make_unique<ui::master_editor>() };
 };
 
 // Objective-C lives at global scope (see the note on SMUPlugView above);
@@ -578,6 +581,7 @@ void mac_window::detach()
 	m_editor.hide();
 	m_fx.hide();
 	m_shapes.hide();
+	m_master.hide();
 	if (m_view) {
 		[[NSNotificationCenter defaultCenter] removeObserver:m_view];
 		[m_view removeFromSuperview];
@@ -602,16 +606,8 @@ void mac_window::open_pc(ui::pc_window &w)
 // Driven at the panel's repaint rate. Hidden windows cost nothing
 void mac_window::pc_frame(::xg::model &m, const ::ui::xg_snapshot &ram, ::ui::bridge &br)
 {
-	m_list.frame(m, ram, br);
-	m_editor.frame(m, ram, br);
-	m_fx.frame(m, ram, br);
-	m_shapes.frame(m, ram, br);
-	// A double-click on an insertion row in the overview asks for the
-	// settings window; on a VIB/FILTER/EG/EQ cell for the part voice window
-	if (ui::xgui::take_fx_request())
-		open_pc(m_fx);
-	if (ui::xgui::take_part_request())
-		open_pc(m_shapes);
+	ui::pc_frame_all(m_list, m_editor, m_fx, m_shapes, m_master, m, ram, br,
+	                 [this](ui::pc_window &w) { open_pc(w); });
 }
 
 

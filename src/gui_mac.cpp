@@ -46,6 +46,7 @@
 #include "ui/master_editor.h"
 #include "ui/part_shapes.h"
 #include "ui/pc_editor.h"
+#include "ui/pc_host.h"
 #include "ui/pc_window_mac.h"
 #include "ui/player.h"
 #include "ui/png.h"
@@ -325,20 +326,8 @@ public:
 		if (out && out->produced())
 			br.set_cpu(float(out->cpu_percent()));
 		// the PC editor windows, where the Windows side has its WM_TIMER
-		pc.frame(panel.xg(), panel.ram(), br);
-		list.frame(panel.xg(), panel.ram(), br);
-		fx.frame(panel.xg(), panel.ram(), br);
-		shapes.frame(panel.xg(), panel.ram(), br);
-		master.frame(panel.xg(), panel.ram(), br);
-		// a double-click on an insertion row in the overview asks for this window
-		if (ui::xgui::take_fx_request())
-			open_editor_window(fx);
-		// a double-click on a VIB/FILTER/EG/EQ cell in the overview asks for the part voice
-		if (ui::xgui::take_part_request())
-			open_editor_window(shapes);
-		// a double-click on the MASTER name or the MASTER EQ cell asks for the master window
-		if (ui::xgui::take_master_request())
-			open_editor_window(master);
+		ui::pc_frame_all(list, pc, fx, shapes, master, panel.xg(), panel.ram(), br,
+		                 [&](ui::pc_window &w) { open_editor_window(w); });
 		card_tick();
 		report_drops();
 
@@ -1388,11 +1377,7 @@ int main(int argc, char **argv)
 	// tell the editor windows we are closing (unmute the overview, restore its
 	// receive channels, ...). The audio thread drains what we sent, so pause
 	// a moment before stopping it
-	gui.list.shutdown(br);
-	gui.pc.shutdown(br);
-	gui.fx.shutdown(br);
-	gui.shapes.shutdown(br);
-	gui.master.shutdown(br);
+	ui::pc_shutdown_all(gui.list, gui.pc, gui.fx, gui.shapes, gui.master, br);
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
 	out.stop();
