@@ -450,7 +450,7 @@ void mu2000::build_bus()
 		d.r16 = [this, &dev, base](offs_t a) {
 			const u16 v = dev.read16((a - base) >> 1);
 			if (m_swp_trace && m_swp_trace_reads)
-				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x\n", base, (a - base) >> 1, v, m_cpu->pc());
+				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x  t=%.6f\n", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
 			return v;
 		};
 		// 幅の内訳を数える。MAME は 16bit ハンドラに mem_mask を渡せるが
@@ -471,10 +471,10 @@ void mu2000::build_bus()
 			m_swp_w32++;
 			const offs_t reg = (a - base) >> 1;
 			if (m_swp_trace) {
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
-				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc());
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
-				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc());
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
+				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
+				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
 			}
 			dev.write16(reg, u16(v >> 16));
 			dev.write16(reg + 1, u16(v));
@@ -483,8 +483,8 @@ void mu2000::build_bus()
 		d.w16 = [this, &dev, base, hold](offs_t a, u16 v) {
 			m_swp_w16++;
 			if (m_swp_trace)
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x\n",
-				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc());
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
+				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
 			dev.write16((a - base) >> 1, v);
 			hold((a - base) >> 1);
 		};
