@@ -90,9 +90,12 @@ namespace smu2000 { namespace vst3 { class mac_window; } }
 @private
 	NSTimer *_timer;
 	int _clicks;
+	int _moves;
+	int _ticks;
 }
 - (instancetype)initWithOwner:(plug_view *)owner width:(int)w height:(int)h;
 - (void)tick:(NSTimer *)timer;
+- (void)ensureTimer;
 - (int)plugKeyForEvent:(NSEvent *)event;
 @end
 
@@ -130,6 +133,13 @@ namespace smu2000 { namespace vst3 { class mac_window; } }
 	(void)dirty;
 	if (!_owner)
 		return;
+	// The timer normally starts in viewDidMoveToWindow, but some hosts move
+	// the view around in ways that leave it windowless there and never move
+	// it again: with no timer the panel paints once and freezes. Drawing
+	// always runs on the main thread with a window in place, so a missing
+	// timer is remade here instead of staying missing
+	if (!_timer && [self window])
+		[self ensureTimer];
 	CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
 	if (!ctx)
 		return;
@@ -142,7 +152,25 @@ namespace smu2000 { namespace vst3 { class mac_window; } }
 - (void)tick:(NSTimer *)timer
 {
 	(void)timer;
+	if (_ticks < 3) {
+		_ticks++;
+		if (_owner && _ticks == 1)
+			_owner->log_line("panel timer: first tick");
+	}
 	[self setNeedsDisplay:YES];
+}
+
+// Start the repaint timer unless one already runs. Safe to call twice
+- (void)ensureTimer
+{
+	if (_timer)
+		return;
+	_timer = [NSTimer timerWithTimeInterval:1.0 / 30.0
+	                                 target:self
+	                               selector:@selector(tick:)
+	                               userInfo:nil
+	                                repeats:YES];
+	[[NSRunLoop currentRunLoop] addTimer:_timer forMode:NSRunLoopCommonModes];
 }
 
 - (void)viewDidMoveToWindow
@@ -157,14 +185,16 @@ namespace smu2000 { namespace vst3 { class mac_window; } }
 	                                                name:NSWindowDidResignKeyNotification
 	                                              object:nil];
 	if (win) {
-		if (!_timer) {
-			_timer = [NSTimer timerWithTimeInterval:1.0 / 30.0
-			                                 target:self
-			                               selector:@selector(tick:)
-			                               userInfo:nil
-			                                repeats:YES];
-			[[NSRunLoop currentRunLoop] addTimer:_timer forMode:NSRunLoopCommonModes];
+		if (_moves < 4) {
+			_moves++;
+			if (_owner) {
+				char b[96];
+				std::snprintf(b, sizeof(b), "panel timer: moved to window (%s timer)",
+				              _timer ? "keeping" : "starting");
+				_owner->log_line(b);
+			}
 		}
+		[self ensureTimer];
 		[[NSNotificationCenter defaultCenter] addObserver:self
 		                                         selector:@selector(resignKeyWindow:)
 		                                             name:NSWindowDidResignKeyNotification
@@ -179,6 +209,11 @@ namespace smu2000 { namespace vst3 { class mac_window; } }
 		if (!first || first == win)
 			[win makeFirstResponder:self];
 	} else {
+		if (_moves < 4) {
+			_moves++;
+			if (_owner)
+				_owner->log_line("panel timer: moved out of window (timer stopped)");
+		}
 		[_timer invalidate];
 		_timer = nil;
 	}
