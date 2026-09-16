@@ -87,6 +87,10 @@ public:
 	// （音源の中の鍵の状態はきれいに取り出せないので、入口で数える）
 	void watch(u8 b, int port)
 	{
+		// 口 C・D はパート 33-64 に届くが、写し（xg_snapshot）はまだ 32 パート
+		// ぶんしか無い。数えても置き場が無いので見送る
+		if (port >= 2)
+			return;
 		port = port ? 1 : 0;
 		if (b >= 0xf8)
 			return;                           // リアルタイム

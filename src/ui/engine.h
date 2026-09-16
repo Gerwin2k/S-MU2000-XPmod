@@ -43,7 +43,9 @@ struct engine {
 	mu2000 mu;
 	bridge   &br;
 	midi_in  &midi;        // MIDI IN A（パート 1-16）
-	midi_in  *midi_b = nullptr;   // MIDI IN B（パート 17-32）
+	// B-D。B は実機の 2 つめの DIN、C・D は USB だけの口（パート 33-64）。
+	// [0] は使わない（midi が A）
+	midi_in  *midi_p[mu2000::MIDI_PORTS] = {};
 	midi_out *mout = nullptr;     // MIDI THRU A（A で受けたものを外へ）
 	midi_out *mout_b = nullptr;   // MIDI THRU B（B で受けたものを外へ）
 	// MIDI OUT。MU2000 が自分で送り出すもの（XG のダンプ要求への返事など）。
@@ -165,12 +167,16 @@ struct engine {
 		// THRU も口ごとに分ける。A で受けたものは MIDI OUT A、
 		// B で受けたものは MIDI OUT B へ。混ぜると、外に繋いだ音源で
 		// パートの割り振りが崩れる
-		if (midi_b)
-			while (midi_b->pop(b)) {
-				mu.midi_in(b, 1);
-				drv.watch(b, 1);
-				if (mout_b && guard_b.pass(b)) mout_b->send(b);
+		// C・D は実機では USB だけの口で、外へ出す THRU の端子も無い
+		for (int p = 1; p < mu2000::MIDI_PORTS; p++) {
+			if (!midi_p[p])
+				continue;
+			while (midi_p[p]->pop(b)) {
+				mu.midi_in(b, p);
+				drv.watch(b, p);
+				if (p == 1 && mout_b && guard_b.pass(b)) mout_b->send(b);
 			}
+		}
 
 		const float g = br.gain();
 

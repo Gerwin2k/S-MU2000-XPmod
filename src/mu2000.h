@@ -170,6 +170,13 @@ public:
 	// 状態の保存には入れない（読み戻したときは空から始まる）
 	bool midi_out_take(u8 &v)
 	{
+		// USB を使っているときは、firmware は返事も USB 側へ出す（DIN の
+		// MIDI OUT は黙る）。呼ぶ側から見た「音源が出したもの」は同じなので、
+		// ここで拾い分ける
+		if (m_usb_host) {
+			int port;
+			return usb_out_take(v, port);
+		}
 		if (m_tx_r == m_tx_w)
 			return false;
 		v = m_tx_buf[m_tx_r];

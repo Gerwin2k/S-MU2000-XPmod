@@ -78,7 +78,11 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	const std::string dir = argv[1];
-	const bool verbose = argc > 2 && !std::strcmp(argv[2], "-v");
+	bool verbose = false, usb_host = false;
+	for (int i = 2; i < argc; i++) {
+		if (!std::strcmp(argv[i], "-v"))    verbose = true;
+		if (!std::strcmp(argv[i], "--usb")) usb_host = true;
+	}
 
 	rig g;
 	if (!g.mu.load_program(dir + "/mu2000_flash.bin") || !g.mu.load_wave(dir + "/dump")) {
@@ -86,10 +90,17 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	g.mu.load_sintab(dir + "/standin/sin-table.bin");
+	g.mu.set_usb_host(usb_host);
 	g.mu.reset();                                // NVRAM は使わない。毎回工場出荷状態
 	s32 l, r;
 	for (; g.samples < 30 * RATE && !g.mu.midi_ready(); g.samples++)
 		g.mu.run_sample(l, r);
+	std::printf("起動 %.2f 秒で SCI 受信 %s（USB モード %s）\n",
+	            double(g.samples) / RATE, g.mu.midi_ready() ? "有効" : "無効",
+	            usb_host ? "入" : "切");
+	if (usb_host)                       // USB のときは DIN を使わないので待たない
+		for (; g.samples < 10 * RATE; g.samples++)
+			g.mu.run_sample(l, r);
 	g.pump(500);
 
 	int checked = 0, bad = 0;

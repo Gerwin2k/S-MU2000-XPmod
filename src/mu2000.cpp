@@ -18,6 +18,9 @@ namespace {
 // MIDI は 31250bps。28MHz の CPU から見て 1 ビット = 896 サイクル
 constexpr u64 MIDI_BIT_CYCLES = 28000000 / 31250;
 
+// USB は実機で 19,500 byte/s 出た（doc/dump/usb.md）。1 バイトぶんのサイクル数
+constexpr u64 USB_BYTE_CYCLES = 28000000 / 19500;
+
 bool read_file(const std::string &path, std::vector<u8> &out, size_t expect)
 {
 	std::FILE *f = std::fopen(path.c_str(), "rb");
@@ -822,20 +825,22 @@ void mu2000::usb_step(u64 now)
 		return;
 
 	// 受信。1 バイト渡すごとに IRQ3（ベクタ 67）を上げる。
-	// 実機の USB も、間隔だけ見れば DIN と大差なかった（doc/upstream.md の実測）ので
-	// 同じ 10 ビット分を空ける
+	// 間隔は実機で測った USB の実効帯域 19,500 byte/s に合わせる
+	// （doc/dump/usb.md の実測）。DIN の 3,125 byte/s より 6 倍速いが、
+	// 発音の間隔は firmware 側が頭打ちなので実測とは食い違わない。
+	// 4 つの口が 1 本の流れを分け合うので、遅くすると互いに待たせてしまう
 	if (!u.have && !u.rx.empty() && now >= u.next) {
 		u.cur  = u.rx.front();
 		u.have = true;
 		u.rx.pop_front();
-		u.next = now + (m_fast_midi ? 0 : MIDI_BIT_CYCLES * 10);
+		u.next = now + (m_fast_midi ? 0 : USB_BYTE_CYCLES);
 		m_cpu->execute_set_input(3, 1);
 	}
 
 	// 送信。firmware は IRQ2（ベクタ 66）が来るたびに 1 バイト出す。
 	// 上げないとリングが埋まり、0x437A0 の空き待ちで固まる（実機でやらかした）
 	if (now >= u.tx_next) {
-		u.tx_next = now + MIDI_BIT_CYCLES * 10;
+		u.tx_next = now + USB_BYTE_CYCLES;
 		m_cpu->execute_set_input(2, 1);
 	}
 }
