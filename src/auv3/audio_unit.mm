@@ -167,6 +167,36 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 
 } // namespace
 
+// Fixed stereo in and out. A native v3 bus.format has no validation hook
+// like the v2's set-time refusal, so the subclass holds the line instead:
+// anything but stereo is silently kept at stereo (the v2 answers an error
+// there; here there is no error channel, and the read-back shows stereo)
+// Fixed stereo in and out. The v2 unit refuses odd formats when they are
+// set; the native v3 equivalent is this setter (with an error channel) plus
+// the unit's channelCapabilities below. Anything but 32-bit float stereo
+// is refused, exactly like the v2's StreamFormat check
+@interface SMUStereoBus : AUAudioUnitBus
+@end
+
+@implementation SMUStereoBus
+
+- (BOOL)setFormat:(AVAudioFormat *)format error:(NSError **)outError
+{
+	// 32-bit float stereo, interleaved or not -- the v2's StreamFormat
+	// check, translated. Anything else is refused like there
+	if (!format || format.commonFormat != AVAudioPCMFormatFloat32 ||
+	    format.channelCount != 2) {
+		if (outError)
+			*outError = [NSError errorWithDomain:NSOSStatusErrorDomain
+			                                code:kAudioUnitErr_FormatNotSupported
+			                            userInfo:nil];
+		return NO;
+	}
+	return [super setFormat:format error:outError];
+}
+
+@end
+
 @implementation SMU2000AudioUnitV3 {
 	std::unique_ptr<smu2000::plug::engine> _engine;
 	std::unique_ptr<scratch>               _scratch;
@@ -187,13 +217,13 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 	AVAudioFormat *fmt = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100.0
 	                                                                   channels:2];
 
-	_outputBus = [[AUAudioUnitBus alloc] initWithFormat:fmt error:nil];
+	_outputBus = [[SMUStereoBus alloc] initWithFormat:fmt error:nil];
 	_outputBus.maximumChannelCount = 2;
 	_outputBus.name = @"Main Out";
 
 	// A/D INPUT。実機の背面の入力。サンプリングと A/D の系統に入る。
 	// 繋がなくても鳴るので、ホストが何も寄越さなければ無音として扱う
-	_inputBus = [[AUAudioUnitBus alloc] initWithFormat:fmt error:nil];
+	_inputBus = [[SMUStereoBus alloc] initWithFormat:fmt error:nil];
 	_inputBus.maximumChannelCount = 2;
 	_inputBus.name = @"A/D Input";
 
@@ -228,6 +258,14 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 - (AUAudioUnitBusArray *)inputBusses  { return _inputBusArray; }
 - (AUAudioUnitBusArray *)outputBusses { return _outputBusArray; }
 
+// Fixed 2-in/2-out, which auval learns here (bridged to the v2
+// SupportedNumChannels the AUv2 answers). Anything else never gets set,
+// so allocate only ever sees pairs this unit renders
+- (NSArray<NSNumber *> *)channelCapabilities
+{
+	return @[@2, @2];
+}
+
 // 実機の MIDI OUT。1 本
 - (NSArray<NSString *> *)MIDIOutputNames { return @[@"MIDI Out"]; }
 
@@ -261,6 +299,10 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 			                            userInfo:nil];
 		return NO;
 	}
+
+	// Channel counts need no check here: anything but stereo never gets
+	// set (SMUStereoBus refuses it), so allocate only ever sees pairs
+	// this unit renders
 
 	_engine->set_output_rate(_outputBus.format.sampleRate);
 	_scratch->allocate(self.maximumFramesToRender);
