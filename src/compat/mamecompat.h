@@ -96,6 +96,14 @@ extern u64        g_pc_cycles;     // 追跡に添えるサイクル数
 extern std::FILE *g_upd_trace;     // 周辺を進めた時刻と次の予定
 void pc_hash(u32 pc, u64 regs);        // 畳み込みだけ。安い
 void pc_trace(u32 pc, const char *regs);
+
+// どの番地で回っているかを数える（SMU2000_PCPROF=<出す件数> で入る）。
+// JIT のブロックに入るたびに 1 つ数えるので、詰まっている輪がすぐ分かる。
+// 追跡と違って JIT を止めないので、速さを測りながら使える
+extern u32 *g_pc_prof;                 // 0x40 ごとの数え上げ。ROM 4MB ぶん
+extern u64 g_pc_prof_why[5];           // 0 遅延枠 / 1 割り込みの印 / 2 番地が外 / 3 ブロックに入った / 4 進んだ命令数
+void pc_prof_start();                  // 環境変数を見て用意する。無ければ何もしない
+void pc_prof_report();                 // 多い順に出す
 }
 
 // MAME の logerror は書式を自前で組み立てるので %s に std::string を渡せる。

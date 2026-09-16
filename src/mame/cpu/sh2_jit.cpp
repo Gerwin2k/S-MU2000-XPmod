@@ -205,11 +205,17 @@ bool sh2_device::jit_run()
 {
 	// 割り込みの印が外（周辺）で立っているときは、解釈実行で 1 命令進めて確かめさせる。
 	// ブロックの中では、周辺に触らない命令のあとで印を見ないので
-	if (m_sh2_state->m_delay || m_test_irq || smu2000::g_pc_trace || smu2000::g_pc_hash)
+	if (m_sh2_state->m_delay || m_test_irq || smu2000::g_pc_trace || smu2000::g_pc_hash) {
+		if (smu2000::g_pc_prof)
+			smu2000::g_pc_prof_why[m_sh2_state->m_delay ? 0 : 1]++;
 		return false;
+	}
 	const u32 pc = m_sh2_state->pc;
-	if (pc >= jit::ROM_END - 0x100 || (pc & 1))
+	if (pc >= jit::ROM_END - 0x100 || (pc & 1)) {
+		if (smu2000::g_pc_prof)
+			smu2000::g_pc_prof_why[2]++;
 		return false;
+	}
 	if (!m_jit)
 		m_jit.reset(new jit);
 	jit::code_t code = *m_jit->slot(pc);
@@ -220,8 +226,15 @@ bool sh2_device::jit_run()
 			return false;
 		*m_jit->slot(pc) = code;
 	}
+	if (smu2000::g_pc_prof) {
+		smu2000::g_pc_prof[(pc & 0x3fffff) >> 6]++;
+		smu2000::g_pc_prof_why[3]++;
+	}
 	m_jit->entry = code;
+	const int before = m_sh2_state->icount;
 	m_jit->enter(this, m_sh2_state, m_program->hot_rom(), m_program->hot_ram());
+	if (smu2000::g_pc_prof)
+		smu2000::g_pc_prof_why[4] += u64(before - m_sh2_state->icount);
 	return true;
 }
 
