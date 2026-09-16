@@ -9,6 +9,9 @@
 #
 # MSYS2 / MinGW-w64 の g++ を想定している。
 # C++20 が要る（sh.cpp が std::rotl / std::rotr を使う）。
+#
+#   make CROSS=windows   macOS から Windows 用 exe / VST3 を作る
+#                 (mingw-w64 が要る: brew install mingw-w64)
 
 # 音を作るのは重いので最適化を上げる。-O2 より 6% 速い
 CXXFLAGS ?= -std=c++20 -O3 -Wall -Wno-unused-variable -Wno-unused-but-set-variable
@@ -19,8 +22,17 @@ CXXFLAGS ?= -std=c++20 -O3 -Wall -Wno-unused-variable -Wno-unused-but-set-variab
 # compiler, and macOS.
 #   Windows ... OS holds Windows_NT
 #   macOS   ... uname -s answers Darwin
+#
+# Cross-compile the Windows binaries on macOS with mingw-w64:
+#   brew install mingw-w64
+#   make CROSS=windows
+# Objects go to build-windows/ so native and cross builds never mix.
+# CXX/PYTHON/BUILD can still be overridden (e.g. CXX=x86_64-w64-mingw32-g++-posix).
 PLATFORM := unknown
-ifeq ($(OS),Windows_NT)
+ifneq (,$(filter windows win win64 mingw mingw64,$(CROSS)))
+PLATFORM := windows
+CROSS_WINDOWS := 1
+else ifeq ($(OS),Windows_NT)
 PLATFORM := windows
 else ifeq ($(shell uname -s),Darwin)
 PLATFORM := macos
@@ -31,9 +43,34 @@ CXX := x86_64-w64-mingw32-g++
 endif
 endif
 
+ifdef CROSS_WINDOWS
+ifdef UNIVERSAL
+$(error CROSS=windows and UNIVERSAL=1 do not mix)
+endif
+ifdef ARCH
+$(error CROSS=windows and ARCH=$(ARCH) do not mix -- the target is always x86_64 Windows)
+endif
+ifdef MARCH
+$(error CROSS=windows and MARCH=$(MARCH) do not mix -- -march=native would probe the Mac CPU, not the Windows target)
+endif
+# Windows binaries do not run on macOS. The run targets (check, probe, test)
+# pass this through, so `make CROSS=windows check WINE=wine` works where Wine
+# exists; otherwise they stop with a message instead of an Exec format error
+WINE ?=
+endif
+
 ifeq ($(PLATFORM),windows)
+ifdef CROSS_WINDOWS
+# `CXX ?= ...` would keep make's built-in c++ (same reason as the clang++
+# swap below), so swap it only while it is still the default
+ifeq ($(origin CXX),default)
+CXX      := x86_64-w64-mingw32-g++
+endif
+PYTHON   ?= python3
+else
 CXX      ?= g++
 PYTHON   ?= python
+endif
 # MSYS2 の DLL に依存させない。動的リンクのままだと、MSYS2 の環境の外
 # （素の PowerShell など）では起動に失敗して何も言わずに終わる
 LDFLAGS  ?= -static -static-libgcc -static-libstdc++
@@ -98,7 +135,9 @@ CXXFLAGS += -MMD -MP
 # message about which architecture the .o files were. Passing BUILD=... still
 # overrides, and a plain `make` still uses build/
 ifeq ($(origin BUILD),undefined)
-ifdef UNIVERSAL
+ifdef CROSS_WINDOWS
+BUILD := build-windows
+else ifdef UNIVERSAL
 BUILD := build-universal
 else ifdef ARCH
 BUILD := build-$(ARCH)
@@ -286,6 +325,11 @@ $(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS) $(PC_OBJS)
 VST3_INSTALL ?= $(PROGRAMFILES)/Common Files/VST3
 
 install-vst3: $(VST3_BIN)
+ifdef CROSS_WINDOWS
+ifeq ($(PROGRAMFILES),)
+	$(error CROSS=windows: there is no Program Files here -- pass VST3_INSTALL=<dir> to copy the bundle somewhere you can pick it up from)
+endif
+endif
 	rm -rf "$(VST3_INSTALL)/S-MU2000.vst3"
 	cp -r $(VST3_DIR) "$(VST3_INSTALL)/"
 	@echo "入れた: $(VST3_INSTALL)/S-MU2000.vst3"
@@ -296,7 +340,11 @@ $(BUILD)/vst3probe$(EXE): $(BUILD)/vst3obj/src/vst3/probe.o $(BUILD)/vst3obj/src
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lole32
 
 probe: $(BUILD)/vst3probe$(EXE) $(VST3_BIN)
+ifdef CROSS_WINDOWS
+	$(if $(WINE),$(WINE) $(BUILD)/vst3probe$(EXE) $(VST3_BIN),$(error CROSS=windows: the probe is a Windows binary -- pass WINE=wine or copy build-windows/ to Windows))
+else
 	$(BUILD)/vst3probe$(EXE) $(VST3_BIN)
+endif
 
 # ---- CLAP プラグイン
 #
