@@ -1002,6 +1002,10 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 					for (size_t d : done) a.patch(d);
 					a.shl32(RAX, 7);
 				} else {
+					// NOTE: Windows x64 専用 (RCX/RDX)。SysV (macOS/Linux の x86-64)
+					// では引数は RDI/RSI のため、sin 表が無く helper を呼ぶと落ちる
+					// (Rosetta で exit 139 を確認。SEED=RSI/K_MAX=RDI も SysV では
+					// helper に壊される)。直すなら sh2_jit.cpp の sysv 対応と同じ形に。
 					a.mov64(RCX, MS);
 					a.imm32(RDX, o.lfo);
 					a.call_abs(reinterpret_cast<void *>(&meg_jit::call_lfo));
