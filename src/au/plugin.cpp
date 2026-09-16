@@ -1442,6 +1442,12 @@ OSStatus au_initialize(void *self)
 		              unsigned(au->max_frames));
 		au->eng.log_line(b);
 	}
+	// Wait out the boot here. Initialize runs on the main thread where time
+	// may be taken, and without waiting the host starts playing into a
+	// booting unit: the MIDI piles up and comes out as one lump, collapsing
+	// the head of the song (same fix as upstream issue #19 for VST3/CLAP)
+	if (!au->eng.wait_ready(30000))
+		au->eng.log_line("起動が終わらないまま演奏に入る");
 	return noErr;
 }
 
