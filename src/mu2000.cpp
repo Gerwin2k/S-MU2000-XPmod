@@ -839,8 +839,17 @@ void mu2000::usb_step(u64 now)
 		u.have = true;
 		u.rx.pop_front();
 		u.next = now + (m_fast_midi ? 0 : USB_BYTE_CYCLES);
-		m_cpu->execute_set_input(3, 1);
 	}
+	// 送信の線を一度下ろす。下で上げ直すので、山は 1 標本ぶんになる
+	m_cpu->execute_set_input(2, 0);
+	// **読まれるまで上げておく**。実機の M37640 は「受信あり」を線で示しているので、
+	// firmware が受け取りを止めている間に来たバイトも、止めるのをやめた時点で必ず拾われる。
+	// 渡した瞬間に 1 回だけ上げる形にしていたため、firmware が受信を詰まらせて
+	// IRQ3 の優先度を 0 に落としている隙に渡すと、優先度を戻しても二度と上がらず、
+	// 以後 MIDI を 1 バイトも受け取らなくなっていた（USB の口へ 1 秒に 2 万バイト近い
+	// 設定データを流すと起きる。X で報告された testxg.mid）
+	if (u.have)
+		m_cpu->execute_set_input(3, 1);
 
 	// 送信。firmware は IRQ2（ベクタ 66）が来るたびに 1 バイト出す。
 	// 上げないとリングが埋まり、0x437A0 の空き待ちで固まる（実機でやらかした）
@@ -855,7 +864,10 @@ u8 mu2000::usb_r(offs_t a)
 	usb_line &u = m_usb;
 	if (a & 1)
 		return u.have ? 0x01 : 0x00;   // bit0 = 受信あり、bit6 = コマンド（使わない）
+	// 受け取られたのでその場で線を下ろす。次の標本まで待つと、その隙に
+	// 割り込みがもう一度入って同じバイトを二度読まれてしまう
 	u.have = false;
+	m_cpu->execute_set_input(3, 0);
 	return u.cur;
 }
 
