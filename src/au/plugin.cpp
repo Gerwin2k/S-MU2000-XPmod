@@ -193,6 +193,19 @@ struct au_instance
 	std::vector<msg> midi_in;
 	std::vector<msg> midi_work;
 	UInt32 midi_seq = 0;
+	// Sounded channels (16 bits for MIDI IN A). On stop, all-sound-off +
+	// all-notes-off goes only there. Blasting every channel costs 61ms of
+	// 31250bps serial, delaying whatever comes next (issue #15)
+	std::atomic<UInt16> sounded{0};
+
+	// Hush only the channels that sounded. Nothing to send when none did
+	void hush()
+	{
+		uint16_t mask[mu2000::MIDI_PORTS] = {};
+		mask[0] = sounded.exchange(0);
+		if (mask[0])
+			eng.all_notes_off(mask, mu2000::MIDI_PORTS);
+	}
 	// Output-level ramp state. The target lives in gain (set from any thread);
 	// the audio thread walks gain_now toward it, as the VST3/CLAP builds do,
 	// so automation never steps mid-block.
@@ -326,6 +339,9 @@ struct au_instance
 			m.n = UInt8(n);
 			if (n)
 				std::memcpy(m.b, bytes, n);
+			// Remember the sounded channel. Stop hushing goes only there
+			if (m.n >= 3 && (m.b[0] & 0xf0) == 0x90 && m.b[2])
+				sounded.fetch_or(UInt16(1u << (m.b[0] & 15)), std::memory_order_relaxed);
 		} else {
 			m.n = 0;
 			m.sysex.assign(bytes, bytes + n);
@@ -1251,7 +1267,7 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		if (size < sizeof(AUPreset))
 			return kAudioUnitErr_InvalidPropertyValue;
 		param_set(au, kParamGain, 1.0f);
-		au->eng.all_notes_off();
+		au->hush();
 		return noErr;
 
 	case kAudioUnitProperty_ParameterValueFromString: {
@@ -1611,7 +1627,7 @@ OSStatus au_reset(void *self, AudioUnitScope scope, AudioUnitElement element)
 		return kAudio_ParamError;
 	(void)scope;
 	(void)element;
-	au->eng.all_notes_off();
+	au->hush();
 	return noErr;
 }
 

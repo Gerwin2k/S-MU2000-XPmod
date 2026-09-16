@@ -31,6 +31,7 @@
 #include "vst3/engine.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -47,6 +48,9 @@ struct scratch {
 	uint8_t            in_abl_mem[sizeof(AudioBufferList) + sizeof(AudioBuffer)] = {};
 	std::vector<uint8_t> tx;
 	ui::midi_split split;
+	// Sounded channels, 16 bits per port. Stop hushing goes only there:
+	// every channel would cost 61ms of 31250bps serial per port (issue #15)
+	std::atomic<UInt16> sounded[PORTS] = {};
 	// UMP の SysEx7 を組み立てる途中。1 メッセージぶん溜まったら engine へ
 	std::vector<uint8_t> ump_sysex;
 	// 出力レベル。目標は engine の panel が持ち、ここは 1 サンプルずつ寄せる途中の値
@@ -99,6 +103,9 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 				const uint8_t d2 = uint8_t(w0 & 0xff);
 				const uint8_t msg[3] = { st, d1, d2 };
 				const int cmd = st & 0xf0;
+				// Remember the sounded channel. Stop hushing goes only there
+				if (cmd == 0x90 && d2)
+					sc->sounded[port].fetch_or(UInt16(1u << (st & 0xf)), std::memory_order_relaxed);
 				eng->midi(msg, size_t(cmd == 0xc0 || cmd == 0xd0 ? 2 : 3), port);
 				at += 1;
 			} else if (type == 0x1 && at + 1 <= pk->wordCount) {
@@ -336,8 +343,12 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 				    e->head.eventType == AURenderEventMIDISysEx) {
 					const AUMIDIEvent *m = &e->MIDI;
 					const int port = (m->cable < PORTS) ? int(m->cable) : 0;
-					if (m->length)
+					if (m->length) {
+						if (m->length >= 3 && (m->data[0] & 0xf0) == 0x90 && m->data[2])
+							sc->sounded[port].fetch_or(UInt16(1u << (m->data[0] & 0xf)),
+							                           std::memory_order_relaxed);
 						eng->midi(m->data, m->length, port);
+					}
 				} else if (e->head.eventType == AURenderEventMIDIEventList) {
 					feed_ump(eng, sc, e->MIDIEventsList);
 				}
@@ -455,11 +466,21 @@ static NSString *const kStateKey = @"S-MU2000.nvram";
 	return s;
 }
 
-// 鳴らしっぱなしを消す（ホストが止めたとき）
+// Silence whatever is still ringing (host stopped us). Only the channels
+// that sounded get all-sound-off + all-notes-off; see the note on scratch::sounded
 - (void)reset
 {
 	if (_engine) {
-		_engine->all_notes_off();
+		if (_scratch) {
+			uint16_t mask[mu2000::MIDI_PORTS] = {};
+			bool any = false;
+			for (int p = 0; p < PORTS; p++) {
+				mask[p] = _scratch->sounded[p].exchange(0);
+				any = any || mask[p];
+			}
+			if (any)
+				_engine->all_notes_off(mask, mu2000::MIDI_PORTS);
+		}
 		_engine->flush_resampler();
 	}
 	if (_scratch) {
