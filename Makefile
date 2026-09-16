@@ -45,6 +45,13 @@ EXE      := .exe
 # ビット一致させる。x86-64 では既に既定なので実質 no-op、arm64 には当てない。
 ifneq (,$(filter i386 i486 i586 i686,$(firstword $(subst -, ,$(shell $(CXX) -dumpmachine 2>/dev/null)))))
 CXXFLAGS += -mfpmath=sse -msse2
+# libmsvcrt の i386 用 __beginthreadex は SEH handler を .sxdata 経由で引く
+# だけなので、ld が libmingw32 の crt_handler.o を取り出さない（x64 は SEH
+# を使わないので起きない）。--require-defined で強制的に引き込ませる
+#
+# PLUGIN_API は __stdcall。32 ビットだと dll からの名前が
+# GetPluginFactory@0 になって host が見つけられない。--kill-at で @0 を落とす
+LDFLAGS  += -Wl,--require-defined=___mingw_SEH_error_handler -Wl,--kill-at
 endif
 else
 # `CXX ?= clang++` would not work: make already has CXX set (to c++), and `?=`
