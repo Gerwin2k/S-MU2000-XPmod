@@ -1299,6 +1299,63 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 			need_tval[k] = true;
 	}
 
+	// A write delayed by three ops can be committed where it is written when
+	// no reader in between can see the difference: no write to the same
+	// register one or two ops ahead of any read (wrapping across samples),
+	// and nothing written by the tail that the next sample takes from the
+	// ring. Same analysis as the x86-64 backend (SMU2000_MEG_EARLY).
+	bool early_r[128] = {}, early_m[128] = {};
+	{
+		bool bad_r[128] = {}, bad_m[128] = {};
+		const auto reads = [&](const meg_state::op &o, bool m, u32 x) {
+			if (!x)
+				return false;
+			bool rd = false;
+			if (o.alu && (o.mmode == 2 || o.mmode == 3) && (o.m2_from_m != 0) == m && (m ? o.sm : o.sr) == x)
+				rd = true;
+			if (o.alu && !m && o.asel == 1 && o.sr == x)
+				rd = true;
+			if (o.alu && m && o.asel == 2 && o.sm == x)
+				rd = true;
+			if (!m && o.dr && o.dr_from_r && o.sr == x)
+				rd = true;
+			if (m && o.dm && o.dm_src == 7 && o.sm == x)
+				rd = true;
+			return rd;
+		};
+		for (u32 j = 0; j != 0x180; j++)
+			for (u32 back = 1; back <= 2; back++) {
+				const meg_state::op &w = ops[(j + 0x180 - back) % 0x180];
+				if (w.dr && reads(ops[j], false, w.dr))
+					bad_r[w.dr] = true;
+				if (w.dm && reads(ops[j], true, w.dm))
+					bad_m[w.dm] = true;
+			}
+		for (u32 k = 0x17d; k != 0x180; k++) {
+			if (ops[k].dr) bad_r[ops[k].dr] = true;
+			if (ops[k].dm) bad_m[ops[k].dm] = true;
+		}
+		static const bool early_on = [] {
+			const char *e = std::getenv("SMU2000_MEG_EARLY");
+			return !(e && e[0] == '0');
+		}();
+		for (u32 x = 1; x != 128; x++) {
+			early_r[x] = early_on && !branchy && !bad_r[x];
+			early_m[x] = early_on && !branchy && !bad_m[x];
+		}
+	}
+
+	// Even a write committed early leaves its ring slot holding the last
+	// value written to it, so a saved state reads back exactly what the
+	// interpreter would leave there.
+	bool last_slot_r[0x180] = {}, last_slot_m[0x180] = {};
+	for (u32 c = 0; c != 3; c++) {
+		for (int k = 0x17f; k >= 0; k--)
+			if (u32(k) % 3 == c && ops[k].dr) { last_slot_r[k] = true; break; }
+		for (int k = 0x17f; k >= 0; k--)
+			if (u32(k) % 3 == c && ops[k].dm) { last_slot_m[k] = true; break; }
+	}
+
 	emitter a;
 	// Block state in callee-saved registers (rbx/r12-r15 in the x86 version).
 	// A carries the value a program instruction computes, E holds an address
@@ -1466,11 +1523,11 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 		} else {
 			const meg_state::op &w = ops[k - 3];
 			const u32 s = slot3(k);
-			if (w.dm) {
+			if (w.dm && !early_m[w.dm]) {
 				ldw(C, MS, o_mw_value + 4 * s);
 				stw(C, MS, o_m + 4 * w.dm);
 			}
-			if (w.dr) {
+			if (w.dr && !early_r[w.dr]) {
 				ldw(C, MS, o_rw_value + 4 * s);
 				stw(C, MS, o_r + 4 * w.dr);
 			}
@@ -1674,7 +1731,12 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				ldw(A, MS, o_m + 4 * o.sm);
 				break;
 			}
-			stw(A, MS, o_mw_value + 4 * slot3(k));
+			if (k < 0x17d && early_m[o.dm]) {
+				stw(A, MS, o_m + 4 * o.dm);
+				if (last_slot_m[k])
+					stw(A, MS, o_mw_value + 4 * slot3(k));
+			} else
+				stw(A, MS, o_mw_value + 4 * slot3(k));
 		}
 		if (k >= 0x17d || branchy) {
 			a.mov_imm32(C, o.dm);
@@ -1687,7 +1749,12 @@ bool swp30_device::meg_jit::build(code &cd, meg_state &ms, const meg_state::op *
 				ldw(A, MS, o_r + 4 * o.sr);
 			else
 				p_packed(!o.no_noise);
-			stw(A, MS, o_rw_value + 4 * slot3(k));
+			if (k < 0x17d && early_r[o.dr]) {
+				stw(A, MS, o_r + 4 * o.dr);
+				if (last_slot_r[k])
+					stw(A, MS, o_rw_value + 4 * slot3(k));
+			} else
+				stw(A, MS, o_rw_value + 4 * slot3(k));
 		}
 		if (k >= 0x17d || branchy) {
 			a.mov_imm32(C, o.dr);
