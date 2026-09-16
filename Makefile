@@ -631,11 +631,13 @@ CODESIGN_ID ?= -
 # at the container and neither ~/Library/Application Support nor whatever
 # roms.txt names is reachable. Baking ROMs in is the only way an AUv3 sings.
 #
-#   make auv3 AUV3_ROMS=roms
+#   make auv3 AUV3_ROMS=/path/to/roms
 #
-# ROMs are never redistributed, so they stay out by default (without them
-# the unit registers and renders, silently)
-AUV3_ROMS ?=
+# ROMs are never redistributed, so they stay out of git (roms/ is ignored).
+# Local builds bake them in from ./roms by default so the unit always sings;
+# pass another path, empty to leave the bundle as it is, or none to take them
+# out (without them the unit registers and renders, silently)
+AUV3_ROMS ?= roms
 
 AUV3_FLAGS := -fobjc-arc
 AUV3_FW    := -framework Foundation -framework AudioToolbox -framework AVFoundation \
@@ -652,11 +654,11 @@ $(BUILD)/auv3obj/%.o: %.mm
 
 # Bundle finishing (ROMs in, then sign) runs every time. Doing it only
 # when binaries rebuild would ignore a later-added AUV3_ROMS.
-# Without AUV3_ROMS the contents stay as they are (so a bare install-auv3
-# never wipes baked ROMs). Write AUV3_ROMS=none to take them out
+# An explicitly empty AUV3_ROMS leaves the contents as they are (so a bare
+# rebuild never wipes baked ROMs). Write AUV3_ROMS=none to take them out
 auv3: $(AUV3_HOST) $(BUILD)/autest$(EXE)
 	# ROMs into the bundle. Before signing (adding them later breaks the seal).
-	# Without AUV3_ROMS the contents stay (a bare install never wipes them).
+	# An explicitly empty AUV3_ROMS leaves a bare install alone.
 	# AUV3_ROMS=none takes them out
 ifeq ($(AUV3_ROMS),none)
 	@rm -rf $(AUV3_APPEX)/Contents/Resources/roms
