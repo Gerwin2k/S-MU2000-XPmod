@@ -342,6 +342,7 @@ public:
 	void detach() override;
 	void set_size(int w, int h) override;
 	void card_menu(int x, int y) override;
+	void panel_menu(int x, int y) override;
 	void alert(const std::string &text) override;
 	void pc_frame(::xg::model &m, const ::ui::xg_snapshot &ram, ::ui::bridge &br) override;
 
@@ -477,6 +478,28 @@ void mac_window::card_menu(int x, int y)
 
 	// In the view's own coordinates. The view is flipped, which is the space the
 	// panel's hit testing already worked in
+	[m popUpMenuPositioningItem:nil atLocation:NSMakePoint(x, y) inView:m_view];
+}
+
+void mac_window::panel_menu(int x, int y)
+{
+	if (!m_view)
+		return;
+
+	SMUCardMenu *target = [[SMUCardMenu alloc] init];
+	target->_owner = &m_owner;
+	target->_win = this;
+
+	NSMenu *m = [[NSMenu alloc] init];
+	[m setAutoenablesItems:NO];
+
+	NSMenuItem *item = [m addItemWithTitle:@"一覧を開く" action:@selector(choose:) keyEquivalent:@""];
+	[item setTarget:target];
+	[item setTag:11];
+	item = [m addItemWithTitle:@"エディタを開く" action:@selector(choose:) keyEquivalent:@""];
+	[item setTarget:target];
+	[item setTag:12];
+
 	[m popUpMenuPositioningItem:nil atLocation:NSMakePoint(x, y) inView:m_view];
 }
 

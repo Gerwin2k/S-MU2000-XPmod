@@ -74,6 +74,12 @@ public:
 	// Say something went wrong (the panel has nowhere to put it)
 	virtual void alert(const std::string &text) = 0;
 
+	// A right click that missed the card slot. The GUI front end opens its
+	// settings menu there; a plug-in has no settings of its own, so by
+	// default there is no menu. Platforms with PC windows of their own
+	// offer those here instead
+	virtual void panel_menu(int x, int y) {}
+
 	// Drive the PC windows (overview, editor, insertion, part voice) one
 	// frame. Same ui::pc_window as gui.exe, opened from the panel's
 	// right-click menu. Called from the GUI thread at the panel's repaint
