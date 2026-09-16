@@ -15,8 +15,16 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "ui/fx_editor.h"
+#include "ui/overview.h"
+#include "ui/part_shapes.h"
+#include "ui/pc_editor.h"
+#include "ui/pc_window_mac.h"
+#include "ui/xg_ui.h"
+
 #include <algorithm>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 using namespace Steinberg;
@@ -68,6 +76,9 @@ int plug_key_of_char(int c)
 using smu2000::vst3::plug_view;
 using smu2000::vst3::plug_key_of_char;
 using smu2000::vst3::PLUG_KEY_NONE;
+
+// mac_window, defined below: the card menu's choices open its PC windows
+namespace smu2000 { namespace vst3 { class mac_window; } }
 
 // The panel's view. Flipped, so the CGContext AppKit hands to drawRect already
 // has its origin top-left with y running down -- the space compat/gdi.h assumes
@@ -312,9 +323,48 @@ using smu2000::vst3::PLUG_KEY_NONE;
 {
 @public
 	plug_view *_owner;
+	smu2000::vst3::mac_window *_win;
 }
 - (void)choose:(id)sender;
 @end
+
+
+namespace smu2000 {
+namespace vst3 {
+
+class mac_window : public plug_window
+{
+public:
+	explicit mac_window(plug_view &owner) : m_owner(owner) {}
+	~mac_window() override { detach(); }
+
+	bool attach(void *parent, int w, int h) override;
+	void detach() override;
+	void set_size(int w, int h) override;
+	void card_menu(int x, int y) override;
+	void alert(const std::string &text) override;
+	void pc_frame(::xg::model &m, const ::ui::xg_snapshot &ram, ::ui::bridge &br) override;
+
+	// Open a PC window (overview/editor), showing an alert when it fails
+	void open_pc(ui::pc_window &w);
+	void open_list() { open_pc(m_list); }
+	void open_editor() { open_pc(m_editor); }
+
+private:
+	plug_view &m_owner;
+	SMUPlugView *m_view = nil;
+	// The PC windows gui.exe shows (overview, editor, insertion, part voice).
+	// Same content as on Windows; only the hosting window differs
+	ui::pc_window m_list{ std::make_unique<ui::overview>() };
+	ui::pc_window m_editor{ std::make_unique<ui::pc_editor>() };
+	ui::pc_window m_fx{ std::make_unique<ui::fx_editor>() };
+	ui::pc_window m_shapes{ std::make_unique<ui::part_shapes>() };
+};
+
+// Objective-C lives at global scope (see the note on SMUPlugView above);
+// the mac_window methods resume inside the namespaces below
+} // namespace vst3
+} // namespace smu2000
 
 @implementation SMUCardMenu
 
@@ -349,30 +399,16 @@ using smu2000::vst3::PLUG_KEY_NONE;
 
 	if (tag == 10)                                               // 抜く
 		_owner->card_eject();
+	else if (tag == 11 && _win)                                  // 一覧
+		_win->open_list();
+	else if (tag == 12 && _win)                                  // エディタ
+		_win->open_editor();
 }
 
 @end
 
-
 namespace smu2000 {
 namespace vst3 {
-
-class mac_window : public plug_window
-{
-public:
-	explicit mac_window(plug_view &owner) : m_owner(owner) {}
-	~mac_window() override { detach(); }
-
-	bool attach(void *parent, int w, int h) override;
-	void detach() override;
-	void set_size(int w, int h) override;
-	void card_menu(int x, int y) override;
-	void alert(const std::string &text) override;
-
-private:
-	plug_view &m_owner;
-	SMUPlugView *m_view = nil;
-};
 
 void mac_window::alert(const std::string &text)
 {
@@ -392,6 +428,7 @@ void mac_window::card_menu(int x, int y)
 
 	SMUCardMenu *target = [[SMUCardMenu alloc] init];
 	target->_owner = &m_owner;
+	target->_win = this;
 
 	NSMenu *m = [[NSMenu alloc] init];
 	[m setAutoenablesItems:NO];
@@ -428,6 +465,15 @@ void mac_window::card_menu(int x, int y)
 	[item setTarget:target];
 	[item setTag:10];
 	[item setEnabled:path.empty() ? NO : YES];
+
+	// The PC windows, where the Windows menu has them
+	[m addItem:[NSMenuItem separatorItem]];
+	item = [m addItemWithTitle:@"一覧を開く" action:@selector(choose:) keyEquivalent:@""];
+	[item setTarget:target];
+	[item setTag:11];
+	item = [m addItemWithTitle:@"エディタを開く" action:@selector(choose:) keyEquivalent:@""];
+	[item setTarget:target];
+	[item setTag:12];
 
 	// In the view's own coordinates. The view is flipped, which is the space the
 	// panel's hit testing already worked in
@@ -468,6 +514,12 @@ bool mac_window::attach(void *parent, int w, int h)
 
 void mac_window::detach()
 {
+	// The hosted PC windows go with the panel: left open they would keep
+	// drawing from an engine that is being torn down
+	m_list.hide();
+	m_editor.hide();
+	m_fx.hide();
+	m_shapes.hide();
 	if (m_view) {
 		[[NSNotificationCenter defaultCenter] removeObserver:m_view];
 		[m_view removeFromSuperview];
@@ -480,6 +532,28 @@ void mac_window::set_size(int w, int h)
 {
 	if (m_view)
 		[m_view setFrame:NSMakeRect(0, 0, w, h)];
+}
+
+void mac_window::open_pc(ui::pc_window &w)
+{
+	std::string err;
+	if (!w.show(err))
+		alert(err.empty() ? std::string("the window cannot be opened") : err);
+}
+
+// Driven at the panel's repaint rate. Hidden windows cost nothing
+void mac_window::pc_frame(::xg::model &m, const ::ui::xg_snapshot &ram, ::ui::bridge &br)
+{
+	m_list.frame(m, ram, br);
+	m_editor.frame(m, ram, br);
+	m_fx.frame(m, ram, br);
+	m_shapes.frame(m, ram, br);
+	// A double-click on an insertion row in the overview asks for the
+	// settings window; on a VIB/FILTER/EG/EQ cell for the part voice window
+	if (ui::xgui::take_fx_request())
+		open_pc(m_fx);
+	if (ui::xgui::take_part_request())
+		open_pc(m_shapes);
 }
 
 

@@ -452,12 +452,14 @@ $(BUILD)/vst3obj/%.o: %.cpp
 
 $(BUILD)/vst3obj/%.o: %.mm
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(VST3_INC) -fobjc-arc -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(VST3_INC) $(IMGUI_FLAGS) -fobjc-arc -c -o $@ $<
 
 vst3: $(VST3_BIN)
 
 # -bundle, not -shared: a VST3 is read with CFBundle, not dlopen
-$(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS)
+# The overview/editor PC windows open from the plug-in too, so the ImGui
+# views and the AppKit window come along in the bundle as well
+$(VST3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(VST3_OBJS) $(MAC_PC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -bundle -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
 	@mkdir -p $(VST3_DIR)/Contents/Resources
@@ -494,7 +496,7 @@ $(BUILD)/clapobj/%.o: %.cpp
 
 clap: $(CLAP_BIN)
 
-$(CLAP_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(CLAP_OBJS)
+$(CLAP_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(CLAP_OBJS) $(MAC_PC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -bundle -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
 	@mkdir -p $(CLAP_DIR)/Contents/Resources
@@ -555,7 +557,7 @@ AU_OBJS := $(AU_OBJS:%.mm=$(BUILD)/vst3obj/%.o)
 au: $(AU_BIN)
 
 # -bundle like the VST3: an AU is also read with CFBundle
-$(AU_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(AU_OBJS)
+$(AU_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(AU_OBJS) $(MAC_PC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -bundle -o $@ $^ $(LDFLAGS) $(MAC_FRAMEWORKS)
 	@mkdir -p $(AU_DIR)/Contents/Resources
@@ -637,7 +639,8 @@ AUV3_ROMS ?=
 
 AUV3_FLAGS := -fobjc-arc
 AUV3_FW    := -framework Foundation -framework AudioToolbox -framework AVFoundation \
-              -framework CoreAudio -framework CoreMIDI -framework Cocoa -framework CoreAudioKit
+              -framework CoreAudio -framework CoreMIDI -framework Cocoa -framework CoreAudioKit \
+              -framework Metal -framework QuartzCore
 
 $(BUILD)/auv3obj/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -645,7 +648,7 @@ $(BUILD)/auv3obj/%.o: %.cpp
 
 $(BUILD)/auv3obj/%.o: %.mm
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(VST3_INC) $(AUV3_FLAGS) -ObjC++ -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(VST3_INC) $(IMGUI_FLAGS) $(AUV3_FLAGS) -ObjC++ -c -o $@ $<
 
 # Bundle finishing (ROMs in, then sign) runs every time. Doing it only
 # when binaries rebuild would ignore a later-added AUV3_ROMS.
@@ -695,7 +698,7 @@ endif
 	@echo "出来た: $(AUV3_APP)"
 
 # The .appex itself. Entry point is NSExtensionMain (it owns no main())
-$(AUV3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(AUV3_OBJS)
+$(AUV3_BIN): $(OBJS) $(BUILD)/src/mu2000.o $(AUV3_OBJS) $(MAC_PC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(AUV3_FW) \
 	       -e _NSExtensionMain -fapplication-extension
@@ -720,7 +723,7 @@ install-auv3: auv3
 
 # Register in-process (no .appex) to check ports and sound on the spot
 $(BUILD)/autest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/smf.o $(AUV3_OBJS) \
-                       $(BUILD)/auv3obj/src/auv3/autotest.o
+                       $(BUILD)/auv3obj/src/auv3/autotest.o $(MAC_PC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(AUV3_FW)
 
