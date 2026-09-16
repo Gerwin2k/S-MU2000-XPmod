@@ -197,6 +197,9 @@ struct au_instance
 	// all-notes-off goes only there. Blasting every channel costs 61ms of
 	// 31250bps serial, delaying whatever comes next (issue #15)
 	std::atomic<UInt16> sounded{0};
+	// The preset name as last set. auval round-trips it through ClassInfo
+	// and PresentPreset and warns when it does not stick, so it is kept
+	std::string preset_name{kPresetName};
 
 	// Hush only the channels that sounded. Nothing to send when none did
 	void hush()
@@ -927,7 +930,7 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		put_num(kAUPresetSubtypeKey, SInt32(kSubtype));
 		put_num(kAUPresetManufacturerKey, SInt32(kManufacturer));
 		put_num(kAUPresetVersionKey, SInt32(kVersion));
-		CFStringRef nm = CFStringCreateWithCString(kCFAllocatorDefault, kPresetName,
+		CFStringRef nm = CFStringCreateWithCString(kCFAllocatorDefault, au->preset_name.c_str(),
 		                                           kCFStringEncodingUTF8);
 		CFDictionarySetValue(dict, CFSTR(kAUPresetNameKey), nm);
 		CFRelease(nm);
@@ -1042,7 +1045,7 @@ OSStatus prop_get(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		// coming from a bank, which is what DLSMusicDevice reports too
 		auto *p = static_cast<AUPreset *>(data);
 		p->presetNumber = -1;
-		p->presetName = CFStringCreateWithCString(kCFAllocatorDefault, kPresetName,
+		p->presetName = CFStringCreateWithCString(kCFAllocatorDefault, au->preset_name.c_str(),
 		                                          kCFStringEncodingUTF8);
 		*size = sizeof(AUPreset);
 		return noErr;
@@ -1206,6 +1209,13 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 				CFNumberGetValue(g, kCFNumberFloat32Type, &v);
 				param_set(au, kParamGain, v);
 			}
+			CFStringRef nm = static_cast<CFStringRef>(const_cast<void *>(
+			    CFDictionaryGetValue(dict, CFSTR(kAUPresetNameKey))));
+			if (nm && CFGetTypeID(nm) == CFStringGetTypeID()) {
+				char b[256] = {};
+				if (CFStringGetCString(nm, b, sizeof(b), kCFStringEncodingUTF8) && *b)
+					au->preset_name = b;
+			}
 		}
 
 		std::vector<u8> raw;
@@ -1263,9 +1273,18 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 
 	case kAudioUnitProperty_PresentPreset:
 		// There is only the one factory preset, so choosing one just puts the
-		// defaults back
+		// defaults back. The name sticks: auval round-trips it and warns when
+		// a set name does not come back
 		if (size < sizeof(AUPreset))
 			return kAudioUnitErr_InvalidPropertyValue;
+		{
+			const auto *p = static_cast<const AUPreset *>(data);
+			if (p->presetName) {
+				char b[256] = {};
+				if (CFStringGetCString(p->presetName, b, sizeof(b), kCFStringEncodingUTF8) && *b)
+					au->preset_name = b;
+			}
+		}
 		param_set(au, kParamGain, 1.0f);
 		au->hush();
 		return noErr;
