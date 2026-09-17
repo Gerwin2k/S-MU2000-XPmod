@@ -4,7 +4,7 @@
 // 曲を流しながら全体のバランスを見て整える。
 //
 // 1 行に: パートと音色、VEL メーター、VOL / EXP / PAN / P.BEND / MOD / HOLD の棒と数、
-// VIB / FILTER / EG / EQ の絵（点をつまんで変える）、INS、VAR / CHO / REV の棒と数、鳴っている鍵盤。
+// VIB / FILTER / EG / EQ の絵（見るだけ。ダブルクリックでパートの音色の窓）、INS、VAR / CHO / REV の棒と数、鳴っている鍵盤。
 // 値は RAM の写し（panel::tick が層に入れたもの）と、MIDI の見張り（押さえている鍵）から。
 
 #ifndef S_MU2000_UI_OVERVIEW_H
@@ -37,7 +37,8 @@ public:
 	struct column;                   // 列の中身（overview.cpp）
 
 	// 絵の 1 マス。パートの音色の窓（part_shapes）も同じものを大きく描く。
-	// compact は一覧の中の小さなマスのとき。ダブルクリックでパートの音色の窓を頼む
+	// compact は一覧の中の小さなマスのとき。描くだけでマウスでは触れない（ダブルクリックで
+	// パートの音色の窓を頼むのは呼ぶ側）。点をつまんで変えるのは compact でないときだけ
 	//
 	// EG: アタック・ディケイ・リリースの形を描き、点をつまんで動かす
 	static void eg_cell(int part, xg::model &m, bridge &br, float w, float h, bool compact);

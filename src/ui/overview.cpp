@@ -101,8 +101,8 @@ void draw_keys(ImDrawList *dl, ImVec2 pos, float w, float h, F color)
 
 } // namespace
 
-// 小さなマスの説明に足す一言
-constexpr const char *BIG_HINT = "\nダブルクリックで大きな窓に出す";
+// 小さなマスの説明に足す一言。一覧の小さな絵は見るだけで、触るのは大きな窓で
+constexpr const char *BIG_HINT = "\nダブルクリックで大きな窓に出して触る";
 
 struct overview::column {
 	const char *title;
@@ -162,7 +162,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 				eq_cell(part, m, br, w, h, true);
 			else
 				vib_cell(part, m, br, w, h, true);
-			// 小さなマスでは点をつまみにくいので、ダブルクリックでパートの音色の窓に大きく出す
+			// 小さなマスは見るだけ。ダブルクリックでパートの音色の窓に大きく出して、そこで触る
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 				m_part = part;
 				request_part(part);
@@ -464,7 +464,7 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
 
 
 // EG の 1 マス。音量の形（立ち上がり → 落ち着き → 伸ばし → 離して消える）を折れ線で描き、
-// 3 つの点をつまんで横に動かすと、アタック・ディケイ・リリースが変わる。
+// 3 つの点をつまんで横に動かすと、アタック・ディケイ・リリースが変わる（大きな窓だけ。compact なら見るだけ）。
 // XG の値は音色の元の値に対する増減（64 が音色のまま）。形の長さは 2 の (値 - 64) / 24 乗で伸び縮みさせ、
 // 真ん中の値で各区間が同じくらいの長さになるようにした（見た目だけ。実際の秒数ではない）
 void overview::eg_cell(int part, xg::model &m, bridge &br, float w, float h, bool compact)
@@ -481,7 +481,7 @@ void overview::eg_cell(int part, xg::model &m, bridge &br, float w, float h, boo
 	ImGui::InvisibleButton("##eg", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
 	const ImGuiID id = ImGui::GetItemID();
 	const bool hovered = ImGui::IsItemHovered();
-	const bool active = ImGui::IsItemActive();
+	const bool active = !compact && ImGui::IsItemActive();   // 一覧の小さなマスでは触らせない
 
 	const float pad = fs * 0.25f;
 	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
@@ -503,7 +503,7 @@ void overview::eg_cell(int part, xg::model &m, bridge &br, float w, float h, boo
 	// つかむ点。押した瞬間に一番近い点を選び、離すまで同じ点を動かす
 	ImGuiStorage *st = ImGui::GetStateStorage();
 	int grab = st->GetInt(id, -1);
-	if (ImGui::IsItemActivated() && known) {
+	if (active && ImGui::IsItemActivated() && known) {
 		const float mx = io.MousePos.x;
 		const float dists[3] = { std::fabs(mx - xa), std::fabs(mx - xd), std::fabs(mx - xr) };
 		grab = int(std::min_element(dists, dists + 3) - dists);
@@ -547,14 +547,14 @@ void overview::eg_cell(int part, xg::model &m, bridge &br, float w, float h, boo
 	}
 
 	if ((hovered || active) && known)
-		ImGui::SetItemTooltip("Attack %s   Decay %s   Release %s\n点を横につまんで動かす（右へ長く、左へ短く）%s",
+		ImGui::SetItemTooltip("Attack %s   Decay %s   Release %s%s",
 		                      xg::format(pa, va).c_str(), xg::format(pd, vd).c_str(), xg::format(pr, vr).c_str(),
-		                      compact ? BIG_HINT : "");
+		                      compact ? BIG_HINT : "\n点を横につまんで動かす（右へ長く、左へ短く）");
 	ImGui::PopID();
 }
 
 // フィルタの 1 マス。低い音から高い音への通り方（2 次のローパス）を描き、カットオフの位置の点を
-// つまむ。横に動かすとカットオフ、縦に動かすとレゾナンス（山の高さ）が変わる。
+// つまむ。横に動かすとカットオフ、縦に動かすとレゾナンス（山の高さ）が変わる（大きな窓だけ）。
 // 横軸は値に比例（64 が真ん中 = 音色のまま）で、1 マスの幅が 8 オクターブ。
 // 点の高さは、カットオフでの持ち上がり 20log10(Q) dB。Q = 2 の (値 - 64) / 16 乗なので、
 // 高さも値に比例する。どちらも見た目だけで、実際の周波数や Q ではない
@@ -572,7 +572,7 @@ void overview::filter_cell(int part, xg::model &m, bridge &br, float w, float h,
 	ImGui::InvisibleButton("##filter", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
 	const ImGuiID id = ImGui::GetItemID();
 	const bool hovered = ImGui::IsItemHovered();
-	const bool active = ImGui::IsItemActive();
+	const bool active = !compact && ImGui::IsItemActive();   // 一覧の小さなマスでは触らせない
 
 	const float pad = fs * 0.25f;
 	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
@@ -589,7 +589,7 @@ void overview::filter_cell(int part, xg::model &m, bridge &br, float w, float h,
 	// a value and write it back
 	ImGuiStorage *st = ImGui::GetStateStorage();
 	float gx = st->GetFloat(id, 0.0f), gy = st->GetFloat(id + 1, 0.0f);
-	if (ImGui::IsItemActivated() && known) {
+	if (active && ImGui::IsItemActivated() && known) {
 		gx = xc - io.MousePos.x;
 		gy = yq - io.MousePos.y;
 		st->SetFloat(id, gx);
@@ -643,8 +643,9 @@ void overview::filter_cell(int part, xg::model &m, bridge &br, float w, float h,
 	}
 
 	if ((hovered || active) && known)
-		ImGui::SetItemTooltip("Cutoff %s   Resonance %s\n点をつまんで、横でカットオフ（右へ明るく）、縦でレゾナンス（上へ強く）%s",
-		                      xg::format(pc, vc).c_str(), xg::format(pq, vq).c_str(), compact ? BIG_HINT : "");
+		ImGui::SetItemTooltip("Cutoff %s   Resonance %s%s",
+		                      xg::format(pc, vc).c_str(), xg::format(pq, vq).c_str(),
+		                      compact ? BIG_HINT : "\n点をつまんで、横でカットオフ（右へ明るく）、縦でレゾナンス（上へ強く）");
 	ImGui::PopID();
 }
 
@@ -667,8 +668,9 @@ struct eq_band {
 };
 
 // EQ の絵の 1 マス。帯ごとの点をつまんで、横で周波数、縦でゲイン。ホイールで Q（あれば）。
-// 戻り値はつかんでいる帯（無ければ -1）
-int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, float w, float h, const char *tip)
+// 戻り値はつかんでいる帯（無ければ -1）。edit が false なら描くだけで、つまみもホイールも効かない
+int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, float w, float h, const char *tip,
+            bool edit)
 {
 	ImGuiIO &io = ImGui::GetIO();
 	const float fs = ImGui::GetFontSize();
@@ -685,7 +687,7 @@ int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, flo
 	ImGui::InvisibleButton("##eq", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
 	const ImGuiID iid = ImGui::GetItemID();
 	const bool hovered = ImGui::IsItemHovered();
-	const bool active = ImGui::IsItemActive();
+	const bool active = edit && ImGui::IsItemActive();
 
 	const float pad = fs * 0.25f;
 	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
@@ -709,7 +711,7 @@ int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, flo
 		}
 		return best;
 	};
-	if (ImGui::IsItemActivated() && known) {
+	if (active && ImGui::IsItemActivated() && known) {
 		grab = nearest();
 		if (grab >= 0) {
 			const ImVec2 hp = handle(bands[grab]);
@@ -732,7 +734,7 @@ int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, flo
 		if (ng != b.vg) br.send(m.set(*b.gain, b.part, ng));
 	}
 	// ホイールで Q。カーソルに一番近い帯
-	const int hot = hovered && !active ? nearest() : grab;
+	const int hot = !edit ? -1 : hovered && !active ? nearest() : grab;
 	if (hovered && known && hot >= 0 && bands[hot].q) {
 		ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
 		if (io.MouseWheel != 0.0f) {
@@ -790,7 +792,7 @@ int eq_plot(const char *id, eq_band *bands, int n, xg::model &m, bridge &br, flo
 				text += buf;
 			}
 		}
-		ImGui::SetItemTooltip("%s\n%s", text.c_str(), tip);
+		ImGui::SetItemTooltip("%s%s%s", text.c_str(), *tip == '\n' ? "" : "\n", tip);
 	}
 	ImGui::PopID();
 	return grab;
@@ -806,8 +808,8 @@ void overview::eq_cell(int part, xg::model &m, bridge &br, float w, float h, boo
 		{ band_shape::low_shelf,  &P("part.eq_bass_gain"),   &P("part.eq_bass_freq"),   nullptr, part, 64, 12, 0, false },
 		{ band_shape::high_shelf, &P("part.eq_treble_gain"), &P("part.eq_treble_freq"), nullptr, part, 64, 54, 0, false },
 	};
-	eq_plot("eq", bands, 2, m, br, w, h, compact ? "点をつまんで、横で周波数、縦でゲイン（1 が低音、2 が高音）\nダブルクリックで大きな窓に出す"
-	                                            : "点をつまんで、横で周波数、縦でゲイン（1 が低音、2 が高音）");
+	eq_plot("eq", bands, 2, m, br, w, h, compact ? BIG_HINT : "点をつまんで、横で周波数、縦でゲイン（1 が低音、2 が高音）",
+	        !compact);
 }
 
 
@@ -826,7 +828,7 @@ void overview::master_eq_cell(xg::model &m, bridge &br, float h)
 		{ s5 ? band_shape::peak : band_shape::high_shelf, &P("master_eq.gain5"), &P("master_eq.freq5"), &P("master_eq.q5"), 0, 64, 52, 7, false },
 	};
 	eq_plot("meq", bands, 5, m, br, w, h,
-	        "点をつまんで、横で周波数、縦でゲイン。ホイールで幅（Q）。右クリックで種類と、両端の帯の形");
+	        "点をつまんで、横で周波数、縦でゲイン。ホイールで幅（Q）。右クリックで種類と、両端の帯の形", true);
 	if (ImGui::BeginPopupContextItem("meqmenu", ImGuiPopupFlags_MouseButtonRight)) {
 		ImGui::TextDisabled("マスター EQ");
 		ImGui::Separator();
@@ -850,7 +852,7 @@ void overview::master_eq_cell(xg::model &m, bridge &br, float h)
 
 // ビブラートの 1 マス。弾いてからの揺れの形。平らな所が掛かり始めるまで（Delay）、
 // そのあとの波の山の点をつまんで、横で速さ（山が近いほど速い）、縦で深さ。
-// 平らな所の終わりの点を横に動かすと Delay。どれも音色の元の値に対する増減（64 が音色のまま）で、
+// 平らな所の終わりの点を横に動かすと Delay（つまめるのは大きな窓だけ）。どれも音色の元の値に対する増減（64 が音色のまま）で、
 // 形は 2 の (値 - 64) / 24 乗で伸び縮みさせた見た目だけのもの
 void overview::vib_cell(int part, xg::model &m, bridge &br, float w, float h, bool compact)
 {
@@ -866,7 +868,7 @@ void overview::vib_cell(int part, xg::model &m, bridge &br, float w, float h, bo
 	ImGui::InvisibleButton("##vib", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
 	const ImGuiID id = ImGui::GetItemID();
 	const bool hovered = ImGui::IsItemHovered();
-	const bool active = ImGui::IsItemActive();
+	const bool active = !compact && ImGui::IsItemActive();   // 一覧の小さなマスでは触らせない
 
 	const float pad = fs * 0.25f;
 	const float x0 = pos.x + pad, x1 = pos.x + w - pad;
@@ -883,7 +885,7 @@ void overview::vib_cell(int part, xg::model &m, bridge &br, float w, float h, bo
 	ImGuiStorage *st = ImGui::GetStateStorage();
 	int grab = st->GetInt(id, -1);
 	float gx = st->GetFloat(id + 1, 0.0f), gy = st->GetFloat(id + 2, 0.0f);
-	if (ImGui::IsItemActivated() && known) {
+	if (active && ImGui::IsItemActivated() && known) {
 		const float dd = std::fabs(io.MousePos.x - xd) + std::fabs(io.MousePos.y - mid);
 		const float dc = std::fabs(io.MousePos.x - crest.x) + std::fabs(io.MousePos.y - crest.y);
 		grab = dd < dc ? 0 : 1;
@@ -931,9 +933,9 @@ void overview::vib_cell(int part, xg::model &m, bridge &br, float w, float h, bo
 		dl->AddText(ImVec2(pos.x + (w - ts.x) * 0.5f, pos.y + (h - ts.y) * 0.5f), col(ImGuiCol_TextDisabled), "--");
 	}
 	if ((hovered || active) && known)
-		ImGui::SetItemTooltip("Rate %s   Depth %s   Delay %s\n波の山の点: 横で速さ、縦で深さ\n平らな所の終わりの点: 横で掛かり始めるまでの時間%s",
+		ImGui::SetItemTooltip("Rate %s   Depth %s   Delay %s%s",
 		                      xg::format(pr, vr).c_str(), xg::format(pd, vd).c_str(), xg::format(pl, vl).c_str(),
-		                      compact ? BIG_HINT : "");
+		                      compact ? BIG_HINT : "\n波の山の点: 横で速さ、縦で深さ\n平らな所の終わりの点: 横で掛かり始めるまでの時間");
 	ImGui::PopID();
 }
 
@@ -1477,7 +1479,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
 			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed,
-			                        wide(c.from) ? fs * 7.5f : c.from == src::ins ? fs * 8.5f : fs * 3.4f);
+			                        wide(c.from) ? fs * 4.5f : c.from == src::ins ? fs * 8.5f : fs * 3.4f);
 		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
 		headers_with_help(NCOLS + 3);
 
