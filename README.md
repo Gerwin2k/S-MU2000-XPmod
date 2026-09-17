@@ -96,7 +96,7 @@ MIDI 経由の予備の経路もあり、両方で吸ったものが 1 バイト
 
 ## 使い方
 
-**はじめて使うなら [doc/manual.md](doc/manual.md)**（用意するもの → 作る → 鳴らす → 画面 → DAW の通しの手引き）。
+**はじめて使うなら [doc/manual.md](doc/manual.md)**（用意するもの → 作る → 鳴らす → 画面 → DAW の通しの手引き。English: [doc/manual.en.md](doc/manual.en.md)）。
 
 ```
 make
