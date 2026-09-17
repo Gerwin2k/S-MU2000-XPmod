@@ -111,8 +111,17 @@ void part_shapes::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	ImGui::SameLine();
 	help_checkbox();
 
-	// ---- 左に音色を選ぶ面、右に 4 つの区画（2 × 2）
+	// ---- 上のペイン: エフェクト、棒、鍵盤
 	const ImGuiStyle &st = ImGui::GetStyle();
+	{
+		const float strip_h = ImGui::GetFrameHeight() + ImGui::GetTextLineHeight() + fs * 2.3f +
+		                      st.ItemSpacing.y + st.WindowPadding.y * 2.0f + fs * 0.2f;
+		if (ImGui::BeginChild("strip", ImVec2(0, strip_h), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar))
+			m_strip.part_strip(part, m, ram, br);
+		ImGui::EndChild();
+	}
+
+	// ---- 左に音色を選ぶ面、右に 4 つの区画（2 × 2）
 	const ImVec2 avail = ImGui::GetContentRegionAvail();
 	// 音色を選ぶ面は、左に分類・右に音色とバンク違いの 2 列（xgui::program_pane）
 	const float pane_w = std::min(fs * 26.0f, avail.x * 0.5f);

@@ -52,7 +52,14 @@ public:
 	// edit でなければ描くだけ（一覧のマスターの行）
 	static void master_eq_plot(xg::model &m, bridge &br, float w, float h, bool edit);
 
+	// パートの音色の窓の上のペイン: 掛かっているエフェクト（種類の名前まで）、VOL〜HOLD と VAR〜REV の棒
+	// （一覧と同じく触れる）、このパートの鍵盤。窓を閉じたら strip_hidden で鳴らしている鍵を離す
+	void part_strip(int part, xg::model &m, const xg_snapshot &ram, bridge &br);
+	void strip_hidden(bridge &br) { release_keys(br); }
+
 private:
+	// 1 パートの鍵盤（押さえている鍵が光る。押すと鳴らす）。slot は受信の口 × 16 + ch（無ければ -1）
+	void keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h);
 	// 行を選ぶ。パートの音色の窓も同じパートに替える
 	void select_part(int part);
 	void release_keys(bridge &br);          // マウスで鳴らしている鍵を全部離す
@@ -65,8 +72,9 @@ private:
 	// パートの欄の右端の M / S の印
 	void mute_buttons(int part, float x, float y, float w, float h);
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
-	// INS 列の 1 マス。右クリックで掛ける・外す・種類、印のドラッグで別のパートへ
-	void ins_cell(int part, xg::model &m, bridge &br, float h);
+	// INS 列の 1 マス。掛かっているエフェクトの印（1-4、V）を横に並べる。names なら種類の名前も。
+	// 右クリックで掛ける・外す・種類、印のドラッグで別のパートへ、印のダブルクリックで設定の窓
+	void ins_cell(int part, xg::model &m, bridge &br, float h, bool names = false);
 	// マスター EQ の 1 マス。見るだけで、ダブルクリックでマスターの窓
 	void master_eq_cell(xg::model &m, bridge &br, float h);
 	// 上のマスターの表。マスターボリューム、移調、リバーブ・コーラス・バリエーションの種類と戻り、

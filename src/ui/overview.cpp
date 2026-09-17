@@ -382,7 +382,7 @@ void fx_menu(int part, xg::model &m, bridge &br)
 } // namespace
 
 
-void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
+void overview::ins_cell(int part, xg::model &m, bridge &br, float h, bool names)
 {
 	const float fs = ImGui::GetFontSize();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -418,19 +418,28 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
 		ImGui::SetItemTooltip("右クリックでエフェクトを掛ける");
 
 	dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
+	// 一覧では印（1-4、V）だけを横に並べる。names（パートの音色の窓）なら印の後ろに種類の名前も出し、
+	// 幅が足りなければ次の行へ折り返す
 	const float line = fs * 1.05f;
-	for (size_t i = 0; i < on.size() && i < 2; i++) {
-		const float y = pos.y + fs * 0.1f + line * float(i);
-		const float bw = fs * 1.0f;
+	const float bw = fs * 1.0f;
+	const float left = pos.x + fs * 0.2f;
+	float x = left;
+	float y = names ? pos.y + fs * 0.1f : pos.y + (h - fs) * 0.5f;
+	if (names && on.empty())
+		dl->AddText(ImVec2(left, y), col(ImGuiCol_TextDisabled), "掛かっていない（右クリックで掛ける）");
+	for (size_t i = 0; i < on.size(); i++) {
 		const fx_slot &f = *on[i].slot;
-		std::string name = on[i].name;
-		if (i == 1 && on.size() > 2)
-			name += " ほか";
+		const std::string &name = on[i].name;
+		const float item_w = names ? bw + fs * 0.35f + ImGui::CalcTextSize(name.c_str()).x + fs * 0.9f : bw + fs * 0.2f;
+		if (names && x > left && x + item_w > pos.x + w) {
+			x = left;
+			y += line;
+		}
 
-		// 印の行はつかめる（ドラッグで移す）
-		ImGui::SetCursorScreenPos(ImVec2(pos.x, y));
+		// 印はつかめる（ドラッグで移す）
+		ImGui::SetCursorScreenPos(ImVec2(x, y));
 		ImGui::PushID(f.id);
-		ImGui::InvisibleButton("##fx", ImVec2(w, line), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+		ImGui::InvisibleButton("##fx", ImVec2(names ? item_w - fs * 0.5f : bw, line), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 		const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
 		if (f.id <= 4 && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			request_fx(f.id);                    // 設定の窓を出す
@@ -449,10 +458,14 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h)
 			                                : "%s: %s\nドラッグで別のパートへ・右クリックで種類や外す", f.title, on[i].name.c_str());
 		ImGui::PopID();
 
-		dl->AddRectFilled(ImVec2(pos.x + fs * 0.2f, y + 1), ImVec2(pos.x + fs * 0.2f + bw, y + fs), f.color, 3.0f);
+		dl->AddRectFilled(ImVec2(x, y + 1), ImVec2(x + bw, y + fs), f.color, 3.0f);
+		if (hot)
+			dl->AddRect(ImVec2(x - 1, y), ImVec2(x + bw + 1, y + fs + 1), col(ImGuiCol_Text), 3.0f);
 		const ImVec2 ms = ImGui::CalcTextSize(f.mark);
-		dl->AddText(ImVec2(pos.x + fs * 0.2f + (bw - ms.x) * 0.5f, y), IM_COL32(20, 20, 20, 255), f.mark);
-		dl->AddText(ImVec2(pos.x + fs * 1.5f, y), hot ? col(ImGuiCol_SliderGrabActive) : col(ImGuiCol_Text), name.c_str());
+		dl->AddText(ImVec2(x + (bw - ms.x) * 0.5f, y), IM_COL32(20, 20, 20, 255), f.mark);
+		if (names)
+			dl->AddText(ImVec2(x + bw + fs * 0.35f, y), hot ? col(ImGuiCol_SliderGrabActive) : col(ImGuiCol_Text), name.c_str());
+		x += item_w;
 	}
 	// 落とせる欄を光らせる
 	if (cell_hovered && ImGui::GetDragDropPayload() && ImGui::GetDragDropPayload()->IsDataType(DRAG_FX))
@@ -1049,39 +1062,43 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 
 	// ---- 鍵盤。128 鍵を全部並べる
 	ImGui::TableNextColumn();
-	{
-		const ImVec2 pos = ImGui::GetCursorScreenPos();
-		const float w = ImGui::GetContentRegionAvail().x;
-		// 押すと鳴らす（左でも右でも）。押したまま横に動かすと鍵が替わる。離すとノートオフ。
-		// 送り先はこのパートの受信チャンネル（口 B なら口 B へ）
-		ImGui::InvisibleButton("##keys", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-		const bool down = ImGui::IsItemActive() && slot >= 0 &&
-		                  (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right));
-		int vel = 100;
-		const int want = down ? key_at(pos, w, h, ImGui::GetIO().MousePos, vel) : -1;
-		if (want != m_playing[part]) {
-			auto send = [&](const u8 msg[3]) {
-				br.send_port(m_playing_slot[part] / 16, msg, 3);
-			};
-			if (m_playing[part] >= 0) {
-				const u8 off[3] = { u8(0x80 | (m_playing_slot[part] & 15)), u8(m_playing[part]), 64 };
-				send(off);
-			}
-			m_playing[part] = want;
-			if (want >= 0) {
-				m_playing_slot[part] = slot;
-				const u8 on[3] = { u8(0x90 | (slot & 15)), u8(want), u8(vel) };
-				send(on);
-			}
-		}
-		if (ImGui::IsItemHovered() && !down && slot >= 0)
-			ImGui::SetItemTooltip("押すと鳴らす（左右どちらのボタンでも）。下ほど強く");
-		draw_keys(dl, pos, w, h, [&](int note) -> ImU32 {
-			return slot >= 0 && ((ram.notes[slot][note >> 6] >> (note & 63)) & 1) ? NOTE_ON : 0;
-		});
-	}
+	keys_cell(part, slot, ram, br, ImGui::GetContentRegionAvail().x, h);
 
 	ImGui::PopID();
+}
+
+
+// 1 パートの鍵盤。押さえている鍵が光り、押すと鳴らす（左でも右でも）。押したまま横に動かすと鍵が替わる。
+// 離すとノートオフ。送り先はこのパートの受信チャンネル（slot = 口 × 16 + ch。口 B なら口 B へ）
+void overview::keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h)
+{
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##keys", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+	const bool down = ImGui::IsItemActive() && slot >= 0 &&
+	                  (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right));
+	int vel = 100;
+	const int want = down ? key_at(pos, w, h, ImGui::GetIO().MousePos, vel) : -1;
+	if (want != m_playing[part]) {
+		auto send = [&](const u8 msg[3]) {
+			br.send_port(m_playing_slot[part] / 16, msg, 3);
+		};
+		if (m_playing[part] >= 0) {
+			const u8 off[3] = { u8(0x80 | (m_playing_slot[part] & 15)), u8(m_playing[part]), 64 };
+			send(off);
+		}
+		m_playing[part] = want;
+		if (want >= 0) {
+			m_playing_slot[part] = slot;
+			const u8 on[3] = { u8(0x90 | (slot & 15)), u8(want), u8(vel) };
+			send(on);
+		}
+	}
+	if (ImGui::IsItemHovered() && !down && slot >= 0)
+		ImGui::SetItemTooltip("押すと鳴らす（左右どちらのボタンでも）。下ほど強く");
+	draw_keys(dl, pos, w, h, [&](int note) -> ImU32 {
+		return slot >= 0 && ((ram.notes[slot][note >> 6] >> (note & 63)) & 1) ? NOTE_ON : 0;
+	});
 }
 
 
@@ -1345,6 +1362,67 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 }
 
 
+// パートの音色の窓の上のペイン。1 行目に掛かっているエフェクト（名前付き）、
+// 2 行目に VOL〜HOLD と VAR〜REV の棒（一覧と同じく触れる）と、このパートの鍵盤
+void overview::part_strip(int part, xg::model &m, const xg_snapshot &ram, bridge &br)
+{
+	m_wheel_taken = false;
+	const float fs = ImGui::GetFontSize();
+	const float h = fs * 2.3f;
+	const ImGuiStyle &st = ImGui::GetStyle();
+	ImGui::PushID("strip");
+	ImGui::PushID(part);
+
+	// ---- 1 行目: エフェクト
+	ImGui::AlignTextToFramePadding();
+	ImGui::TextDisabled("エフェクト");
+	help_tip("INS");
+	ImGui::SameLine();
+	{
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + st.FramePadding.y - fs * 0.1f));
+		ins_cell(part, m, br, fs * 1.25f, true);
+	}
+
+	// ---- 2 行目: 見出しと棒、右に鍵盤
+	static const char *const LEFT[]  = { "VOL", "EXP", "PAN", "P.BEND", "MOD", "HOLD" };
+	static const char *const RIGHT[] = { "VAR", "CHO", "REV" };
+	const float cw = fs * 4.2f;                   // 見出し（P.BEND）が隣とくっつかない幅
+	const float gap = fs * 0.8f;
+	const float label_h = ImGui::GetTextLineHeight();
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	float x = origin.x;
+	auto one = [&](const char *title) {
+		ImGui::SetCursorScreenPos(ImVec2(x, origin.y));
+		ImGui::TextDisabled("%s", title);
+		help_tip(title);
+		ImGui::SetCursorScreenPos(ImVec2(x, origin.y + label_h));
+		cell(column_of(title), part, m, ram, br, cw - fs * 0.15f, h);
+		x += cw;
+	};
+	for (const char *t : LEFT)
+		one(t);
+	x += gap;
+	for (const char *t : RIGHT)
+		one(t);
+	x += gap;
+
+	// 鍵盤。受信チャンネルから見張りの口×チャンネル（一覧でミュートしていても、この窓は受信チャンネルのまま）
+	int rcv = 127;
+	m.get(P("part.rcv_channel"), part, rcv);
+	const int slot = rcv >= 0 && rcv < PARTS ? rcv : -1;
+	const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+	ImGui::SetCursorScreenPos(ImVec2(x, origin.y));
+	ImGui::TextDisabled("鍵盤（押すと鳴る）");
+	ImGui::SetCursorScreenPos(ImVec2(x, origin.y + label_h));
+	keys_cell(part, slot, ram, br, std::max(fs * 8.0f, right - x), h);
+
+	ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + label_h + h));
+	ImGui::Dummy(ImVec2(0, 0));
+	ImGui::PopID();
+	ImGui::PopID();
+}
+
 void overview::select_part(int part)
 {
 	m_part = part;
@@ -1586,7 +1664,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 		ImGui::TableSetupColumn("VEL", ImGuiTableColumnFlags_WidthFixed, fs * 2.2f);
 		for (const column &c : COLUMNS)
 			ImGui::TableSetupColumn(c.title, ImGuiTableColumnFlags_WidthFixed,
-			                        wide(c.from) ? fs * 4.5f : c.from == src::ins ? fs * 8.5f : fs * 3.4f);
+			                        wide(c.from) ? fs * 3.6f : c.from == src::ins ? fs * 6.2f : fs * 3.4f);
 		ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthStretch);   // 見出しは要らない
 		headers_with_help(NCOLS + 3);
 
