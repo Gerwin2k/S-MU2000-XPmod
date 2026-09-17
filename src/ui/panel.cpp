@@ -794,9 +794,12 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 			if (const svg_art *pic = m_lay.plg_art.pick(on, false)) {
 				const int r = int(6 * m_scale);
 				pic->draw(dc, RECT{ c.x - r, c.y - r, c.x + r, c.y + r });
-			} else
-				disc(dc, c.x, c.y, int(5 * m_scale),
-				     on ? LED_ON : RGB(64, 62, 52), RGB(110, 106, 92), 1);
+			} else {
+				// 実機の表示灯は四角
+				const int r = int(4 * m_scale);
+				round_box(dc, RECT{ c.x - r, c.y - r, c.x + r, c.y + r },
+				          on ? LED_ON : RGB(64, 62, 52), RGB(110, 106, 92), std::max(1, int(m_scale)));
+			}
 			text_in(dc, scale(px - 22, m_lay.plg[2] + 7, 44, 12), plg[i], PANEL_INK,
 			        m_font_small, DT_CENTER | DT_TOP | DT_SINGLELINE);
 		}

@@ -131,9 +131,11 @@ art 0 0 1000 385 "mu2000-mame.svg"
 読めるのは要るぶんだけ。
 
 * `<path d="…">` の `M L H V C Z`（大文字小文字とも）
+* `<rect>`（`rx` `ry` の角の丸みも）、`<circle>`、`<ellipse>`、`<polygon>`、`<polyline>`
 * `transform` の `translate(…)` と `matrix(…)`
 * `style` の `fill` `stroke` `stroke-width`
 
+形は書いてある順に重ねる。`<!-- -->` の中は読まない（古い形を残しておける）。
 弧（`A`）、二次ベジエ（`Q S T`）、勾配、文字、`<image>` は読まない。
 **曲線は読み込むときに折れ線にする**ので、窓を大きくしても粗くならない。
 点線（`stroke-dasharray`）は実線になる。
