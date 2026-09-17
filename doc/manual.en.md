@@ -149,6 +149,7 @@ It works like the real front panel; the LCD shows exactly what the firmware writ
 | `F2` `F3` | Editor window, list window |
 
 SmartMedia cards are PC files (`.img`); `tools/smcard.py` copies WAV files in and out.
+**Sampling — recording through A/D INPUT and playing it back over MIDI — is walked through in [sampling.md](sampling.md)** (Japanese).
 The panel artwork (positions, colours, SVG art) can be changed without rebuilding ([panel-editing.md](panel-editing.md)).
 More about the screens: [gui.md](gui.md).
 
