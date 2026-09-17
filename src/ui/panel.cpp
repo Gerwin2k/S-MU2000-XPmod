@@ -872,8 +872,10 @@ void panel::paint_front(HDC dc, const snapshot &s, u64 pressed, double volume,
 	draw_wheel(dc, m_wheel_angle);
 	draw_volume(dc, volume);
 
+	// 状態の行は本体の一番下（body_h の内側）に載るので、ボタンの名前と同じ濃い色で書く。
+	// 前は暗い帯向けの薄い灰色で、本体の地の色に溶けて読めなかった
 	if (status && status[0])
-		text_in(dc, m_status, status, RGB(170, 174, 180), m_font_small,
+		text_in(dc, m_status, status, PANEL_INK, m_font_small,
 		        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 	text_in(dc, m_hint,
 	        "大きなダイヤルはホイールで回す ／ ボタンはクリック ／ "
