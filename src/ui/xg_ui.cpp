@@ -359,7 +359,8 @@ void audition_start(int part, int msb, xg::model &m, bridge &br)
 		return;
 	audition &a = g_audition;
 	a.slot = rcv;
-	a.note = msb == 127 ? 38 : 60;         // ドラムキットはスネア、ほかは C4
+	// 鍵盤の右クリックで決めた鍵。決まっていなければドラムキットはスネア、ほかは C3（60）
+	a.note = audition_note() >= 0 ? audition_note() : msb == 127 ? 38 : 60;
 	const double t = now_seconds();
 	a.on_at = t + 0.06;
 	a.off_at = a.on_at + 1.0;
@@ -855,6 +856,7 @@ int   g_lang = 0;
 float g_zoom = 0.625f;                 // 一覧の表示の大きさ
 float g_shapes_zoom = 0.6f;            // パートの音色の窓の表示の大きさ
 float g_master_zoom = 0.8f;            // マスターの窓の表示の大きさ
+int   g_audition_note = -1;            // 試聴で鳴らす鍵（-1 は決まっていない）
 bool  g_loaded = false;
 
 // Windows: %LOCALAPPDATA%\S-MU2000\editor.ini -- the same place gui.ini lives
@@ -881,6 +883,8 @@ void load_settings()
 			g_zoom = std::clamp(float(std::atof(line + 14)), 0.5f, 1.5f);
 		else if (!std::strncmp(line, "shapes_zoom=", 12))
 			g_shapes_zoom = std::clamp(float(std::atof(line + 12)), 0.4f, 1.5f);
+		else if (!std::strncmp(line, "audition_note=", 14))
+			g_audition_note = std::clamp(std::atoi(line + 14), -1, 127);
 		else if (!std::strncmp(line, "master_zoom=", 12))
 			g_master_zoom = std::clamp(float(std::atof(line + 12)), 0.4f, 1.5f);
 		else if (!std::strncmp(line, "lang=", 5))
@@ -898,8 +902,8 @@ void save_settings()
 		return;
 	smu2000::ensure_dir(path.substr(0, path.find_last_of("\\/")));
 	if (FILE *f = std::fopen(path.c_str(), "wb")) {
-		std::fprintf(f, "help=%d\nlang=%s\noverview_zoom=%.3f\nshapes_zoom=%.3f\nmaster_zoom=%.3f\n",
-		             g_help ? 1 : 0, LANGS[g_lang].code, g_zoom, g_shapes_zoom, g_master_zoom);
+		std::fprintf(f, "help=%d\nlang=%s\noverview_zoom=%.3f\nshapes_zoom=%.3f\nmaster_zoom=%.3f\naudition_note=%d\n",
+		             g_help ? 1 : 0, LANGS[g_lang].code, g_zoom, g_shapes_zoom, g_master_zoom, g_audition_note);
 		std::fclose(f);
 	}
 }
@@ -954,6 +958,22 @@ void set_shapes_zoom(float zoom)
 	const float z = std::clamp(zoom, 0.4f, 1.5f);
 	if (z != g_shapes_zoom) {
 		g_shapes_zoom = z;
+		save_settings();
+	}
+}
+
+int audition_note()
+{
+	ensure_loaded();
+	return g_audition_note;
+}
+
+void set_audition_note(int note)
+{
+	ensure_loaded();
+	note = std::clamp(note, -1, 127);
+	if (note != g_audition_note) {
+		g_audition_note = note;
 		save_settings();
 	}
 }

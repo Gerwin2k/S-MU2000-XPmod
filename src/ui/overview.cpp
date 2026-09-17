@@ -73,6 +73,20 @@ int key_at(ImVec2 pos, float w, float h, ImVec2 at, int &vel)
 	return -1;
 }
 
+// 鍵の横の範囲（白鍵なら白鍵の幅、黒鍵なら黒鍵の幅）と、下の端
+void key_span(ImVec2 pos, float w, float h, int note, float &x0, float &x1, float &bottom)
+{
+	const float fs = ImGui::GetFontSize();
+	const float pad = fs * 0.2f;
+	const float top = pos.y + pad;
+	static const bool BLACK[12] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
+	static const float WHITE_POS[12] = { 0, 0.6f, 1, 1.6f, 2, 3, 3.6f, 4, 4.6f, 5, 5.6f, 6 };
+	const float kw = (w - pad * 2) / 75;
+	x0 = pos.x + pad + (note / 12 * 7 + WHITE_POS[note % 12]) * kw;
+	x1 = x0 + (BLACK[note % 12] ? kw * 0.8f : kw - 1);
+	bottom = BLACK[note % 12] ? top + (pos.y + h - pad - top) * 0.6f : pos.y + h - pad;
+}
+
 // 128 鍵の鍵盤。color は鍵ごとの色（0 なら押さえていない）
 template <typename F>
 void draw_keys(ImDrawList *dl, ImVec2 pos, float w, float h, F color)
@@ -1072,13 +1086,21 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 
 // 1 パートの鍵盤。押さえている鍵が光り、押すと鳴らす（左でも右でも）。押したまま横に動かすと鍵が替わる。
 // 離すとノートオフ。送り先はこのパートの受信チャンネル（slot = 口 × 16 + ch。口 B なら口 B へ）
-void overview::keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h)
+void overview::keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h,
+                         bool marker, int pc_low)
 {
 	ImDrawList *dl = ImGui::GetWindowDrawList();
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
 	ImGui::InvisibleButton("##keys", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+	// 目印を置く窓では、右クリックは試聴の鍵を決めるだけ（鳴らさない）
+	if (marker && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+		int dummy = 0;
+		const int note = key_at(pos, w, h, ImGui::GetIO().MousePos, dummy);
+		if (note >= 0)
+			set_audition_note(note);
+	}
 	const bool down = ImGui::IsItemActive() && slot >= 0 &&
-	                  (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsMouseDown(ImGuiMouseButton_Right));
+	                  (ImGui::IsMouseDown(ImGuiMouseButton_Left) || (!marker && ImGui::IsMouseDown(ImGuiMouseButton_Right)));
 	int vel = 100;
 	const int want = down ? key_at(pos, w, h, ImGui::GetIO().MousePos, vel) : -1;
 	if (want != m_playing[part]) {
@@ -1096,11 +1118,124 @@ void overview::keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br,
 			send(on);
 		}
 	}
-	if (ImGui::IsItemHovered() && !down && slot >= 0)
-		ImGui::SetItemTooltip("押すと鳴らす（左右どちらのボタンでも）。下ほど強く");
+	if (ImGui::IsItemHovered() && !down && slot >= 0) {
+		if (marker)
+			ImGui::SetItemTooltip("左クリックで鳴らす（下ほど強く）。右クリックで、音色を替えたときに試聴で鳴らす鍵を決める\n"
+			                      "PC のキーボードでも弾ける: A W S E D F T G Y H U J K O L P ; が C から（Z / X でオクターブ）");
+		else
+			ImGui::SetItemTooltip("押すと鳴らす（左右どちらのボタンでも）。下ほど強く");
+	}
 	draw_keys(dl, pos, w, h, [&](int note) -> ImU32 {
 		return slot >= 0 && ((ram.notes[slot][note >> 6] >> (note & 63)) & 1) ? NOTE_ON : 0;
 	});
+	const float fs = ImGui::GetFontSize();
+	// PC のキーボードで弾ける範囲。鍵盤の下に細い線
+	if (pc_low >= 0) {
+		float a0, a1, ab, b0, b1, bb;
+		key_span(pos, w, h, pc_low, a0, a1, ab);
+		key_span(pos, w, h, std::min(127, pc_low + 16), b0, b1, bb);
+		const float y = pos.y + h - std::max(2.0f, fs * 0.12f);
+		dl->AddRectFilled(ImVec2(a0, y), ImVec2(b1, pos.y + h), IM_COL32(90, 170, 255, 200));
+	}
+	// 試聴の鍵の目印。鍵の下の方に丸
+	if (marker && audition_note() >= 0) {
+		float x0, x1, bottom;
+		key_span(pos, w, h, audition_note(), x0, x1, bottom);
+		const float r = std::max(2.0f, std::min((x1 - x0) * 0.45f, fs * 0.3f));
+		const ImVec2 c((x0 + x1) * 0.5f, bottom - r - fs * 0.15f);
+		dl->AddCircleFilled(c, r + 1.0f, IM_COL32(20, 20, 20, 255));
+		dl->AddCircleFilled(c, r, IM_COL32(60, 200, 120, 255));
+	}
+}
+
+void overview::mod_wheel(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h)
+{
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	ImGuiIO &io = ImGui::GetIO();
+	const float fs = ImGui::GetFontSize();
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	ImGui::InvisibleButton("##modwheel", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft);
+	const bool hovered = ImGui::IsItemHovered();
+	const bool active = ImGui::IsItemActive();
+	// 今の値。送ったばかりなら送った値（RAM の写しは 25ms ごとなので、その間は古い）
+	const int ram_value = ram.parts[part][xg::ram::PART_MOD] & 0x7f;
+	const double now = ImGui::GetTime();
+	int v = (now - m_mod_sent_at < 0.3 && m_mod_sent >= 0) ? m_mod_sent : ram_value;
+	int nv = v;
+	if (hovered && slot >= 0) {
+		ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+		if (io.MouseWheel != 0.0f)
+			nv = std::clamp(nv + (io.MouseWheel > 0 ? 1 : -1) * (io.KeyCtrl ? 10 : 2), 0, 127);
+	}
+	if (active && slot >= 0 && io.MouseDelta.y != 0.0f) {
+		// 上へ動かすと大きく。高さいっぱいで 0-127
+		const float pad = fs * 0.2f;
+		const float frac = 1.0f - (io.MousePos.y - (pos.y + pad)) / std::max(1.0f, h - pad * 2);
+		nv = std::clamp(int(std::lround(frac * 127.0f)), 0, 127);
+	}
+	if (nv != v && slot >= 0) {
+		const u8 cc[3] = { u8(0xb0 | (slot & 15)), 1, u8(nv) };
+		br.send_port(slot / 16, cc, 3);
+		m_mod_sent = nv;
+		m_mod_sent_at = now;
+		v = nv;
+	}
+	// 描く。縦の溝と、下から伸びる棒
+	const float pad = fs * 0.2f;
+	const ImVec2 a(pos.x + pad, pos.y + pad), b(pos.x + w - pad, pos.y + h - pad);
+	dl->AddRectFilled(a, b, col(hovered || active ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), 3.0f);
+	const float y = b.y - (b.y - a.y) * float(v) / 127.0f;
+	dl->AddRectFilled(ImVec2(a.x + 2, y), ImVec2(b.x - 2, b.y - 1), col(ImGuiCol_SliderGrabActive));
+	dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), col(ImGuiCol_Text), 2.0f);
+	if (hovered && !active)
+		ImGui::SetItemTooltip("モジュレーション（CC1）  %d\nホイールで回す（Ctrl で大きく）・上下にドラッグ", v);
+}
+
+void overview::pc_keys(int slot, bridge &br)
+{
+	static constexpr ImGuiKey KEYS[17] = {
+		ImGuiKey_A, ImGuiKey_W, ImGuiKey_S, ImGuiKey_E, ImGuiKey_D, ImGuiKey_F, ImGuiKey_T, ImGuiKey_G,
+		ImGuiKey_Y, ImGuiKey_H, ImGuiKey_U, ImGuiKey_J, ImGuiKey_K, ImGuiKey_O, ImGuiKey_L, ImGuiKey_P,
+		ImGuiKey_Semicolon,
+	};
+	ImGuiIO &io = ImGui::GetIO();
+	// 離したキー（窓から外れたときも ImGui がキーを離したことにする）
+	for (int i = 0; i < 17; i++) {
+		if (m_pc_note[i] >= 0 && !ImGui::IsKeyDown(KEYS[i])) {
+			const u8 off[3] = { u8(0x80 | (m_pc_slot[i] & 15)), u8(m_pc_note[i]), 64 };
+			br.send_port(m_pc_slot[i] / 16, off, 3);
+			m_pc_note[i] = -1;
+		}
+	}
+	// 文字を打っている最中（数を打つ箱など）と、Ctrl・Alt を押しているときは弾かない
+	if (io.WantTextInput || io.KeyCtrl || io.KeyAlt || slot < 0)
+		return;
+	if (ImGui::IsKeyPressed(ImGuiKey_Z, false))
+		m_pc_base = std::max(0, m_pc_base - 12);
+	if (ImGui::IsKeyPressed(ImGuiKey_X, false))
+		m_pc_base = std::min(108, m_pc_base + 12);
+	for (int i = 0; i < 17; i++) {
+		if (!ImGui::IsKeyPressed(KEYS[i], false) || m_pc_note[i] >= 0)
+			continue;
+		const int note = m_pc_base + i;
+		if (note > 127)
+			continue;
+		const u8 on[3] = { u8(0x90 | (slot & 15)), u8(note), 100 };
+		br.send_port(slot / 16, on, 3);
+		m_pc_note[i] = note;
+		m_pc_slot[i] = slot;
+	}
+}
+
+void overview::release_pc_keys(bridge &br)
+{
+	for (int i = 0; i < 17; i++) {
+		if (m_pc_note[i] < 0)
+			continue;
+		const u8 off[3] = { u8(0x80 | (m_pc_slot[i] & 15)), u8(m_pc_note[i]), 64 };
+		br.send_port(m_pc_slot[i] / 16, off, 3);
+		m_pc_note[i] = -1;
+	}
 }
 
 
@@ -1432,8 +1567,13 @@ void overview::part_strip(int part, xg::model &m, const xg_snapshot &ram, bridge
 	int rcv = 127;
 	m.get(P("part.rcv_channel"), part, rcv);
 	const int slot = rcv >= 0 && rcv < PARTS ? rcv : -1;
+	// 左の端にモジュレーションホイール、その右に鍵盤（右クリックで試聴の鍵、PC のキーボードでも弾ける）
+	const float wheel_w = fs * 1.6f;
 	ImGui::SetCursorScreenPos(ImVec2(origin.x, keys_y));
-	keys_cell(part, slot, ram, br, std::max(fs * 8.0f, right - origin.x), h);
+	mod_wheel(part, slot, ram, br, wheel_w, h);
+	ImGui::SetCursorScreenPos(ImVec2(origin.x + wheel_w + fs * 0.2f, keys_y));
+	keys_cell(part, slot, ram, br, std::max(fs * 8.0f, right - origin.x - wheel_w - fs * 0.2f), h, true, m_pc_base);
+	pc_keys(slot, br);
 
 	ImGui::SetCursorScreenPos(ImVec2(origin.x, keys_y + h));
 	ImGui::Dummy(ImVec2(0, 0));

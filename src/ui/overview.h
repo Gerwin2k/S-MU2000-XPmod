@@ -55,11 +55,23 @@ public:
 	// パートの音色の窓の上のペイン: 掛かっているエフェクト（種類の名前まで）、VOL〜HOLD と VAR〜REV の棒
 	// （一覧と同じく触れる）、このパートの鍵盤。窓を閉じたら strip_hidden で鳴らしている鍵を離す
 	void part_strip(int part, xg::model &m, const xg_snapshot &ram, bridge &br);
-	void strip_hidden(bridge &br) { release_keys(br); }
+	void strip_hidden(bridge &br)
+	{
+		release_keys(br);
+		release_pc_keys(br);
+	}
 
 private:
-	// 1 パートの鍵盤（押さえている鍵が光る。押すと鳴らす）。slot は受信の口 × 16 + ch（無ければ -1）
-	void keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h);
+	// 1 パートの鍵盤（押さえている鍵が光る。押すと鳴らす）。slot は受信の口 × 16 + ch（無ければ -1）。
+	// marker（パートの音色の窓）なら、右クリックで試聴の鍵を決め（目印を描く）、左で鳴らす。
+	// 一覧では左右どちらでも鳴らす。pc_low は PC のキーボードで弾ける範囲の下の端（-1 なら描かない）
+	void keys_cell(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h,
+	               bool marker = false, int pc_low = -1);
+	// モジュレーションホイール（CC1）。カーソルを載せてホイールか、上下にドラッグで変える
+	void mod_wheel(int part, int slot, const xg_snapshot &ram, bridge &br, float w, float h);
+	// PC のキーボードで弾く（A W S E D F T G Y H U J K O L P ; が C から、Z / X でオクターブ）
+	void pc_keys(int slot, bridge &br);
+	void release_pc_keys(bridge &br);
 	// 行を選ぶ。パートの音色の窓も同じパートに替える
 	void select_part(int part);
 	void release_keys(bridge &br);          // マウスで鳴らしている鍵を全部離す
@@ -98,6 +110,13 @@ private:
 	// 配列の初期化で -1 を並べるのは 64 個では長いので、開くときに埋める（reset_rows）
 	int    m_playing[XG_PARTS];
 	int    m_playing_slot[XG_PARTS] = {};
+	// PC のキーボードで弾いている音（キーごと。-1 は鳴らしていない）と、その口×チャンネル
+	int    m_pc_note[17] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+	int    m_pc_slot[17] = {};
+	int    m_pc_base = 60;                 // A の鍵（C3）
+	// モジュレーションホイールで送った値と時刻（RAM の写しが追いつくまではこちらを出す）
+	int    m_mod_sent = -1;
+	double m_mod_sent_at = -10.0;
 	xg::model *m_model = nullptr;     // 閉じたときに受信チャンネルを戻すため（draw で覚える）
 	bool   m_mute[XG_PARTS] = {}, m_solo[XG_PARTS] = {};
 	int    m_saved_rcv[XG_PARTS];     // ミュートで OFF にする前の受信チャンネル（-1 は消していない）

@@ -95,6 +95,10 @@ void set_master_zoom(float zoom);
 void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br);
 // 試聴で鳴らしている音を止める（窓を閉じたとき）
 void audition_stop(bridge &br);
+// 試聴で鳴らす鍵。パートの音色の窓の鍵盤を右クリックして決める（目印が付く）。
+// -1 なら決まっていない（ドラムキットはスネア、ほかは C3 = 60）。editor.ini に覚える
+int  audition_note();
+void set_audition_note(int note);
 
 // ---- 説明（ヘルプ）。見出しや名前にカーソルを当てると、何に効くのかを出す（日本語・英語）。
 // 邪魔な人もいるので、窓の上のチェックボックスで消せる。選んだ状態は
