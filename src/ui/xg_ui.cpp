@@ -7,6 +7,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -244,6 +245,70 @@ void select_voice(int part, int msb, int lsb, int prog, xg::model &m, bridge &br
 	br.send(m.set(P("part.program"), part, prog));
 }
 
+// ---- 試聴。音色を替えたら、そのパートの受信チャンネルで 1 秒だけ鳴らす
+//
+// 音色の切り替え（パラメータチェンジ）は口 A の送り口、ノートは受信チャンネルの口の送り口に乗るので、
+// 同じコマに送ると読み込む前の音色で鳴ることがある。ノートオンは少し遅らせる。
+// 送るのは画面のコマ（program_pane が描かれるたび）なので、窓を閉じたら audition_stop で止める
+struct audition {
+	int slot = -1, note = -1;          // 鳴らす先（口 × 16 + チャンネル）と鍵
+	double on_at = -1.0, off_at = -1.0;
+	bool sounding = false;
+};
+audition g_audition;
+
+double now_seconds()
+{
+	return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void audition_off(bridge &br)
+{
+	audition &a = g_audition;
+	if (a.sounding) {
+		const u8 off[3] = { u8(0x80 | (a.slot & 15)), u8(a.note), 64 };
+		br.send_port(a.slot / 16, off, 3);
+	}
+	a = audition{};
+}
+
+// 試聴を始める。受信が OFF（ミュート中など）なら鳴らさない
+void audition_start(int part, int msb, xg::model &m, bridge &br)
+{
+	audition_off(br);
+	int rcv = 127;
+	if (!m.get(P("part.rcv_channel"), part, rcv) || rcv < 0 || rcv > 63)
+		return;
+	audition &a = g_audition;
+	a.slot = rcv;
+	a.note = msb == 127 ? 38 : 60;         // ドラムキットはスネア、ほかは C4
+	const double t = now_seconds();
+	a.on_at = t + 0.06;
+	a.off_at = a.on_at + 1.0;
+}
+
+void audition_tick(bridge &br)
+{
+	audition &a = g_audition;
+	if (a.slot < 0)
+		return;
+	const double t = now_seconds();
+	if (!a.sounding && t >= a.on_at) {
+		const u8 on[3] = { u8(0x90 | (a.slot & 15)), u8(a.note), 100 };
+		br.send_port(a.slot / 16, on, 3);
+		a.sounding = true;
+	}
+	if (a.sounding && t >= a.off_at)
+		audition_off(br);
+}
+
+// 音色を替えて試聴する（音色を選ぶ面から）
+void select_and_audition(int part, int msb, int lsb, int prog, xg::model &m, bridge &br)
+{
+	select_voice(part, msb, lsb, prog, m, br);
+	audition_start(part, msb, m, br);
+}
+
 // あるプログラム番号で選べる音色（MSB/LSB の組）。同じ記録に落ちるものは最初の 1 つだけで、
 // 先頭が MSB 0 / LSB 0（その番号の基本の音色）。1 つの番号で 1 万回ほど引くので、
 // 引き方が同じ間は番号ごとに覚えておく
@@ -288,6 +353,11 @@ const std::vector<bank_choice> &bank_choices(const xg::voice_rom &vr, int mode, 
 }
 
 } // namespace
+
+void audition_stop(bridge &br)
+{
+	audition_off(br);
+}
 
 void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 {
@@ -390,6 +460,8 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 	const xg::voice_rom *vr = voices();
 	const int now_group = !known ? 0 : msb == 127 ? GROUP_DRUM : msb == 126 ? GROUP_SFX : prog / 8;
 
+	audition_tick(br);
+
 	// 今見ている分類。音色が外から変わったら追いかける
 	static int group = -1;
 	static int last_part = -1, last_seen = -1;
@@ -412,8 +484,19 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 			std::snprintf(label, sizeof(label), "%s%s##g%d", name, known && g == now_group ? " ●" : "", g);
 			if (g == GROUP_DRUM)
 				ImGui::Separator();
-			if (ImGui::Selectable(label, g == group))
+			// 今見ているのと違う分類を押したら、その分類の先頭の音色（キットなら先頭のキット）に替える
+			if (ImGui::Selectable(label, g == group) && g != group) {
 				group = g;
+				if (g < GROUP_DRUM) {
+					select_and_audition(part, 0, 0, g * 8, m, br);
+				} else {
+					const int kmsb = g == GROUP_DRUM ? 127 : 126;
+					int first = 0;
+					while (vr && first < 127 && vr->kit_name(kmsb, first).empty())
+						first++;
+					select_and_audition(part, kmsb, 0, first, m, br);
+				}
+			}
 		}
 	}
 	ImGui::EndChild();
@@ -440,7 +523,7 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 				char label[48];
 				std::snprintf(label, sizeof(label), "%3d %s", i + 1, vr ? kit.c_str() : "Kit");
 				if (ImGui::Selectable(label, known && msb == kit_msb && i == prog))
-					select_voice(part, kit_msb, 0, i, m, br);
+					select_and_audition(part, kit_msb, 0, i, m, br);
 			}
 		} else {
 			for (int i = group * 8; i < group * 8 + 8; i++) {
@@ -454,7 +537,7 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 				std::snprintf(label, sizeof(label), "%3d %s", i + 1, base.c_str());
 				const bool current = known && msb < 126 && i == prog;
 				if (ImGui::Selectable(label, current))
-					select_voice(part, 0, 0, i, m, br);
+					select_and_audition(part, 0, 0, i, m, br);
 			}
 		}
 	}
@@ -468,7 +551,7 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 				char item[72];
 				std::snprintf(item, sizeof(item), "%s  %d/%d", c.name.c_str(), c.msb, c.lsb);
 				if (ImGui::Selectable(item, known && c.msb == msb && c.lsb == lsb))
-					select_voice(part, c.msb, c.lsb, prog, m, br);
+					select_and_audition(part, c.msb, c.lsb, prog, m, br);
 			}
 		} else if (known && msb >= 126) {
 			ImGui::TextDisabled("キットにはバンク違いが無い");

@@ -25,6 +25,8 @@ public:
 	int default_width() const override  { return 880; }
 	int default_height() const override { return 420; }
 	void draw(xg::model &m, const xg_snapshot &ram, bridge &br) override;
+	// 窓を閉じたら、試聴で鳴らしている音を止める
+	void hidden(bridge &br) override { xgui::audition_stop(br); }
 };
 
 } // namespace ui

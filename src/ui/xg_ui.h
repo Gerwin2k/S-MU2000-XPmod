@@ -74,9 +74,13 @@ void set_overview_zoom(float zoom);
 float &shapes_zoom();
 void set_shapes_zoom(float zoom);
 
-// 出しっぱなしで音色を選ぶ面。分類・音色・バンクの 3 つの並びを縦に出す。
-// 押すとその場でプログラムチェンジを送るので、続けて選べる（program_menu の常設版）
+// 出しっぱなしで音色を選ぶ面。左に分類、右の上に音色、右の下にバンク違い。
+// 押すとその場でプログラムチェンジを送るので、続けて選べる（program_menu の常設版）。
+// 今見ているのと違う分類を押すと、その分類の先頭の音色（キットなら先頭のキット）に替える。
+// 音色を替えたら、そのパートで 1 秒だけ音を鳴らして聴かせる
 void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br);
+// 試聴で鳴らしている音を止める（窓を閉じたとき）
+void audition_stop(bridge &br);
 
 // ---- 説明（ヘルプ）。見出しや名前にカーソルを当てると、何に効くのかを出す（日本語・英語）。
 // 邪魔な人もいるので、窓の上のチェックボックスで消せる。選んだ状態は
