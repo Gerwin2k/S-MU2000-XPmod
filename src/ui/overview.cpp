@@ -1434,6 +1434,105 @@ void overview::hidden(bridge &br)
 }
 
 
+// 上の帯の右端の、同時発音数と CPU の負荷。数字の後ろに棒を敷く。
+// 演奏中に桁が変わっても文字が動かないよう、数字は桁数ぶんの幅の枠に右寄せで置く
+// （0-9 のうち一番広い字の幅 × 桁数。字の幅が違う書体でも位置が揺れない）
+void overview::meters(bridge &br)
+{
+	snapshot s;
+	br.read(s);
+	const int master = s.voices_master, slave = s.voices_slave, total = master + slave;
+	const float cpu = br.cpu();
+
+	float dw = 0.0f;
+	for (char c = '0'; c <= '9'; c++) {
+		const char d[2] = { c, 0 };
+		dw = std::max(dw, ImGui::CalcTextSize(d).x);
+	}
+	// 部品: 文字そのもの（digits == 0）か、digits 桁の枠に右寄せした数
+	struct piece { const char *text; int value; int digits; };
+	auto width = [&](std::initializer_list<piece> ps) {
+		float w = 0.0f;
+		for (const piece &q : ps)
+			w += q.digits ? dw * float(q.digits) : ImGui::CalcTextSize(q.text).x;
+		return w;
+	};
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	auto put = [&](float x, float y, std::initializer_list<piece> ps) {
+		const ImU32 ink = col(ImGuiCol_Text);
+		for (const piece &q : ps) {
+			if (!q.digits) {
+				dl->AddText(ImVec2(x, y), ink, q.text);
+				x += ImGui::CalcTextSize(q.text).x;
+				continue;
+			}
+			char n[16];
+			std::snprintf(n, sizeof(n), "%d", q.value);
+			const float slot = dw * float(q.digits);
+			dl->AddText(ImVec2(x + slot - ImGui::CalcTextSize(n).x, y), ink, n);
+			x += slot;
+		}
+	};
+
+	const std::initializer_list<piece> voices = {
+		{ "発音 ", 0, 0 }, { nullptr, total, 3 }, { "/128  (M:", 0, 0 }, { nullptr, master, 2 },
+		{ ", S:", 0, 0 }, { nullptr, slave, 2 }, { ")", 0, 0 },
+	};
+	const int cpu_pct = cpu >= 0.0f ? int(std::lround(cpu)) : 0;
+	const std::initializer_list<piece> load = { { "CPU ", 0, 0 }, { nullptr, cpu_pct, 3 }, { "%", 0, 0 } };
+
+	const float fs = ImGui::GetFontSize();
+	const float pad = fs * 0.5f, gap = fs * 0.8f;
+	const float vw = width(voices) + pad * 2.0f;
+	const float cw = cpu >= 0.0f ? width(load) + pad * 2.0f : 0.0f;
+	const float all = vw + (cpu >= 0.0f ? gap + cw : 0.0f);
+	const float h = ImGui::GetFrameHeight();
+
+	ImGui::SameLine(std::max(ImGui::GetCursorPosX() + fs, ImGui::GetWindowContentRegionMax().x - all));
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	const float ty = pos.y + (h - fs) * 0.5f;
+	// 枠は角を丸める。中の棒は、枠の端に着いている側だけ枠に合わせて丸め、伸びる先の端は四角いまま
+	const float round = fs * 0.25f;
+	auto bar = [&](ImVec2 a, ImVec2 b, ImU32 c, bool at_left, bool at_right) {
+		const ImDrawFlags corners = (at_left ? ImDrawFlags_RoundCornersLeft : 0) | (at_right ? ImDrawFlags_RoundCornersRight : 0);
+		dl->AddRectFilled(a, b, c, corners ? round : 0.0f, corners ? corners : ImDrawFlags_RoundCornersNone);
+	};
+
+	// 発音数の棒。マスタの分とスレーブの分を色を分けて積む（全体が 128）
+	{
+		const ImVec2 p0 = pos, p1(pos.x + vw, pos.y + h);
+		dl->AddRectFilled(p0, p1, col(ImGuiCol_FrameBg), round);
+		const float xm = p0.x + vw * float(master) / 128.0f;
+		const float xs = xm + vw * float(slave) / 128.0f;
+		if (master)
+			bar(p0, ImVec2(xm, p1.y), IM_COL32(66, 120, 200, 200), true, total >= 128 && !slave);
+		if (slave)
+			bar(ImVec2(xm, p0.y), ImVec2(std::min(xs, p1.x), p1.y), IM_COL32(210, 130, 50, 200), !master, total >= 128);
+		put(p0.x + pad, ty, voices);
+		ImGui::InvisibleButton("##voices", ImVec2(vw, h));
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("発音: 鳴っている声の数（離して消え切るまでを含む）。1 音で 2 つ以上の声を使う音色もある\n"
+			                  "M は SWP30 のマスタ（64 まで、青）、S はスレーブ（64 まで、橙）。マスタが埋まるとスレーブに回る");
+	}
+
+	// CPU の棒。0-100%。重くなるほど黄、赤にする
+	if (cpu >= 0.0f) {
+		ImGui::SameLine(0.0f, gap);
+		const ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + cw, p0.y + h);
+		dl->AddRectFilled(p0, p1, col(ImGuiCol_FrameBg), round);
+		const float f = std::clamp(cpu / 100.0f, 0.0f, 1.0f);
+		const ImU32 fill = cpu < 60.0f ? IM_COL32(60, 150, 90, 200) : cpu < 85.0f ? IM_COL32(190, 160, 40, 210)
+		                                                                        : IM_COL32(210, 60, 50, 220);
+		if (f > 0.0f)
+			bar(p0, ImVec2(p0.x + cw * f, p1.y), fill, true, f >= 1.0f);
+		put(p0.x + pad, ty, load);
+		ImGui::InvisibleButton("##cpu", ImVec2(cw, h));
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("CPU: 音声の処理にかかっている時間の、締め切りに対する割合（100%% を越えると音が途切れる）");
+	}
+}
+
+
 void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 {
 	m_wheel_taken = false;
@@ -1468,26 +1567,7 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	// 同時発音数と CPU の負荷は右端へ。発音数は SWP30 2 個の声のスロット（64 ずつ、合わせて 128）のうち鳴っているもの。
 	// firmware はマスタの 64 から使い、埋まるとスレーブに回す（112 音を重ねるとマスタ 64 + スレーブ 48 になった）。
 	// CPU は gui が音声を回しているときだけ出す（プラグインではホストの持ち物なので出さない）
-	{
-		snapshot s;
-		br.read(s);
-		const float cpu = br.cpu();
-		char voices[24], text[64];
-		std::snprintf(voices, sizeof(voices), "%3d/128", s.voices_master + s.voices_slave);
-		if (cpu >= 0.0f)
-			std::snprintf(text, sizeof(text), "発音 %s   CPU %3.0f%%", voices, cpu);
-		else
-			std::snprintf(text, sizeof(text), "発音 %s", voices);
-		const float tw = ImGui::CalcTextSize(text).x;
-		ImGui::SameLine(std::max(ImGui::GetCursorPosX() + ImGui::GetFontSize(),
-		                         ImGui::GetWindowContentRegionMax().x - tw));
-		ImGui::TextUnformatted(text);
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("発音: 鳴っている声の数（離して消え切るまでを含む）。1 音で 2 つ以上の声を使う音色もある\n"
-			                  "SWP30 のマスタ %d / 64、スレーブ %d / 64（マスタが埋まるとスレーブに回る）%s",
-			                  s.voices_master, s.voices_slave,
-			                  cpu >= 0.0f ? "\nCPU: 音声の処理にかかっている時間の、締め切りに対する割合" : "");
-	}
+	meters(br);
 
 	ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * zoom);
 	const float fs = ImGui::GetFontSize();
