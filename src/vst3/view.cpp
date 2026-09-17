@@ -296,10 +296,15 @@ void plug_view::mouse_down(int x, int y)
 
 void plug_view::mouse_right(int x, int y)
 {
-	// The same menu as a left click. A right click anywhere else is not this
-	// view's business (the GUI front end opens its own settings menu there)
-	if (card_slot_at(x, y) && m_window)
+	if (!m_window)
+		return;
+	// The card slot answers both buttons with its menu. Anywhere else the
+	// window is offered the click instead (the GUI front end opens its own
+	// settings menu there)
+	if (card_slot_at(x, y))
 		m_window->card_menu(x, y);
+	else
+		m_window->panel_menu(x, y);
 }
 
 void plug_view::mouse_drag(int x, int y) { m_impl->panel.drag(x, y, m_engine.panel()); }
@@ -321,6 +326,10 @@ void plug_view::key(int code, bool down)
 }
 
 void plug_view::focus_lost() { m_engine.panel().release_all(); }
+
+// The window has no logger of its own, and what it wants to record is about the
+// host rather than the panel -- see the click note in view_mac.mm
+void plug_view::log_line(const char *text) { m_engine.log_line(text); }
 
 
 // ---- SmartMedia (the card slot)

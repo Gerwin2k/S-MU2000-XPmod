@@ -90,6 +90,11 @@ public:
 	// 鳴らした覚えのあるチャンネルだけに絞る
 	void all_notes_off(const uint16_t *mask, int ports);
 
+	// MIDI OUT. Takes what the firmware sent out of the hardware OUT jack
+	// (replies to XG queries and the like). Call from the same thread as
+	// fill(), after fill(). Returns bytes written into dst (0 when empty)
+	size_t midi_out(uint8_t *dst, size_t max);
+
 	// n サンプルぶん作る。左右は別々の配列（VST3 はそういう渡し方をする）。
 	// in_l / in_r はホストの周波数で n サンプルぶんの A/D INPUT（無ければ nullptr）
 	void fill(float *left, float *right, int n, const float *in_l = nullptr, const float *in_r = nullptr);
@@ -210,11 +215,24 @@ private:
 	ui::bridge m_bridge;
 	ui::driver m_drv;
 
+	// MIDI OUT mirror. pump_out() inside fill() drains the machine queue
+	// first, so its echo is copied here and midi_out() reads this copy.
+	// Both run on the audio thread, so no lock is needed
+	static constexpr int TX_RING = 4096, TX_MASK = TX_RING - 1;
+	uint8_t m_tx[TX_RING] = {};
+	int     m_tx_w = 0, m_tx_r = 0;
+	void tx_push(uint8_t v);
+
 	// 起動前や、機械を他が使っている間に来た MIDI。口ごとに持つ。音声スレッドしか触らない
 	std::vector<uint8_t> m_pending[mu2000::MIDI_PORTS];
 };
 
 } // namespace vst3
+
+// This engine is not VST3-specific (no VST3 types in it).
+// AUv3 (src/auv3/) uses the same one, so alias it to spare that side writing vst3
+namespace plug = vst3;
+
 } // namespace smu2000
 
 #endif // S_MU2000_VST3_ENGINE_H
