@@ -2,6 +2,7 @@
 
 #include "master_editor.h"
 
+#include "fx_icons.h"
 #include "overview.h"
 
 #include "imgui.h"
@@ -45,7 +46,7 @@ void type_combo(const char *id, const std::vector<xg::fx_type> &types, const cha
 	const xg::param &p = P(key);
 	int type = 0;
 	const bool known = m.get(p, 0, type);
-	if (ImGui::BeginCombo(id, known ? xg::fx_name(type).c_str() : "--", ImGuiComboFlags_HeightLarge)) {
+	if (begin_fx_combo(id, known ? type : -1, ImGuiComboFlags_HeightLarge)) {
 		int chosen = 0;
 		if (fx_type_menu(types, known ? type : -1, chosen)) {
 			br.send(m.set(p, 0, chosen));

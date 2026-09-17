@@ -348,7 +348,7 @@ void fx_editor::draw(xg::model &m, const xg_snapshot &, bridge &br)
 	ImGui::TextUnformatted("種類");
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(fs * 11);
-	if (ImGui::BeginCombo("##type", has_type ? xg::fx_name(type).c_str() : "--", ImGuiComboFlags_HeightLarge)) {
+	if (begin_fx_combo("##type", has_type ? type : -1, ImGuiComboFlags_HeightLarge)) {
 		// 品書きの形（分類 → 系統 → LSB 違い）で選ぶ
 		int chosen = 0;
 		if (fx_type_menu(xg::ins_types(), has_type ? type : -1, chosen)) {

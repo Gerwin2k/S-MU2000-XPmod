@@ -2,6 +2,7 @@
 
 #include "fx_icons.h"
 
+#include "imgui_internal.h"
 #include "xg/fx_types.h"
 
 #include <algorithm>
@@ -166,6 +167,20 @@ void fx_icon_inline(int msb, ImU32 color)
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
 	ImGui::Dummy(ImVec2(h, h));
 	fx_icon(ImGui::GetWindowDrawList(), pos, h, msb, color);
+}
+
+bool begin_fx_combo(const char *id, int type, ImGuiComboFlags flags)
+{
+	const bool open = ImGui::BeginCombo(id, "", flags | ImGuiComboFlags_CustomPreview);
+	if (ImGui::BeginComboPreview()) {
+		if (type >= 0) {
+			fx_icon_inline(type >> 7, ImGui::GetColorU32(ImGuiCol_Text));
+			ImGui::SameLine(0, ImGui::GetFontSize() * 0.3f);
+		}
+		ImGui::TextUnformatted(type >= 0 ? xg::fx_name(type).c_str() : "--");
+		ImGui::EndComboPreview();
+	}
+	return open;
 }
 
 } // namespace xgui

@@ -38,6 +38,10 @@ void fx_icon(ImDrawList *dl, ImVec2 min, float size, int msb, ImU32 color);
 // 文字の行に印を置く（行の高さの正方形。カーソルは印の右へ進む）
 void fx_icon_inline(int msb, ImU32 color);
 
+// 種類を選ぶ箱。閉じているときの表示に、種類の名前と一緒に印を出す（type が負なら "--"）。
+// 開いていれば true を返すので、中身を描いて ImGui::EndCombo() を呼ぶ
+bool begin_fx_combo(const char *id, int type, ImGuiComboFlags flags = 0);
+
 } // namespace xgui
 } // namespace ui
 
