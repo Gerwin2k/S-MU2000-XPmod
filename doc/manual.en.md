@@ -25,7 +25,7 @@ Contents
 | Item | Notes |
 |---|---|
 | An MU2000 | Needed to extract the ROMs. **ROMs are not distributed**; you take them from your own unit |
-| A PC | Windows (x86-64) or macOS (Apple silicon). The whole MU2000 is emulated, so it uses real CPU (about 22% of real time on a 16-part song, Ryzen 7 9700X) |
+| A PC | Windows (x86-64) or macOS (Apple silicon). The whole MU2000 is emulated, so it uses real CPU (about 21% of real time on a 16-part song, Ryzen 7 9700X). **That share is machine-dependent** — it scales with single-core speed, so an older machine can be 2-3× that |
 | A USB cable | For extracting the wave ROM (no MIDI interface needed) |
 | A virtual MIDI cable | To drive the standalone app from a sequencer. On Windows, loopMIDI ([domino.md](domino.md)) |
 
