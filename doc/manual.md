@@ -54,6 +54,7 @@ roms/
 ## 3. 作る
 
 Windows は MSYS2 の MINGW64 環境の g++ と make、macOS は Apple の clang++ と make を使う（C++20）。
+Linux でも `make` が通るが、いまは画面の要らない道具だけ（[linux.md](linux.md)）。
 
 ```bash
 make

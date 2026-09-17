@@ -54,6 +54,7 @@ roms/
 ## 3. Building
 
 Windows uses g++ and make from the MSYS2 MINGW64 environment; macOS uses Apple clang++ and make (C++20).
+Linux builds too, but for now only the tools that need no window ([linux.md](linux.md)).
 
 ```bash
 make
