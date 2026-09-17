@@ -195,7 +195,8 @@ else ifeq ($(PLATFORM),linux)
 # Linux (issue #25). The windowed program and the plug-ins are not ported yet;
 # these need no window
 all: $(BUILD)/verify$(EXE) $(BUILD)/boot$(EXE) $(BUILD)/render$(EXE) \
-     $(BUILD)/panel$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/blocktime$(EXE)
+     $(BUILD)/panel$(EXE) $(BUILD)/statetest$(EXE) $(BUILD)/blocktime$(EXE) \
+     $(BUILD)/live$(EXE)
 else
 # macOS. vst3 and vst3probe are defined below
 all: $(BUILD)/verify$(EXE) $(BUILD)/boot$(EXE) $(BUILD)/render$(EXE) \
@@ -412,6 +413,22 @@ install-clap: $(CLAP_BIN)
 # The Audio Unit is a macOS port; nothing to build here
 au install-au au-probe check-au:
 	@echo "Audio Unit は macOS の口です。doc/porting-macos.md を見よ"
+
+else ifeq ($(PLATFORM),linux)
+
+# ---- Linux-side ports (ALSA: PCM out, sequencer in). issue #25
+#
+# The same ui:: interfaces as on the other two platforms; the shape follows the
+# macOS files, with the device handle and the worker thread inside the impl
+LINUX_IO_OBJS := $(BUILD)/src/ui/audio_out_linux.o $(BUILD)/src/ui/midi_in_linux.o
+
+$(BUILD)/live$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(LINUX_IO_OBJS) $(BUILD)/src/live.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) -lasound
+
+# The windowed program and the plug-ins are not ported to Linux yet
+gui vst3 install-vst3 probe clap install-clap au install-au au-probe check-au:
+	@echo "$@ は Linux ではまだ作れません。doc/linux.md を見よ"
 
 else # macOS
 
