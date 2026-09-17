@@ -6,6 +6,14 @@
 ```bash
 build/render.exe <rom> 曲.mid out.wav 30 --native-fx        # エフェクトだけ C++（MEG も回る）
 build/render.exe <rom> 曲.mid out.wav 30 --native-fx-full   # MEG を回さない（いちばん軽い）
+build/gui.exe    <rom> --native-fx-full                     # 窓でも同じ
+build/live.exe   <rom> --native-fx-full
+```
+
+プラグイン（VST3・CLAP・AU）は `%LOCALAPPDATA%\S-MU2000\plugin.ini` に書く。
+
+```
+native_fx=2
 ```
 
 ## 何をしているか

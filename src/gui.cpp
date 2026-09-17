@@ -1072,6 +1072,7 @@ int main(int argc, char **argv)
 	bool size_given = false;
 	bool lcd_only = false;
 	bool fast_midi = false;
+	int native_fx = 0;      // --native-fx / --native-fx-full（doc/native-dsp.md）
 	bool grid = false;
 	std::string layout_path, dump_layout, play_path;
 	bool boot_for_shot = false;
@@ -1123,6 +1124,8 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--master-window")) open_master = true;
 		else if (!std::strcmp(argv[i], "--lcd")) lcd_only = true;
 		else if (!std::strcmp(argv[i], "--fast-midi")) fast_midi = true;
+		else if (!std::strcmp(argv[i], "--native-fx")) native_fx = 1;
+		else if (!std::strcmp(argv[i], "--native-fx-full")) native_fx = 2;
 		else if (!std::strcmp(argv[i], "--usb")) usb_host = true;
 		else if (!std::strcmp(argv[i], "--host-midi")) usb_host = false;
 		else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shot_path = argv[++i];
@@ -1196,6 +1199,8 @@ int main(int argc, char **argv)
 
 	static engine eng(br, midi_ports[0]);
 	eng.mu.set_fast_midi(fast_midi);
+	if (native_fx)
+		eng.mu.set_native_fx(native_fx);
 	for (int p = 1; p < mu2000::MIDI_PORTS; p++)
 		eng.midi_p[p] = &midi_ports[p];
 	eng.mout_b = &mout_b;
