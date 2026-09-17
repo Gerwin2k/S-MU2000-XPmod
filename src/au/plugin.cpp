@@ -146,6 +146,10 @@ struct au_instance
 	std::mutex midi_mutex;
 	std::vector<msg> midi_in;
 	std::vector<msg> midi_work;
+	// Sounded channels (16 bits, the one MIDI port). Stopping sends
+	// all-sound-off + all-notes-off only there: every channel would cost
+	// 61ms of 31250bps serial per port (issue #15), same as the VST3 side
+	std::atomic<UInt16> m_sounded[1] = {};
 
 	void notify_all(AudioUnitPropertyID id, AudioUnitScope scope, AudioUnitElement element)
 	{
@@ -240,6 +244,9 @@ struct au_instance
 		std::lock_guard<std::mutex> lock(midi_mutex);
 		if (midi_in.size() >= kMidiReserveMsgs)
 			midi_in.erase(midi_in.begin());     // overflow: drop the oldest
+		// Remember the sounded channel for the stop path below
+		if (n >= 3 && (bytes[0] & 0xf0) == 0x90 && bytes[2])
+			m_sounded[0].fetch_or(UInt16(1u << (bytes[0] & 0xf)), std::memory_order_relaxed);
 		msg m;
 		m.offset = offset;
 		m.bytes.assign(bytes, bytes + n);
@@ -1059,7 +1066,11 @@ OSStatus prop_set(au_instance *au, AudioUnitPropertyID id, AudioUnitScope scope,
 		if (size < sizeof(AUPreset))
 			return kAudioUnitErr_InvalidPropertyValue;
 		param_set(au, kParamGain, 1.0f);
-		au->eng.all_notes_off();
+		{
+			uint16_t mask[1] = { au->m_sounded[0].exchange(0) };
+			if (mask[0])
+				au->eng.all_notes_off(mask, 1);
+		}
 		return noErr;
 
 	case kAudioUnitProperty_ParameterValueFromString: {
@@ -1149,6 +1160,11 @@ OSStatus au_uninitialize(void *self)
 		return kAudio_ParamError;
 	au->initialized = false;
 	au->eng.set_processing(false);
+	{
+		uint16_t mask[1] = { au->m_sounded[0].exchange(0) };
+		if (mask[0])
+			au->eng.all_notes_off(mask, 1);
+	}
 	return noErr;
 }
 
@@ -1324,7 +1340,11 @@ OSStatus au_reset(void *self, AudioUnitScope scope, AudioUnitElement element)
 		return kAudio_ParamError;
 	(void)scope;
 	(void)element;
-	au->eng.all_notes_off();
+	{
+		uint16_t mask[1] = { au->m_sounded[0].exchange(0) };
+		if (mask[0])
+			au->eng.all_notes_off(mask, 1);
+	}
 	return noErr;
 }
 
