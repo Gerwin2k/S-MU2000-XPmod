@@ -9,6 +9,9 @@
 //   入力 0    A/D INPUT。AD1 が左、AD2 が右（サンプリングと A/D の系統に入る）
 //   MIDI 入   ケーブル 0 = MIDI IN A（パート 1-16）
 //             ケーブル 1 = MIDI IN B（パート 17-32）
+//             ケーブル 2 = MIDI IN C（パート 33-48）
+//             ケーブル 3 = MIDI IN D（パート 49-64）
+//             C・D は実機では USB だけの口（engine は既定で USB 側で起動する）
 //   MIDI 出   MIDI OUT（SH7043 の SCI ch0）。firmware が送り出したもの
 //
 // VST3 は MIDI 入力 2 本と A/D INPUT までで、MIDI OUT を出していない。
@@ -39,7 +42,8 @@
 namespace {
 
 constexpr AUAudioFrameCount MAX_FRAMES = 4096;
-constexpr int PORTS = 2;
+// MIDI IN A-D。機械の口の数から取るので、増えたら付いてくる
+constexpr int PORTS = mu2000::MIDI_PORTS;
 
 // 描き出しの中で使う器。確保はここではしない（allocateRenderResources で済ませる）
 struct scratch {
@@ -272,8 +276,8 @@ void feed_ump(smu2000::plug::engine *eng, scratch *sc, const AUMIDIEventList &ev
 // MPE は実機に無い
 - (BOOL)supportsMPE { return NO; }
 
-// 実機の MIDI IN は 2 口ある。ここで 2 と言わないとホストは 1 と思い、
-// ケーブル 1（MIDI IN B）を使わない。ファイルを鳴らす種類のホストは
+// 実機の MIDI IN は 4 口ある。ここで 4 と言わないとホストは数を信じて、
+// 使わないケーブルは届かなくなる。ファイルを鳴らす種類のホストは
 // 代わりに口ごとに音源をもう 1 台開くことがある
 - (NSInteger)virtualMIDICableCount { return PORTS; }
 

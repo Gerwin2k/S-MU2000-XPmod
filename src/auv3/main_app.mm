@@ -45,6 +45,8 @@
 		         "  入力      A/D INPUT（AD1 が左、AD2 が右）\n"
 		         "  MIDI 入   ケーブル 0 = IN A（パート 1-16）\n"
 		         "            ケーブル 1 = IN B（パート 17-32）\n"
+		         "            ケーブル 2 = IN C（パート 33-48）\n"
+		         "            ケーブル 3 = IN D（パート 49-64）\n"
 		         "  MIDI 出   MIDI OUT（firmware の返事）\n\n"
 		         "AUv2（S-MU2000）とは別物として並びます。",
 		        roms.stringByDeletingLastPathComponent];

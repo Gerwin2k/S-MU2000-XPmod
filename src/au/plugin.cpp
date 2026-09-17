@@ -526,6 +526,8 @@ OSStatus render_block(au_instance *au, AudioUnitRenderActionFlags *flags,
 				}
 				done += n;
 			}
+			// MusicDeviceMIDIEvent carries no port number, so the AUv2's one
+			// stream always goes to MIDI IN A (port 0). B-D are AUv3-only.
 			if (!m.empty())
 				au->eng.midi(m.data(), m.size());
 		}

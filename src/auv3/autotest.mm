@@ -10,7 +10,7 @@
 // 見るもの:
 //   ・口の数と名前（MAIN OUT / A/D INPUT / MIDI OUT）
 //   ・ホストの標本化周波数（48000）で鳴ること＝変換器が働くこと
-//   ・MIDI IN A（ケーブル 0）と B（ケーブル 1）が別のパートに届くこと
+//   ・MIDI IN A-D（ケーブル 0-3）がパート 1・17・33・49に届くこと
 //   ・A/D INPUT に入れた音が出てくること
 //   ・MIDI OUT（firmware の返事）が受け取れること
 
@@ -203,8 +203,8 @@ int main(int argc, const char *argv[])
 			            (unsigned)[au.inputBusses objectAtIndexedSubscript:i].format.channelCount);
 		for (NSString *n in au.MIDIOutputNames)
 			std::printf("  MIDI 出   %s\n", n.UTF8String);
-		// ここが 1 だと、ホストは MIDI IN B を使わない（か、口ごとに
-		// 音源をもう 1 台開いて起動を 2 回やる）
+		// ここが 4 だと、ホストはケーブル 2・3（パート 33-64）を使わない
+		// （か、口ごとに音源をもう 1 台開いて起動を何回もやる）
 		std::printf("  MIDI 入   ケーブル %ld 本\n", (long)au.virtualMIDICableCount);
 
 		// ---- ホストの周波数を 48000 にする（MU2000 は 44100 なので変換が入る）
@@ -471,17 +471,25 @@ int main(int argc, const char *argv[])
 			return pk;
 		};
 
-		// パート 1 と 17 に、耳で分かる違う音色を入れておく。
-		// IN A の ch1 はパート 1、IN B の ch1 はパート 17 に届く決まり
+		// パート 1・17・33・49 に、耳で分かる違う音色を入れておく。
+		// IN A-D の ch1 はパート 1・17・33・49 に届く決まり
 		const uint8_t pcA[2] = { 0xC0, 0 };     // グランドピアノ
 		const uint8_t pcB[2] = { 0xC0, 19 };    // チャーチオルガン
+		const uint8_t pcC[2] = { 0xC0, 40 };    // バイオリン
+		const uint8_t pcD[2] = { 0xC0, 56 };    // トランペット
 		sched(AUEventSampleTimeImmediate, 0, 2, pcA);
 		sched(AUEventSampleTimeImmediate, 1, 2, pcB);
+		sched(AUEventSampleTimeImmediate, 2, 2, pcC);
+		sched(AUEventSampleTimeImmediate, 3, 2, pcD);
 		for (int i = 0; i < 40; i++) one_block();
 
 		const float pk_a = play(0, 60, 1.5);
 		for (int i = 0; i < 60; i++) one_block();
 		const float pk_b = play(1, 72, 1.5);
+		for (int i = 0; i < 60; i++) one_block();
+		const float pk_c = play(2, 64, 1.5);
+		for (int i = 0; i < 60; i++) one_block();
+		const float pk_d = play(3, 76, 1.5);
 		for (int i = 0; i < 60; i++) one_block();
 
 		// ---- MIDI OUT。実機は識別要求に返事をする（GM の Identity Request）
@@ -532,6 +540,10 @@ int main(int argc, const char *argv[])
 		            pk_a, pk_a > 0.0f ? "鳴った" : "**鳴らない**");
 		std::printf("MIDI IN B（ケーブル 1 → パート 17） peak %.4f  %s\n",
 		            pk_b, pk_b > 0.0f ? "鳴った" : "**鳴らない**");
+		std::printf("MIDI IN C（ケーブル 2 → パート 33） peak %.4f  %s\n",
+		            pk_c, pk_c > 0.0f ? "鳴った" : "**鳴らない**");
+		std::printf("MIDI IN D（ケーブル 3 → パート 49） peak %.4f  %s\n",
+		            pk_d, pk_d > 0.0f ? "鳴った" : "**鳴らない**");
 		std::printf("MAIN OUT   peak %.4f  rms %.5f（%zu フレーム / %.0f Hz）\n",
 		            peak, rms, rec_l.size(), HOST_RATE);
 		std::printf("A/D INPUT  引かれた回数 %d\n", pulled);
@@ -543,6 +555,7 @@ int main(int argc, const char *argv[])
 			write_wav(wav, rec_l, rec_r, HOST_RATE);
 
 		[au deallocateRenderResources];
-		return peak > 0.0f ? 0 : 2;
+		const bool all_cables = pk_a > 0.0f && pk_b > 0.0f && pk_c > 0.0f && pk_d > 0.0f;
+		return peak > 0.0f && all_cables ? 0 : 2;
 	}
 }
