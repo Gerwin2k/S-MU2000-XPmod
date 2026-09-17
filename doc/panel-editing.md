@@ -128,6 +128,9 @@ art 0 0 1000 385 "mu2000-mame.svg"
 道は `panel.txt` からの相対で探す。縦横比は保ったまま、指定した四角の
 真ん中に収める。
 
+MAME の絵を部分的に直したいときは、部品ごとに分けた `art/mame/parts/` から始めると楽
+（`tools/svgsplit.py` で作った。`art/mame/README.md`）。
+
 読めるのは要るぶんだけ。
 
 * `<path d="…">` の `M L H V C Z`（大文字小文字とも）
