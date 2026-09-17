@@ -48,8 +48,13 @@ public:
 	static void eq_cell(int part, xg::model &m, bridge &br, float w, float h, bool compact);
 	// ビブラート: 揺れの波の山をつまんで速さと深さ、平らな所の終わりで掛かり始め
 	static void vib_cell(int part, xg::model &m, bridge &br, float w, float h, bool compact);
+	// マスター EQ の 5 つの帯の特性。edit なら点をつまんで周波数とゲイン、ホイールで Q（マスターの窓）。
+	// edit でなければ描くだけ（一覧のマスターの行）
+	static void master_eq_plot(xg::model &m, bridge &br, float w, float h, bool edit);
 
 private:
+	// 行を選ぶ。パートの音色の窓も同じパートに替える
+	void select_part(int part);
 	void release_keys(bridge &br);          // マウスで鳴らしている鍵を全部離す
 	// ミュートとソロを音源に効かせる。消すパートは受信チャンネルを OFF にし（先に
 	// そのチャンネルへオールサウンドオフ）、戻すパートは覚えておいたチャンネルに戻す。
@@ -60,7 +65,7 @@ private:
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
 	// INS 列の 1 マス。右クリックで掛ける・外す・種類、印のドラッグで別のパートへ
 	void ins_cell(int part, xg::model &m, bridge &br, float h);
-	// マスター EQ の 1 マス。5 つの帯の点、ホイールで Q、右クリックで種類
+	// マスター EQ の 1 マス。見るだけで、ダブルクリックでマスターの窓
 	void master_eq_cell(xg::model &m, bridge &br, float h);
 	// 上のマスターの表。マスターボリューム、移調、リバーブ・コーラス・バリエーションの種類と戻り、
 	// インサーション 1-4 の種類と掛け先、全パートの鍵盤

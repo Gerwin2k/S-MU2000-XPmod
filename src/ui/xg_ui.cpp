@@ -2,6 +2,7 @@
 
 #include "xg_ui.h"
 
+#include "eq_curve.h"
 #include "fx_help.h"
 
 #include "imgui.h"
@@ -183,16 +184,64 @@ int  g_shape_part = 0;
 bool g_part_request = false;
 }
 
-void request_part(int part) { g_shape_part = std::clamp(part, 0, 31); g_part_request = true; }
+void request_part(int part) { g_shape_part = std::clamp(part, 0, XG_PARTS - 1); g_part_request = true; }
 bool take_part_request() { const bool r = g_part_request; g_part_request = false; return r; }
 int  shape_window_part() { return g_shape_part; }
-void set_shape_window_part(int part) { g_shape_part = std::clamp(part, 0, 31); }
+void set_shape_window_part(int part) { g_shape_part = std::clamp(part, 0, XG_PARTS - 1); }
+
+namespace {
+bool g_master_request = false;
+}
+
+void request_master() { g_master_request = true; }
+bool take_master_request() { const bool r = g_master_request; g_master_request = false; return r; }
 
 const xg::param &P(const char *key)
 {
 	const xg::param *p = xg::find(key);
 	IM_ASSERT(p);
 	return *p;
+}
+
+bool param_slider(const char *key, int part, xg::model &m, bridge &br, const char *label)
+{
+	ImGui::PushID(key);
+	const xg::param &p = P(key);
+	int v = 0;
+	if (!m.get(p, part, v)) {
+		ImGui::BeginDisabled();
+		int dummy = p.min;
+		ImGui::SliderInt(label ? label : p.label, &dummy, p.min, p.max, "--");
+		ImGui::EndDisabled();
+		ImGui::PopID();
+		return false;
+	}
+	// 書式の % は SliderInt の書式として読まれないよう重ねる
+	const bool hz = std::strstr(key, "eq") && std::strstr(key, "freq");
+	const bool q = !std::strncmp(key, "master_eq.q", 11);
+	std::string shown;
+	if (hz) {
+		shown = eq::hz_text(v) + " Hz";
+	} else if (q) {
+		char buf[16];
+		std::snprintf(buf, sizeof(buf), "%.1f", v / 10.0);
+		shown = buf;
+	} else {
+		shown = xg::format(p, v);
+	}
+	std::string text;
+	for (char c : shown) {
+		if (c == '%')
+			text += '%';
+		text += c;
+	}
+	int nv = v;
+	const bool changed = ImGui::SliderInt(label ? label : p.label, &nv, p.min, p.max, text.c_str()) && nv != v;
+	if (changed)
+		br.send(m.set(p, part, nv));
+	help_tip(key);
+	ImGui::PopID();
+	return changed;
 }
 
 std::string part_name(int part)
@@ -805,6 +854,7 @@ bool  g_help = true;
 int   g_lang = 0;
 float g_zoom = 0.625f;                 // 一覧の表示の大きさ
 float g_shapes_zoom = 0.6f;            // パートの音色の窓の表示の大きさ
+float g_master_zoom = 0.8f;            // マスターの窓の表示の大きさ
 bool  g_loaded = false;
 
 // Windows: %LOCALAPPDATA%\S-MU2000\editor.ini -- the same place gui.ini lives
@@ -831,6 +881,8 @@ void load_settings()
 			g_zoom = std::clamp(float(std::atof(line + 14)), 0.5f, 1.5f);
 		else if (!std::strncmp(line, "shapes_zoom=", 12))
 			g_shapes_zoom = std::clamp(float(std::atof(line + 12)), 0.4f, 1.5f);
+		else if (!std::strncmp(line, "master_zoom=", 12))
+			g_master_zoom = std::clamp(float(std::atof(line + 12)), 0.4f, 1.5f);
 		else if (!std::strncmp(line, "lang=", 5))
 			for (int i = 0; i < NLANG; i++)
 				if (!std::strcmp(line + 5, LANGS[i].code))
@@ -846,8 +898,8 @@ void save_settings()
 		return;
 	smu2000::ensure_dir(path.substr(0, path.find_last_of("\\/")));
 	if (FILE *f = std::fopen(path.c_str(), "wb")) {
-		std::fprintf(f, "help=%d\nlang=%s\noverview_zoom=%.3f\nshapes_zoom=%.3f\n",
-		             g_help ? 1 : 0, LANGS[g_lang].code, g_zoom, g_shapes_zoom);
+		std::fprintf(f, "help=%d\nlang=%s\noverview_zoom=%.3f\nshapes_zoom=%.3f\nmaster_zoom=%.3f\n",
+		             g_help ? 1 : 0, LANGS[g_lang].code, g_zoom, g_shapes_zoom, g_master_zoom);
 		std::fclose(f);
 	}
 }
@@ -902,6 +954,22 @@ void set_shapes_zoom(float zoom)
 	const float z = std::clamp(zoom, 0.4f, 1.5f);
 	if (z != g_shapes_zoom) {
 		g_shapes_zoom = z;
+		save_settings();
+	}
+}
+
+float &master_zoom()
+{
+	ensure_loaded();
+	return g_master_zoom;
+}
+
+void set_master_zoom(float zoom)
+{
+	ensure_loaded();
+	const float z = std::clamp(zoom, 0.4f, 1.5f);
+	if (z != g_master_zoom) {
+		g_master_zoom = z;
 		save_settings();
 	}
 }

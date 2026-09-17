@@ -36,6 +36,7 @@
 #include "ui/panel.h"
 #include "ui/fx_editor.h"
 #include "ui/overview.h"
+#include "ui/master_editor.h"
 #include "ui/part_shapes.h"
 #include "ui/pc_editor.h"
 #include "ui/pc_window.h"
@@ -79,6 +80,7 @@ struct window_state {
 	ui::pc_window list{ std::make_unique<ui::overview>() };   // 一覧（F3 か右クリック）
 	ui::pc_window fx{ std::make_unique<ui::fx_editor>() };    // インサーションの設定（一覧でダブルクリック）
 	ui::pc_window shapes{ std::make_unique<ui::part_shapes>() };   // パートの音色（一覧の絵をダブルクリック）
+	ui::pc_window master{ std::make_unique<ui::master_editor>() }; // マスター（一覧のマスターの行をダブルクリック）
 	ui::bridge *br = nullptr;
 	engine     *eng = nullptr;
 	ui::audio_out *out = nullptr;
@@ -730,12 +732,16 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			g_win.list.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 			g_win.fx.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 			g_win.shapes.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
+			g_win.master.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 			// 一覧でインサーションの欄をダブルクリックされたら、設定の窓を出す
 			if (ui::xgui::take_fx_request())
 				open_window(hwnd, g_win.fx);
 			// 一覧で VIB・FILTER・EG・EQ の絵をダブルクリックされたら、パートの音色の窓を出す
 			if (ui::xgui::take_part_request())
 				open_window(hwnd, g_win.shapes);
+			// マスターの行（MASTER の名前、MASTER EQ）をダブルクリックされたら、マスターの窓を出す
+			if (ui::xgui::take_master_request())
+				open_window(hwnd, g_win.master);
 		}
 		InvalidateRect(hwnd, nullptr, FALSE);
 		// SmartMedia に書いたものを 2 秒ごとにファイルへ書き戻す（抜いたとき・閉じたときも）
@@ -1067,6 +1073,7 @@ int main(int argc, char **argv)
 	bool open_list = false;            // 起動したら一覧も出す
 	bool open_fx = false;              // 起動したらインサーションの設定の窓も出す
 	bool open_shapes = false;          // 起動したらパートの音色の窓も出す
+	bool open_master = false;          // 起動したらマスターの窓も出す
 	int win_w = 1000, win_h = 400;   // パネルの論理寸法（1000 × 400）と同じ比
 	bool size_given = false;
 	bool lcd_only = false;
@@ -1119,6 +1126,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--list-window")) open_list = true;
 		else if (!std::strcmp(argv[i], "--fx-window")) open_fx = true;
 		else if (!std::strcmp(argv[i], "--shapes-window")) open_shapes = true;
+		else if (!std::strcmp(argv[i], "--master-window")) open_master = true;
 		else if (!std::strcmp(argv[i], "--lcd")) lcd_only = true;
 		else if (!std::strcmp(argv[i], "--fast-midi")) fast_midi = true;
 		else if (!std::strcmp(argv[i], "--usb")) usb_host = true;
@@ -1185,6 +1193,7 @@ int main(int argc, char **argv)
 			"        [--list-window] 一覧の窓も開く（窓では F3 か右クリック）\n"
 			"        [--fx-window] インサーションの設定の窓も開く（一覧でインサーションの欄をダブルクリック）\n"
 			"        [--shapes-window] パートの音色の窓も開く（一覧で VIB などの絵をダブルクリック）\n"
+			"        [--master-window] マスターの窓も開く（一覧でマスターの行をダブルクリック）\n"
 			"        gui --dump-layout panel.txt   いまの配置を書き出す\n"
 			"        gui --list\n"
 			"        gui [<rom ディレクトリ> --boot] --shot 絵.png [--size 1000x400]\n");
@@ -1318,6 +1327,8 @@ int main(int argc, char **argv)
 		open_window(hwnd, g_win.list);
 	if (open_shapes && !lcd_only)
 		open_window(hwnd, g_win.shapes);
+	if (open_master && !lcd_only)
+		open_window(hwnd, g_win.master);
 	UpdateWindow(hwnd);
 
 	// 起動は別スレッド。終わったら音を出し始める
@@ -1436,6 +1447,7 @@ int main(int argc, char **argv)
 		g_win.pc.shutdown(*g_win.br);
 		g_win.fx.shutdown(*g_win.br);
 		g_win.shapes.shutdown(*g_win.br);
+		g_win.master.shutdown(*g_win.br);
 		Sleep(100);
 	}
 

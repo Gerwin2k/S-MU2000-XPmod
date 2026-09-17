@@ -13,6 +13,7 @@
 #include "view.h"
 
 #include "ui/fx_editor.h"
+#include "ui/master_editor.h"
 #include "ui/part_shapes.h"
 #include "ui/pc_editor.h"
 #include "ui/overview.h"
@@ -117,6 +118,7 @@ private:
 	ui::pc_window m_editor{ std::make_unique<ui::pc_editor>() };
 	ui::pc_window m_fx{ std::make_unique<ui::fx_editor>() };
 	ui::pc_window m_shapes{ std::make_unique<ui::part_shapes>() };
+	ui::pc_window m_master{ std::make_unique<ui::master_editor>() };
 };
 
 bool win_window::attach(void *parent, int w, int h)
@@ -268,12 +270,16 @@ void win_window::pc_frame(::xg::model &m, const ::ui::xg_snapshot &ram, ::ui::br
 	m_editor.frame(m, ram, br);
 	m_fx.frame(m, ram, br);
 	m_shapes.frame(m, ram, br);
+	m_master.frame(m, ram, br);
 	// 一覧でインサーションの欄をダブルクリックされたら設定の窓を、
-	// VIB・FILTER・EG・EQ の絵をダブルクリックされたらパートの音色の窓を出す
+	// VIB・FILTER・EG・EQ の絵をダブルクリックされたらパートの音色の窓を、
+	// マスターの行（MASTER の名前、MASTER EQ）をダブルクリックされたらマスターの窓を出す
 	if (ui::xgui::take_fx_request())
 		open_pc(m_fx);
 	if (ui::xgui::take_part_request())
 		open_pc(m_shapes);
+	if (ui::xgui::take_master_request())
+		open_pc(m_master);
 }
 
 LRESULT win_window::handle(HWND h, UINT msg, WPARAM wp, LPARAM lp)

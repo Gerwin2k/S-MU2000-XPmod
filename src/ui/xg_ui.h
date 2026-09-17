@@ -63,8 +63,18 @@ void set_fx_window_slot(int slot);
 // ---- パートの音色の窓（VIB・FILTER・EG・EQ を大きく）を開く頼み。一覧の絵のダブルクリックから
 void request_part(int part);            // part は 0-63
 bool take_part_request();               // 頼みがあれば true（1 回だけ）
-int  shape_window_part();               // パートの音色の窓で見ているパート
+int  shape_window_part();               // パートの音色の窓で見ているパート（一覧で行を選んでも替わる）
 void set_shape_window_part(int part);
+
+// ---- マスターの窓（マスターボリューム・移調・システムエフェクトの戻り・マスター EQ）を開く頼み。
+// 一覧のマスターの行（MASTER の名前、MASTER EQ の絵）のダブルクリックから
+void request_master();
+bool take_master_request();             // 頼みがあれば true（1 回だけ）
+
+// 値の棒 1 本。表示は層の書式（xg::format）で、ダブルクリックか Ctrl+クリックで数を打てる。
+// EQ の周波数は表の番号でなく Hz、マスター EQ の Q は 10 分の 1 で出す。戻り値は「値を変えたか」。
+// label を渡すとパラメータの名前の代わりにそれを出す（"##" で始めれば名前を出さない）
+bool param_slider(const char *key, int part, xg::model &m, bridge &br, const char *label = nullptr);
 
 // ---- 一覧の表示の大きさ（文字の大きさの倍率、0.5〜1.5）。editor.ini に覚えておく
 float &overview_zoom();
@@ -73,6 +83,10 @@ void set_overview_zoom(float zoom);
 // ---- パートの音色の窓の表示の大きさ（0.4〜1.5、既定 0.6）。editor.ini に覚えておく
 float &shapes_zoom();
 void set_shapes_zoom(float zoom);
+
+// ---- マスターの窓の表示の大きさ（0.4〜1.5、既定 0.8）。editor.ini に覚えておく
+float &master_zoom();
+void set_master_zoom(float zoom);
 
 // 出しっぱなしで音色を選ぶ面。左に分類、右の上に音色、右の下にバンク違い。
 // 押すとその場でプログラムチェンジを送るので、続けて選べる（program_menu の常設版）。

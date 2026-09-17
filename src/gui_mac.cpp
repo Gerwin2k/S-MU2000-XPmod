@@ -43,6 +43,7 @@
 #include "ui/midi_out.h"
 #include "ui/overview.h"
 #include "ui/panel.h"
+#include "ui/master_editor.h"
 #include "ui/part_shapes.h"
 #include "ui/pc_editor.h"
 #include "ui/pc_window_mac.h"
@@ -309,6 +310,7 @@ public:
 	ui::pc_window list{ std::make_unique<ui::overview>() };   // overview (F3 or right-click)
 	ui::pc_window fx{ std::make_unique<ui::fx_editor>() };    // insertion settings (double-click in the overview)
 	ui::pc_window shapes{ std::make_unique<ui::part_shapes>() };  // part voice (double-click a VIB/FILTER/EG/EQ cell in the overview)
+	ui::pc_window master{ std::make_unique<ui::master_editor>() }; // master (double-click the MASTER row in the overview)
 
 	std::string layout_path;
 
@@ -324,12 +326,16 @@ public:
 		list.frame(panel.xg(), panel.ram(), br);
 		fx.frame(panel.xg(), panel.ram(), br);
 		shapes.frame(panel.xg(), panel.ram(), br);
+		master.frame(panel.xg(), panel.ram(), br);
 		// a double-click on an insertion row in the overview asks for this window
 		if (ui::xgui::take_fx_request())
 			open_editor_window(fx);
 		// a double-click on a VIB/FILTER/EG/EQ cell in the overview asks for the part voice
 		if (ui::xgui::take_part_request())
 			open_editor_window(shapes);
+		// a double-click on the MASTER name or the MASTER EQ cell asks for the master window
+		if (ui::xgui::take_master_request())
+			open_editor_window(master);
 		card_tick();
 		report_drops();
 
@@ -1379,6 +1385,7 @@ int main(int argc, char **argv)
 	gui.pc.shutdown(br);
 	gui.fx.shutdown(br);
 	gui.shapes.shutdown(br);
+	gui.master.shutdown(br);
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
 	out.stop();

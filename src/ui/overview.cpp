@@ -164,7 +164,7 @@ void overview::cell(const column &c, int part, xg::model &m, const xg_snapshot &
 				vib_cell(part, m, br, w, h, true);
 			// 小さなマスは見るだけ。ダブルクリックでパートの音色の窓に大きく出して、そこで触る
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-				m_part = part;
+				select_part(part);
 				request_part(part);
 			}
 		}
@@ -814,9 +814,8 @@ void overview::eq_cell(int part, xg::model &m, bridge &br, float w, float h, boo
 
 
 // マスター EQ の 1 マス。5 つの帯。1 と 5 は形（シェルフ／ピーク）を右クリックで選ぶ
-void overview::master_eq_cell(xg::model &m, bridge &br, float h)
+void overview::master_eq_plot(xg::model &m, bridge &br, float w, float h, bool edit)
 {
-	const float w = ImGui::GetContentRegionAvail().x;
 	int s1 = 0, s5 = 0;
 	m.get(P("master_eq.shape1"), 0, s1);
 	m.get(P("master_eq.shape5"), 0, s5);
@@ -828,25 +827,17 @@ void overview::master_eq_cell(xg::model &m, bridge &br, float h)
 		{ s5 ? band_shape::peak : band_shape::high_shelf, &P("master_eq.gain5"), &P("master_eq.freq5"), &P("master_eq.q5"), 0, 64, 52, 7, false },
 	};
 	eq_plot("meq", bands, 5, m, br, w, h,
-	        "点をつまんで、横で周波数、縦でゲイン。ホイールで幅（Q）。右クリックで種類と、両端の帯の形", true);
-	if (ImGui::BeginPopupContextItem("meqmenu", ImGuiPopupFlags_MouseButtonRight)) {
-		ImGui::TextDisabled("マスター EQ");
-		ImGui::Separator();
-		int type = 0;
-		m.get(P("master_eq.type"), 0, type);
-		const xg::param &pt = P("master_eq.type");
-		for (int t = pt.min; t <= pt.max; t++)
-			if (ImGui::MenuItem(pt.choices[t], nullptr, t == type))
-				br.send(m.set(pt, 0, t));
-		ImGui::Separator();
-		if (ImGui::MenuItem("帯 1 をピークにする", nullptr, s1 == 1))
-			br.send(m.set(P("master_eq.shape1"), 0, s1 ? 0 : 1));
-		if (ImGui::MenuItem("帯 5 をピークにする", nullptr, s5 == 1))
-			br.send(m.set(P("master_eq.shape5"), 0, s5 ? 0 : 1));
-		ImGui::Separator();
-		ImGui::TextDisabled("種類を選ぶと、firmware が 5 つの帯を\nその種類の値に書き換える");
-		ImGui::EndPopup();
-	}
+	        edit ? "点をつまんで、横で周波数、縦でゲイン。点の近くでホイールを回すと幅（Q）"
+	             : "\nダブルクリックでマスターの窓に出して触る",
+	        edit);
+}
+
+// 一覧のマスター EQ は見るだけ。ダブルクリックでマスターの窓（種類・帯の形・値もそこで）
+void overview::master_eq_cell(xg::model &m, bridge &br, float h)
+{
+	master_eq_plot(m, br, ImGui::GetContentRegionAvail().x, h, false);
+	if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+		request_master();
 }
 
 
@@ -952,10 +943,9 @@ void overview::row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, f
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 		const float w = ImGui::GetContentRegionAvail().x;
 		ImGui::SetNextItemAllowOverlap();
-		if (ImGui::InvisibleButton("##name", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight))
-			m_part = part;
+		ImGui::InvisibleButton("##name", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
-			m_part = part;
+			select_part(part);
 		if (ImGui::BeginPopupContextItem("program")) {
 			program_menu(part, m, &ram, br);
 			ImGui::EndPopup();
@@ -1291,7 +1281,13 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 	{
 		const ImVec2 pos = ImGui::GetCursorScreenPos();
 		const float w = ImGui::GetContentRegionAvail().x;
-		ImGui::Dummy(ImVec2(w, h));
+		ImGui::InvisibleButton("##mastername", ImVec2(w, h));
+		if (ImGui::IsItemHovered()) {
+			dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), col(ImGuiCol_HeaderHovered, 0.4f));
+			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+				request_master();
+			ImGui::SetItemTooltip("ダブルクリックでマスターの窓（マスターボリューム・移調・エフェクトの戻り・マスター EQ）");
+		}
 		dl->AddText(ImVec2(pos.x + fs * 0.3f, pos.y + fs * 0.1f), col(ImGuiCol_Text), "MASTER");
 		int tr = 0x40, tune = 0x400;
 		char sub[64];
@@ -1346,6 +1342,13 @@ void overview::master_pane(xg::model &m, const xg_snapshot &ram, bridge &br)
 	}
 	ImGui::PopID();
 	ImGui::EndTable();
+}
+
+
+void overview::select_part(int part)
+{
+	m_part = part;
+	set_shape_window_part(part);
 }
 
 
@@ -1487,6 +1490,12 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 			ImGui::TableNextRow(0, h);
 			row(part, m, ram, br, h);
 		}
+		// 行のどこを左クリックしても、その行を選ぶ（パートの音色の窓もそのパートに替わる）。
+		// 載っている行は前のコマのもの（0 は見出し）。品書きなどが上に出ているときは窓が載っていない扱い
+		const int hovered_row = ImGui::TableGetHoveredRow();
+		if (hovered_row >= 1 && hovered_row <= PARTS && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+		    ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+			select_part(hovered_row - 1);
 		ImGui::EndTable();
 	}
 	ImGui::PopStyleVar();
