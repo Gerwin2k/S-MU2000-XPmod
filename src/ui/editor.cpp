@@ -15,7 +15,6 @@
 #include "xg/ram.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -259,10 +258,10 @@ bool panel::press(int x, int y, bridge &br)
 		return true;
 
 	case spot_kind::wheel:
-		// 掴んで円を描くように回す（drag）。掴んだだけでは回さない
+		// 掴んで上下に動かす（drag）。掴んだだけでは回さない
 		m_held = sp;
-		m_dial_live = false;
-		dial_follow(x, y);
+		m_drag_y = y;
+		m_dial_rest = 0.0;
 		return true;
 
 	case spot_kind::volume:
@@ -320,7 +319,7 @@ bool panel::drag(int x, int y, bridge &br)
 		return false;
 
 	if (m_held->kind == spot_kind::wheel)
-		return dial_follow(x, y, &br);
+		return dial_follow(y, br);
 
 	if (m_held->kind == spot_kind::volume) {
 		// 横でも縦でも動かせるように、動いた量の大きいほうを取る。
@@ -357,54 +356,22 @@ bool panel::release(bridge &br)
 	return true;
 }
 
-// ダイヤルを掴んで回す。回した角度の分だけ目盛りを送る（1 目盛りは VALUE −/+ を 1 回押したのと同じ）。
-//
-// ゆっくり回すと 15° で 1 目盛り（ホイールの 1 目盛りで絵が回る角度と同じ）。速く回すほど 1 目盛りの角度を
-// 小さくして、最大で 4 倍の速さにする。firmware はダイヤルを加速しない（エミュで、一気に送っても送った数より
-// 多くは進まないことを確かめた）ので、速く回したときの伸びはこちらで付ける。
-// 絵のダイヤルは送った目盛りではなく、手の角度に付いて回る。中心の近くでは角度が暴れるので送らない。
-// br が無いとき（掴んだ瞬間）は、角度と時刻を覚えるだけ
-bool panel::dial_follow(int x, int y, bridge *br)
+// ダイヤルを掴んで上下に動かす。上へ動かすと +、下へ動かすと −（ホイールと同じ向き）。
+// 動かした距離に比例して目盛りを送り（1 目盛りは VALUE −/+ を 1 回押したのと同じ）、
+// 絵のダイヤルもホイールと同じく 1 目盛りで 15° 回す。1 目盛りは DIAL_PIXELS 画素（窓の大きさに合わせて伸び縮みする）
+bool panel::dial_follow(int y, bridge &br)
 {
-	const double cx = (m_wheel.left + m_wheel.right) * 0.5, cy = (m_wheel.top + m_wheel.bottom) * 0.5;
-	const double dx = x - cx, dy = y - cy;
-	const double radius = (m_wheel.right - m_wheel.left) * 0.5;
-	const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-	// 画面は y が下向きなので、atan2 の角度が増えるのが時計回り（絵の m_wheel_angle と同じ向き）
-	const double angle = std::atan2(dy, dx) * 180.0 / 3.14159265358979;
-	if (std::sqrt(dx * dx + dy * dy) < radius * 0.15) {
-		m_dial_live = false;                     // 中心の近く。出たら、そこから数え直す
+	static constexpr double DIAL_PIXELS = 4.0;
+	m_dial_rest += double(m_drag_y - y);
+	m_drag_y = y;
+	const double per = DIAL_PIXELS * m_scale;
+	const int steps = int(m_dial_rest / per);      // 0 の側へ切り捨て。余りは次へ持ち越す
+	if (!steps)
 		return false;
-	}
-	if (!m_dial_live || !br) {
-		m_dial_live = true;
-		m_dial_last = angle;
-		m_dial_time = now;
-		m_dial_rest = 0.0;
-		m_dial_draw = m_wheel_angle;
-		return false;
-	}
-	double d = angle - m_dial_last;
-	if (d > 180.0)  d -= 360.0;
-	if (d < -180.0) d += 360.0;
-	m_dial_last = angle;
-	const double dt = std::max(now - m_dial_time, 1e-3);
-	m_dial_time = now;
-	// 1 秒に 360° までは 1 倍、1080° で 4 倍（その間はなだらかに）
-	const double speed = std::abs(d) / dt;
-	const double boost = std::clamp(1.0 + (speed - 360.0) / 240.0, 1.0, 4.0);
-	m_dial_rest += d * boost;
-	const int steps = int(m_dial_rest / 15.0);     // 0 の側へ切り捨て。余りは次へ持ち越す
-	m_dial_rest -= steps * 15.0;
-	if (steps)
-		br->turn(steps);
-	m_dial_draw += d;
-	int a = int(std::lround(m_dial_draw)) % 360;
-	if (a < 0)
-		a += 360;
-	const bool moved = a != m_wheel_angle;
-	m_wheel_angle = a;
-	return moved || steps != 0;
+	m_dial_rest -= steps * per;
+	br.turn(steps);
+	m_wheel_angle = ((m_wheel_angle + steps * 15) % 360 + 360) % 360;
+	return true;
 }
 
 bool panel::wheel_at(int x, int y, int delta, bridge &br)

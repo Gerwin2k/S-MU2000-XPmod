@@ -146,8 +146,8 @@ private:
 	std::string fx_text(int ctl) const;
 	void fx_bounds(int ctl, bool &at_min, bool &at_max) const;
 	void step_fx(int ctl, int step, bridge &br);
-	// ダイヤルを掴んで回す（editor.cpp）。br が無ければ角度と時刻を覚えるだけ
-	bool dial_follow(int x, int y, bridge *br = nullptr);
+	// ダイヤルを掴んで上下に動かす（editor.cpp）
+	bool dial_follow(int y, bridge &br);
 
 	const xg::param *knob_param(int ctl) const;
 	bool value_of(int ctl, int &v) const;
@@ -165,9 +165,8 @@ private:
 	const spot *m_held = nullptr;
 	int  m_drag_x = 0, m_drag_y = 0, m_drag_from = 0;
 	int  m_wheel_angle = 0;
-	// ダイヤルを掴んで回しているとき（editor.cpp の press / drag）。角度は度、時刻は秒
-	double m_dial_last = 0.0, m_dial_rest = 0.0, m_dial_time = 0.0, m_dial_draw = 0.0;
-	bool   m_dial_live = false;
+	// ダイヤルを掴んで上下に動かしているとき（editor.cpp の press / drag）。まだ目盛りにならない端の画素
+	double m_dial_rest = 0.0;
 	double m_volume_now = 1.0;
 
 	// ---- エディタとエフェクトの面の値。**画面では覚えない**。
