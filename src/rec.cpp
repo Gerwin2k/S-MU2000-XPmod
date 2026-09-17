@@ -160,6 +160,9 @@ void send_midi(const int want[4], const std::string &path, double delay)
 				while (!(h.dwFlags & MHDR_DONE)) Sleep(1);
 				midiOutUnprepareHeader(out, &h, sizeof(h));
 			}
+		} else if (e.bytes[0] == 0xf5 && e.bytes.size() == 2) {
+			// 口の切り替え（ケーブルメッセージ）。ファイルでは F7 02 F5 nn で入っている
+			midiOutShortMsg(out, DWORD(0xf5) | (DWORD(e.bytes[1]) << 8));
 		} else if (e.bytes[0] < 0xf0) {
 			DWORD msg = e.bytes[0];
 			if (e.bytes.size() > 1) msg |= DWORD(e.bytes[1]) << 8;
