@@ -4,11 +4,13 @@
 
 #include "eq_curve.h"
 #include "fx_help.h"
+#include "fx_icons.h"
 
 #include "imgui.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -74,12 +76,25 @@ const xg::voice_rom *voices() { return g_voices.get(); }
 bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chosen)
 {
 	bool picked = false;
+	// 印を置くぶん、名前の前を空白で空ける
+	const float fs = ImGui::GetFontSize();
+	const int pad = int(std::ceil(fs * 1.35f / std::max(1.0f, ImGui::CalcTextSize(" ").x)));
+	auto with_icon = [&](int msb, const char *label, auto &&submit) {
+		const ImVec2 pos = ImGui::GetCursorScreenPos();
+		ImDrawList *dl = ImGui::GetWindowDrawList();
+		const bool r = submit((std::string(size_t(pad), ' ') + label).c_str());
+		fx_icon(dl, pos, ImGui::GetTextLineHeight(), msb, ImGui::GetColorU32(ImGuiCol_Text));
+		return r;
+	};
 	auto item = [&](const xg::fx_type &t, bool with_code) {
 		const int value = t.msb << 7 | t.lsb;
 		char label[64];
 		if (with_code) std::snprintf(label, sizeof(label), "%-10s  MSB %d / LSB %d", t.name, t.msb, t.lsb);
 		else           std::snprintf(label, sizeof(label), "%s", t.name);
-		if (ImGui::MenuItem(label, nullptr, value == current)) {
+		const bool clicked = (t.msb == 0 || t.msb == 0x40)
+		                   ? with_icon(t.msb, label, [&](const char *l) { return ImGui::MenuItem(l, nullptr, value == current); })
+		                   : ImGui::MenuItem(label, nullptr, value == current);
+		if (clicked) {
 			chosen = value;
 			picked = true;
 		}
@@ -87,14 +102,7 @@ bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chose
 			if (const char *h = fx_type_help(t.msb, t.lsb))
 				ImGui::SetTooltip("%s\n%s", t.name, h);
 	};
-	auto category_of = [](u8 msb) -> int {
-		const auto &cats = xg::fx_categories();
-		for (size_t c = 0; c < cats.size(); c++)
-			for (u8 m : cats[c].msbs)
-				if (m == msb)
-					return int(c);
-		return -1;
-	};
+	auto category_of = [](u8 msb) -> int { return fx_category_of(msb); };
 	// 系統（MSB）ごとに、表の順で
 	auto family = [&](u8 msb) {
 		std::vector<const xg::fx_type *> list;
@@ -157,7 +165,8 @@ bool fx_type_menu(const std::vector<xg::fx_type> &types, int current, int &chose
 	const auto &cats = xg::fx_categories();
 	for (int c : used) {
 		const bool here = current > 0 && (current >> 7) != 0x40 && category_of(u8(current >> 7)) == c;
-		if (ImGui::BeginMenu(c >= 0 ? cats[c].name : "その他")) {
+		const int msb = c >= 0 ? cats[c].msbs[0] : -1;
+		if (with_icon(msb, c >= 0 ? cats[c].name : "その他", [](const char *l) { return ImGui::BeginMenu(l); })) {
 			families_in(c);
 			ImGui::EndMenu();
 		}

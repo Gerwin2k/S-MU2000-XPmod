@@ -3,6 +3,7 @@
 #include "overview.h"
 
 #include "eq_curve.h"
+#include "fx_icons.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -401,14 +402,14 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h, bool names,
 	const float fs = ImGui::GetFontSize();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
 
-	struct on_part { const fx_slot *slot; std::string name; };
+	struct on_part { const fx_slot *slot; std::string name; int msb; };
 	std::vector<on_part> on;
 	for (const fx_slot &f : FX_SLOTS) {
 		if ((which == fx_which::insertions && f.id == 5) || (which == fx_which::variation && f.id != 5))
 			continue;
 		int type = 0;
 		if (fx_target(f, m) == part && m.get(P(f.type_key), 0, type))
-			on.push_back({ &f, xg::fx_name(type) });
+			on.push_back({ &f, xg::fx_name(type), type >> 7 });
 	}
 
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -446,7 +447,8 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h, bool names,
 	for (size_t i = 0; i < on.size(); i++) {
 		const fx_slot &f = *on[i].slot;
 		const std::string &name = on[i].name;
-		const float item_w = names ? bw + fs * 0.35f + ImGui::CalcTextSize(name.c_str()).x + fs * 0.9f : bw + fs * 0.2f;
+		const float icon_w = fs * 1.25f;
+		const float item_w = names ? bw + fs * 0.35f + icon_w + ImGui::CalcTextSize(name.c_str()).x + fs * 0.9f : bw + fs * 0.2f;
 		if (names && x > left && x + item_w > pos.x + w) {
 			x = left;
 			y += line;
@@ -479,8 +481,11 @@ void overview::ins_cell(int part, xg::model &m, bridge &br, float h, bool names,
 			dl->AddRect(ImVec2(x - 1, y), ImVec2(x + bw + 1, y + fs + 1), col(ImGuiCol_Text), 3.0f);
 		const ImVec2 ms = ImGui::CalcTextSize(f.mark);
 		dl->AddText(ImVec2(x + (bw - ms.x) * 0.5f, y), IM_COL32(20, 20, 20, 255), f.mark);
-		if (names)
-			dl->AddText(ImVec2(x + bw + fs * 0.35f, y), hot ? col(ImGuiCol_SliderGrabActive) : col(ImGuiCol_Text), name.c_str());
+		if (names) {
+			const ImU32 c = hot ? col(ImGuiCol_SliderGrabActive) : col(ImGuiCol_Text);
+			fx_icon(dl, ImVec2(x + bw + fs * 0.3f, y), fs, on[i].msb, c);
+			dl->AddText(ImVec2(x + bw + fs * 0.35f + icon_w, y), c, name.c_str());
+		}
 		x += item_w;
 	}
 	// 落とせる欄を光らせる
@@ -1610,6 +1615,10 @@ void overview::variation_label(int part, xg::model &m, bridge &br, float x0, flo
 	else
 		std::snprintf(text, sizeof(text), "%s", name.c_str());
 	dl->PushClipRect(ImVec2(x0, y), ImVec2(x1, y + fs * 1.5f), true);
+	if (has_type) {
+		fx_icon(dl, ImVec2(x0, y), fs, type >> 7, col(ImGuiCol_Text));
+		x0 += fs * 1.25f;
+	}
 	dl->AddText(ImVec2(x0, y), col(ImGuiCol_Text), text);
 	dl->PopClipRect();
 }
