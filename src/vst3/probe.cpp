@@ -405,6 +405,38 @@ void run_blocks(instance &in, double rate, int block, double secs, param_changes
 	}
 }
 
+// SysEx を 1 区間で流す（インサーションの種類を決めるのに使う）
+void send_sysex(instance &in, int block, const std::vector<std::vector<uint8>> &messages)
+{
+	std::vector<float> l(static_cast<size_t>(block)), r(static_cast<size_t>(block));
+	float *ch[2] = { l.data(), r.data() };
+	AudioBusBuffers ab{};
+	ab.numChannels = 2;
+	ab.channelBuffers32 = ch;
+	event_list ev;
+	for (const std::vector<uint8> &m : messages) {
+		ev.m_sysex.push_back(m);
+	}
+	for (std::vector<uint8> &m : ev.m_sysex) {
+		Event e{};
+		e.type = Event::kDataEvent;
+		e.data.type = DataEvent::kMidiSysEx;
+		e.data.size = uint32(m.size());
+		e.data.bytes = m.data();
+		ev.addEvent(e);
+	}
+	param_changes none;
+	ProcessData pd{};
+	pd.processMode = kRealtime;
+	pd.symbolicSampleSize = kSample32;
+	pd.numSamples = block;
+	pd.numOutputs = 1;
+	pd.outputs = &ab;
+	pd.inputEvents = &ev;
+	pd.inputParameterChanges = &none;
+	in.proc->process(pd);
+}
+
 std::string title_of(IEditController *ctrl, int32 index, ParamID &id, ParameterInfo &info)
 {
 	if (ctrl->getParameterInfo(index, info) != kResultOk)
@@ -454,7 +486,7 @@ int run_automation(IPluginFactory *fac, const TUID cid, double rate, int block)
 		print16(str);
 		std::printf("\"\n");
 	};
-	for (const char *n : { "A1 Volume", "A1 Pan", "B3 EQ Bass Freq", "D16 Note Shift" })
+	for (const char *n : { "A1 Volume", "A1 Pan", "B3 EQ Bass Freq", "D16 Note Shift", "INS1 Param 1", "INS4 Param 16" })
 		if (!ids.count(n)) { std::printf("NG: %s が無い\n", n); bad++; }
 	if (bad)
 		return 1;
@@ -468,13 +500,19 @@ int run_automation(IPluginFactory *fac, const TUID cid, double rate, int block)
 
 	start_instance(a, rate, block);
 	run_blocks(a, rate, block, 1.0, nullptr);
+	// インサーション 1 を DISTORTION（1 バイトのパラメータ）、2 を DELAY LCR（2 バイト）にしておく
+	send_sysex(a, block, { { 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x00, 0x00, 0x49, 0x00, 0xf7 },
+	                       { 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x01, 0x00, 0x05, 0x00, 0xf7 } });
+	run_blocks(a, rate, block, 0.5, nullptr);
 
-	// 値を送る。CC で入るもの（A1 Cutoff・A10 Attack・D16 Volume）と、パラメータチェンジで入るもの
-	struct target { const char *name; int value; };
+	// 値を送る。CC で入るもの（A1 Cutoff・A10 Attack・D16 Volume）と、パラメータチェンジで入るもの。
+	// インサーションのパラメータは種類の範囲に対する割合（0-1000）。Drive 0-127 の 500 は 64 になり、読み戻すと 504
+	struct target { const char *name; int value; int back; };
 	const target T[] = {
-		{ "A1 Cutoff", 20 }, { "A10 Attack", 90 }, { "D16 Volume", 50 },
-		{ "A1 EQ Bass Gain", 70 }, { "B3 Pan", 0 }, { "Reverb Return", 100 }, { "Master EQ Gain 3", 58 },
-		{ "C5 Note Shift", 0x40 + 7 }, { "Master Tune", 0x400 - 30 },
+		{ "A1 Cutoff", 20, 20 }, { "A10 Attack", 90, 90 }, { "D16 Volume", 50, 50 },
+		{ "A1 EQ Bass Gain", 70, 70 }, { "B3 Pan", 0, 0 }, { "Reverb Return", 100, 100 }, { "Master EQ Gain 3", 58, 58 },
+		{ "C5 Note Shift", 0x40 + 7, 0x40 + 7 }, { "Master Tune", 0x400 - 30, 0x400 - 30 },
+		{ "INS1 Param 1", 500, 504 }, { "INS2 Param 1", 250, 250 }, { "INS2 Param 10", 1000, 1000 },
 	};
 	param_changes changes;
 	for (const target &t : T)
@@ -488,10 +526,18 @@ int run_automation(IPluginFactory *fac, const TUID cid, double rate, int block)
 		int ng = 0;
 		for (const target &t : T) {
 			const ParamID id = ids[t.name];
-			const int got = int(std::lround(in.ctrl->normalizedParamToPlain(id, in.ctrl->getParamNormalized(id))));
-			if (got != t.value) {
-				std::printf("NG: %s %s は %d（%d のはず）\n", what, t.name, got, t.value);
+			const ParamValue nv = in.ctrl->getParamNormalized(id);
+			const int got = int(std::lround(in.ctrl->normalizedParamToPlain(id, nv)));
+			if (got != t.back) {
+				std::printf("NG: %s %s は %d（%d のはず）\n", what, t.name, got, t.back);
 				ng++;
+			}
+			if (!std::strncmp(t.name, "INS", 3)) {
+				String128 str{};
+				in.ctrl->getParamStringByValue(id, nv, str);
+				std::printf("  %s = ", t.name);
+				print16(str);
+				std::printf("\n");
 			}
 		}
 		std::printf("%s: %d 個のうち %d 個が合った\n", what, int(sizeof(T) / sizeof(T[0])), int(sizeof(T) / sizeof(T[0])) - ng);

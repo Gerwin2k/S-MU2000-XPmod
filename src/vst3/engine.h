@@ -132,8 +132,10 @@ public:
 	// どちらも画面の糸から呼ばれる
 	using edit_fn = std::function<void(const xg::param &p, int part, int value)>;
 	using idle_fn = std::function<void(bool closing)>;
-	void set_edit_handlers(edit_fn edit, idle_fn idle);
+	using raw_fn  = std::function<void(u32 addr, int size, int value)>;   // 定義表に無い番地（set_raw）
+	void set_edit_handlers(edit_fn edit, idle_fn idle, raw_fn raw = nullptr);
 	void notify_edit(const xg::param &p, int part, int value);
+	void notify_edit_raw(u32 addr, int size, int value);
 	void notify_idle(bool closing);
 
 	// ---- SmartMedia（前面のカードの差し込み口）
@@ -168,6 +170,7 @@ private:
 	std::mutex m_hook_mutex;
 	edit_fn    m_on_edit;
 	idle_fn    m_on_idle;
+	raw_fn     m_on_raw;
 	std::thread         m_thread;
 	std::atomic<bool>   m_abort{false};
 

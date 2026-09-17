@@ -79,7 +79,8 @@ public:
 		uint8_t bytes[16];
 		int port = 0;
 		const int n = midi(e, value, m_audio_ram->serial ? m_audio_ram.get() : nullptr, bytes, port);
-		emit(port, bytes, n);
+		if (n > 0)
+			emit(port, bytes, n);
 		s.sent_value.store(value);
 		s.sent_ms.store(now);
 	}
@@ -102,7 +103,20 @@ public:
 		int v = 0;
 		if (m_view_ram->serial && current(e, *m_view_ram, v))
 			return v;
-		return std::clamp(e.p->def, e.p->min, e.p->max);
+		return def(e);
+	}
+
+	// 表示のための写し（インサーションのパラメータは種類で書式が変わる）。ホストが値を聞いてくる糸から。
+	// 返した写しは次の呼び出しまで使える（錠の外で読むが、書くのも同じ糸だけ）
+	const ui::xg_snapshot *view_ram()
+	{
+		std::lock_guard<std::mutex> lock(m_view_mutex);
+		const int64_t now = now_ms();
+		if (now - m_view_ram_ms > 30) {
+			m_engine.panel().read_xg(*m_view_ram);
+			m_view_ram_ms = now;
+		}
+		return m_view_ram->serial ? m_view_ram.get() : nullptr;
 	}
 
 	// ホストが値を置いた（音源へは host_value で入れる。ここは見せる値の控えだけ）。
@@ -144,6 +158,32 @@ public:
 		began = false;
 		const int i = index_of(p, part);
 		if (i < 0)
+			return -1;
+		const int64_t now = now_ms();
+		slot &s = m_slots[i];
+		s.sent_value.store(value);
+		s.sent_ms.store(now);
+		s.recent_value.store(value);
+		s.recent_norm.store(-1.0);
+		s.recent_ms.store(now);
+		if (!s.editing) {
+			s.editing = true;
+			began = true;
+			m_editing.push_back(i);
+		}
+		s.edit_ms = now;
+		return i;
+	}
+
+	// 画面でインサーションのパラメータを触った（xg::model の set_raw）。番地がパラメータに無ければ -1
+	int gui_edit_raw(uint32_t addr, int raw, int &value, bool &began)
+	{
+		began = false;
+		const int i = index_of_raw(addr);
+		if (i < 0)
+			return -1;
+		const ui::xg_snapshot *ram = view_ram();
+		if (!ram || !from_raw(entries()[size_t(i)], *ram, raw, value))
 			return -1;
 		const int64_t now = now_ms();
 		slot &s = m_slots[i];

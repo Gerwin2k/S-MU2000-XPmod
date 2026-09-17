@@ -344,6 +344,8 @@ std::vector<u8> model::set_raw(u32 addr, int size, int value)
 		m.push_back(b);
 	}
 	m.push_back(0xf7);
+	if (m_edit_raw)
+		m_edit_raw(addr, size, value);
 	return m;
 }
 

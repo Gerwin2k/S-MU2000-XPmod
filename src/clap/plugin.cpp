@@ -137,7 +137,8 @@ public:
 		// 画面で XG の値を触ったら、ホストへ伝える
 		m_engine.set_edit_handlers(
 			[this](const xg::param &p, int part, int value) { on_gui_edit(p, part, value); },
-			[this](bool closing) { on_gui_idle(closing); });
+			[this](bool closing) { on_gui_idle(closing); },
+			[this](u32 addr, int, int value) { on_gui_edit_raw(addr, value); });
 	}
 
 	~mu_plugin()
@@ -286,8 +287,21 @@ private:
 	{
 		bool began = false;
 		const int i = m_xg.gui_edit(p, part, value, began);
-		if (i < 0)
-			return;
+		if (i >= 0)
+			tell_host(i, value, began);
+	}
+
+	void on_gui_edit_raw(u32 addr, int raw)
+	{
+		bool began = false;
+		int value = 0;
+		const int i = m_xg.gui_edit_raw(addr, raw, value, began);
+		if (i >= 0)
+			tell_host(i, value, began);
+	}
+
+	void tell_host(int i, int value, bool began)
+	{
 		const clap_id id = autom::entries()[size_t(i)].id;
 		{
 			std::lock_guard<std::mutex> lock(m_out_mutex);
@@ -554,12 +568,15 @@ const clap_plugin_params_t mu_plugin::s_params = {
 		}
 		const autom::entry &e = autom::entries()[index - 1];
 		info->id            = e.id;
-		info->flags         = CLAP_PARAM_IS_AUTOMATABLE | CLAP_PARAM_IS_STEPPED;
-		info->min_value     = e.p->min;
-		info->max_value     = e.p->max;
-		info->default_value = std::clamp(e.p->def, e.p->min, e.p->max);
+		// インサーションのパラメータは種類で範囲が変わるので、割合（0-1000）の連続の値
+		info->flags         = CLAP_PARAM_IS_AUTOMATABLE |
+		                      (e.k == autom::kind::insertion ? 0 : CLAP_PARAM_IS_STEPPED);
+		info->min_value     = autom::lo(e);
+		info->max_value     = autom::hi(e);
+		info->default_value = autom::def(e);
 		std::snprintf(info->name, sizeof(info->name), "%s", e.name.c_str());
-		std::snprintf(info->module, sizeof(info->module), "%s", e.is_part ? ("Parts/" + e.group).c_str() : "Master");
+		std::snprintf(info->module, sizeof(info->module), "%s",
+		              e.k == autom::kind::insertion ? e.group.c_str() : e.is_part ? ("Parts/" + e.group).c_str() : "Master");
 		return true;
 	},
 	[](const clap_plugin_t *p, clap_id id, double *out) {
@@ -575,7 +592,7 @@ const clap_plugin_params_t mu_plugin::s_params = {
 		*out = double(self(p)->m_xg.shown_value(i));
 		return true;
 	},
-	[](const clap_plugin_t *, clap_id id, double v, char *buf, uint32_t cap) {
+	[](const clap_plugin_t *p, clap_id id, double v, char *buf, uint32_t cap) {
 		if (!buf || !cap)
 			return false;
 		if (id == kGainId) {
@@ -586,10 +603,10 @@ const clap_plugin_params_t mu_plugin::s_params = {
 		if (i < 0)
 			return false;
 		const autom::entry &e = autom::entries()[size_t(i)];
-		std::snprintf(buf, cap, "%s", autom::text(e, autom::clamp_value(e, v)).c_str());
+		std::snprintf(buf, cap, "%s", autom::text(e, autom::clamp_value(e, v), self(p)->m_xg.view_ram()).c_str());
 		return true;
 	},
-	[](const clap_plugin_t *, clap_id id, const char *text, double *out) {
+	[](const clap_plugin_t *p, clap_id id, const char *text, double *out) {
 		if (!text || !out)
 			return false;
 		if (id == kGainId) {
@@ -598,7 +615,7 @@ const clap_plugin_params_t mu_plugin::s_params = {
 		}
 		const int i = autom::index_of(id);
 		int value = 0;
-		if (i < 0 || !autom::parse(autom::entries()[size_t(i)], text, value))
+		if (i < 0 || !autom::parse(autom::entries()[size_t(i)], text, value, self(p)->m_xg.view_ram()))
 			return false;
 		*out = double(value);
 		return true;

@@ -107,6 +107,9 @@ public:
 	// オートメーションへ伝えるのに使う。写しに入ってきた値（load・feed）では呼ばない
 	using edit_listener = std::function<void(const param &p, int part, int value)>;
 	void set_edit_listener(edit_listener f) { m_edit = std::move(f); }
+	// set_raw（定義表に無い番地。インサーションのパラメータなど）で書いたときの知らせ先
+	using raw_listener = std::function<void(u32 addr, int size, int value)>;
+	void set_raw_listener(raw_listener f) { m_edit_raw = std::move(f); }
 
 	// ワーク RAM から写した塊を入れる（画面はこれで値を得る。xg/ram.h）。
 	// 書いた直後の値は、feed と同じく少しの間は上書きしない。now_ms は音源の時計
@@ -156,6 +159,7 @@ private:
 
 	u64 m_accepted = 0, m_rejected = 0;
 	edit_listener m_edit;
+	raw_listener m_edit_raw;
 };
 
 } // namespace xg

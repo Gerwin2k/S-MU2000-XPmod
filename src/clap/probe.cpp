@@ -144,6 +144,42 @@ struct param_events {
 	}
 };
 
+// SysEx を 1 区間で流す
+void send_sysex(const clap_plugin_t *plug, int block, const std::vector<std::vector<uint8_t>> &messages)
+{
+	const size_t nb = static_cast<size_t>(block);
+	std::vector<float> bl(nb), br(nb);
+	float *outs[2] = { bl.data(), br.data() };
+	clap_audio_buffer_t obuf{};
+	obuf.data32 = outs;
+	obuf.channel_count = 2;
+	std::vector<clap_event_midi_sysex_t> ev(messages.size());
+	std::vector<const clap_event_header_t *> order;
+	for (size_t i = 0; i < messages.size(); i++) {
+		ev[i].header = { sizeof(ev[i]), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI_SYSEX, 0 };
+		ev[i].port_index = 0;
+		ev[i].buffer = messages[i].data();
+		ev[i].size = uint32_t(messages[i].size());
+		order.push_back(&ev[i].header);
+	}
+	clap_input_events_t in{};
+	in.ctx = &order;
+	in.size = [](const clap_input_events_t *l) -> uint32_t {
+		return uint32_t(static_cast<std::vector<const clap_event_header_t *> *>(l->ctx)->size());
+	};
+	in.get = [](const clap_input_events_t *l, uint32_t i) -> const clap_event_header_t * {
+		return (*static_cast<std::vector<const clap_event_header_t *> *>(l->ctx))[i];
+	};
+	clap_output_events_t oev{ nullptr, out_push };
+	clap_process_t pr{};
+	pr.frames_count = uint32_t(block);
+	pr.audio_outputs = &obuf;
+	pr.audio_outputs_count = 1;
+	pr.in_events = &in;
+	pr.out_events = &oev;
+	plug->process(plug, &pr);
+}
+
 void run_blocks(const clap_plugin_t *plug, double rate, int block, double secs, param_events *events, bool repeat)
 {
 	const size_t nb = static_cast<size_t>(block);
@@ -221,15 +257,22 @@ int run_automation(const clap_plugin_factory_t *fac, const char *id)
 	}
 	a->start_processing(a);
 	run_blocks(a, rate, block, 1.0, nullptr, false);
+	// インサーション 1 を DISTORTION（1 バイトのパラメータ）、2 を DELAY LCR（2 バイト）にしておく
+	send_sysex(a, block, { { 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x00, 0x00, 0x49, 0x00, 0xf7 },
+	                       { 0xf0, 0x43, 0x10, 0x4c, 0x03, 0x01, 0x00, 0x05, 0x00, 0xf7 } });
+	run_blocks(a, rate, block, 0.5, nullptr, false);
+	// インサーションのパラメータは割合（0-1000）。Drive 0-127 の 500 は 64 になり、読み戻すと 504
 	const target T[] = {
 		{ "A1 Cutoff", 20 }, { "A10 Attack", 90 }, { "D16 Volume", 50 },
 		{ "A1 EQ Bass Gain", 70 }, { "B3 Pan", 0 }, { "Reverb Return", 100 }, { "Master EQ Gain 3", 58 },
 		{ "C5 Note Shift", 0x40 + 7 }, { "Master Tune", 0x400 - 30 },
+		{ "INS1 Param 1", 504 }, { "INS2 Param 1", 250 }, { "INS2 Param 10", 1000 },
 		{ "A2 Resonance", 30 }, { "Master EQ Freq 5", 40 },
 	};
+	const int SEND[] = { 20, 90, 50, 70, 0, 100, 58, 0x40 + 7, 0x400 - 30, 500, 250, 1000 };
 	param_events pe;
-	for (size_t k = 0; k < 9; k++)
-		pe.add(ids[T[k].name], T[k].value);
+	for (size_t k = 0; k < 12; k++)
+		pe.add(ids[T[k].name], SEND[k]);
 	run_blocks(a, rate, block, 2.0, &pe, true);      // 同じ値を区間ごとに送り続ける
 	std::this_thread::sleep_for(std::chrono::milliseconds(1100));
 	run_blocks(a, rate, block, 0.3, nullptr, false);
@@ -243,6 +286,11 @@ int run_automation(const clap_plugin_factory_t *fac, const char *id)
 			if (int(std::lround(v)) != t.value) {
 				std::printf("NG: %s %s は %g（%d のはず）\n", what, t.name, v, t.value);
 				ng++;
+			}
+			if (!std::strncmp(t.name, "INS", 3)) {
+				char text[64] = {};
+				pp->value_to_text(p, ids[t.name], v, text, sizeof(text));
+				std::printf("  %s = %s\n", t.name, text);
 			}
 		}
 		const int n = int(sizeof(T) / sizeof(T[0]));

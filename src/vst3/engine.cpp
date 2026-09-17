@@ -686,11 +686,19 @@ bool engine::load_state(const uint8_t *p, size_t n, const uint8_t *setup, size_t
 
 // ---- 画面で値を触ったことを、プラグインの口へ知らせる
 
-void engine::set_edit_handlers(edit_fn edit, idle_fn idle)
+void engine::set_edit_handlers(edit_fn edit, idle_fn idle, raw_fn raw)
 {
 	std::lock_guard<std::mutex> lock(m_hook_mutex);
 	m_on_edit = std::move(edit);
 	m_on_idle = std::move(idle);
+	m_on_raw = std::move(raw);
+}
+
+void engine::notify_edit_raw(u32 addr, int size, int value)
+{
+	std::lock_guard<std::mutex> lock(m_hook_mutex);
+	if (m_on_raw)
+		m_on_raw(addr, size, value);
 }
 
 void engine::notify_edit(const xg::param &p, int part, int value)

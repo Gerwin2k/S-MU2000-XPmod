@@ -124,6 +124,9 @@ plug_view::plug_view(engine &eng)
 	m_impl->panel.xg().set_edit_listener([&eng](const xg::param &p, int part, int value) {
 		eng.notify_edit(p, part, value);
 	});
+	m_impl->panel.xg().set_raw_listener([&eng](u32 addr, int size, int value) {
+		eng.notify_edit_raw(addr, size, value);
+	});
 	m_impl->panel.resize(m_w, m_h);
 }
 

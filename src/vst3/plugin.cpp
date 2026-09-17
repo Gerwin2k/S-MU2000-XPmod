@@ -138,6 +138,7 @@ int32 param_count() { return kMidiParamCount + int32(autom::entries().size()); }
 // XG の値のユニット。パートごとに 1 つと、マスター。MIDI のチャンネルのユニット（1-64）とは別
 constexpr UnitID kXgPartUnit   = 1000;     // + パート番号
 constexpr UnitID kXgMasterUnit = 2000;
+constexpr UnitID kXgInsUnit    = 3000;     // + インサーションの番号（0-3）
 
 
 ParamID param_of(int32 port, int32 ch, int32 ctrl)
@@ -230,7 +231,8 @@ public:
 		// 画面で値を触ったら、ホストへ伝える
 		m_engine.set_edit_handlers(
 			[this](const xg::param &p, int part, int value) { on_gui_edit(p, part, value); },
-			[this](bool closing) { on_gui_idle(closing); });
+			[this](bool closing) { on_gui_idle(closing); },
+			[this](u32 addr, int, int value) { on_gui_edit_raw(addr, value); });
 	}
 
 	virtual ~mu_plugin()
@@ -553,9 +555,11 @@ public:
 			info.id = e.id;
 			set_str(info.title, e.name.c_str());
 			set_str(info.shortTitle, e.name.c_str());
-			info.stepCount = autom::steps(e);
-			info.defaultNormalizedValue = autom::to_normalized(e, std::clamp(e.p->def, e.p->min, e.p->max));
-			info.unitId = e.is_part ? kXgPartUnit + e.part : kXgMasterUnit;
+			// インサーションのパラメータは種類で範囲が変わるので、目盛りは付けない（割合で連続）
+			info.stepCount = e.k == autom::kind::insertion ? 0 : autom::steps(e);
+			info.defaultNormalizedValue = autom::to_normalized(e, autom::def(e));
+			info.unitId = e.k == autom::kind::insertion ? kXgInsUnit + e.block
+			            : e.is_part ? kXgPartUnit + e.part : kXgMasterUnit;
 			info.flags = ParameterInfo::kCanAutomate;
 			return kResultOk;
 		}
@@ -625,7 +629,7 @@ public:
 			return kResultOk;
 		}
 		if (const autom::entry *e = xg_entry(id)) {
-			set_str(str, autom::text(*e, autom::to_value(*e, v)).c_str());
+			set_str(str, autom::text(*e, autom::to_value(*e, v), m_xg.view_ram()).c_str());
 			return kResultOk;
 		}
 		int32 port, ch, ctrl, slot;
@@ -653,7 +657,7 @@ public:
 		buf[i] = 0;
 		if (const autom::entry *e = xg_entry(id)) {
 			int value = 0;
-			if (!autom::parse(*e, buf, value))
+			if (!autom::parse(*e, buf, value, m_xg.view_ram()))
 				return kResultFalse;
 			v = autom::to_normalized(*e, value);
 			return kResultOk;
@@ -759,7 +763,7 @@ public:
 
 	// ---- IUnitInfo（Cubase のプログラムチェンジ。上の unit_of）
 
-	int32 PLUGIN_API getUnitCount() override { return 1 + kPorts * kChannels + 64 + 1; }
+	int32 PLUGIN_API getUnitCount() override { return 1 + kPorts * kChannels + 64 + 1 + 4; }
 
 	tresult PLUGIN_API getUnitInfo(int32 unitIndex, UnitInfo &info) override
 	{
@@ -779,9 +783,11 @@ public:
 			char name[32];
 			if (j < 64)
 				std::snprintf(name, sizeof(name), "XG Part %c%d", char('A' + j / 16), j % 16 + 1);
-			else
+			else if (j == 64)
 				std::snprintf(name, sizeof(name), "XG Master");
-			info.id = j < 64 ? kXgPartUnit + j : kXgMasterUnit;
+			else
+				std::snprintf(name, sizeof(name), "XG Insertion %d", j - 64);
+			info.id = j < 64 ? kXgPartUnit + j : j == 64 ? kXgMasterUnit : kXgInsUnit + (j - 65);
 			info.parentUnitId = kRootUnitId;
 			set_str(info.name, name);
 			info.programListId = kNoProgramListId;
@@ -892,6 +898,20 @@ private:
 	{
 		bool began = false;
 		const int i = m_xg.gui_edit(p, part, value, began);
+		if (i < 0 || !m_handler)
+			return;
+		const autom::entry &e = autom::entries()[size_t(i)];
+		if (began)
+			m_handler->beginEdit(e.id);
+		m_handler->performEdit(e.id, autom::to_normalized(e, value));
+	}
+
+	// 画面でインサーションのパラメータを触った（インサーションの設定の窓）
+	void on_gui_edit_raw(u32 addr, int raw)
+	{
+		bool began = false;
+		int value = 0;
+		const int i = m_xg.gui_edit_raw(addr, raw, value, began);
 		if (i < 0 || !m_handler)
 			return;
 		const autom::entry &e = autom::entries()[size_t(i)];
