@@ -114,8 +114,9 @@ void part_shapes::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	// ---- 上のペイン: エフェクト、棒、鍵盤
 	const ImGuiStyle &st = ImGui::GetStyle();
 	{
-		const float strip_h = ImGui::GetFrameHeight() + ImGui::GetTextLineHeight() + fs * 2.3f +
-		                      st.ItemSpacing.y + st.WindowPadding.y * 2.0f + fs * 0.2f;
+		// インサーションの行、見出しと棒の行、鍵盤の行
+		const float strip_h = ImGui::GetFrameHeight() + ImGui::GetTextLineHeight() + fs * 0.15f + fs * 2.3f * 2.0f +
+		                      st.ItemSpacing.y * 2.0f + st.WindowPadding.y * 2.0f + fs * 0.2f;
 		if (ImGui::BeginChild("strip", ImVec2(0, strip_h), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar))
 			m_strip.part_strip(part, m, ram, br);
 		ImGui::EndChild();

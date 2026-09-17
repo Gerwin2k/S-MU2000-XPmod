@@ -73,8 +73,12 @@ private:
 	void mute_buttons(int part, float x, float y, float w, float h);
 	void row(int part, xg::model &m, const xg_snapshot &ram, bridge &br, float h);
 	// INS 列の 1 マス。掛かっているエフェクトの印（1-4、V）を横に並べる。names なら種類の名前も。
+	// which で並べるものを絞る（パートの音色の窓はインサーションとバリエーションを別の場所に出す）。
 	// 右クリックで掛ける・外す・種類、印のドラッグで別のパートへ、印のダブルクリックで設定の窓
-	void ins_cell(int part, xg::model &m, bridge &br, float h, bool names = false);
+	enum class fx_which { all, insertions, variation };
+	void ins_cell(int part, xg::model &m, bridge &br, float h, bool names = false, fx_which which = fx_which::all);
+	// パートの帯の VAR の見出しの横に、バリエーションの種類と繋がり方（x0-x1 の幅に収める）
+	void variation_label(int part, xg::model &m, bridge &br, float x0, float y, float x1);
 	// マスター EQ の 1 マス。見るだけで、ダブルクリックでマスターの窓
 	void master_eq_cell(xg::model &m, bridge &br, float h);
 	// 上のマスターの表。マスターボリューム、移調、リバーブ・コーラス・バリエーションの種類と戻り、
