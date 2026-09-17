@@ -471,9 +471,9 @@ void engine::midi(const uint8_t *bytes, size_t n, int port)
 			return;
 		}
 	}
-	// 起動待ちか、機械を他が使っている。あふれるようなら捨てる
+	// 起動待ちか、機械を他が使っている。あふれるようなら捨てる（上限は機械の溜めと同じ。mu2000.h）
 	std::vector<uint8_t> &pending = m_pending[port];
-	if (pending.size() + n > 65536)
+	if (pending.size() + n > mu2000::MIDI_QUEUE_LIMIT)
 		return;
 	pending.insert(pending.end(), bytes, bytes + n);
 }
