@@ -18,6 +18,7 @@
 #include "reverb.h"
 #include "xg/fx_params.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -102,6 +103,18 @@ public:
 
 	void process(float l, float r, float &ol, float &orr)
 	{
+		// 入り口が黙ったままなら、中身が落ち着いたところで回すのをやめる（軽くするため）。
+		// 尾（リバーブなど）が消えるまでは回し続ける
+		if (l == 0.0f && r == 0.0f) {
+			if (m_quiet > QUIET_LIMIT) {
+				ol = orr = 0.0f;
+				return;
+			}
+			m_quiet++;
+		} else {
+			m_quiet = 0;
+		}
+
 		switch (m_kind) {
 		case kind::reverb: m_rev.process(l, r, ol, orr); break;
 		case kind::early:  m_er.process(l, r, ol, orr); break;
@@ -333,6 +346,10 @@ private:
 
 	static constexpr int MAX_PAR = 16;
 
+	// 入り口が黙ってから回し続けるサンプル数（44100Hz で 4 秒ぶん。いちばん長い尾より長く）
+	static constexpr int QUIET_LIMIT = 44100 * 4;
+	int m_quiet = 0;
+
 	kind m_kind = kind::none;
 	int  m_type = 0;
 	int  m_raw[MAX_PAR] = {};
@@ -361,7 +378,10 @@ public:
 	{
 		for (auto &s : m_slot)
 			s.set_rate(rate);
+		m_meq.set_rate(rate);
 	}
+
+	master_eq &meq() { return m_meq; }
 
 	void set(slot_id id, int type, const int *raw, int count) { m_slot[id].set(type, raw, count); }
 	void reset() { for (auto &s : m_slot) s.reset(); }
@@ -385,7 +405,8 @@ public:
 	float ret(slot_id id) const { return m_return[id]; }
 
 private:
-	fx_slot m_slot[SLOTS];
+	fx_slot   m_slot[SLOTS];
+	master_eq m_meq;
 	float   m_return[SLOTS] = { 0.6f, 0.6f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f };
 };
 

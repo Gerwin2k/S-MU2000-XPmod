@@ -253,8 +253,9 @@ public:
 
 	// S-MU2000: エフェクトを C++ で鳴らす軽量モード（doc/native-dsp.md）。
 	// 既定は切。入れると MEG のエフェクトは無音を受け、代わりに dsp::native_fx が鳴る
-	void set_native_fx(bool on);
-	bool native_fx() const { return m_nfx_on; }
+	//   0 切 / 1 エフェクトだけ C++（MEG も回る）/ 2 MEG を回さない（いちばん軽い）
+	void set_native_fx(int mode);
+	int native_fx() const { return m_nfx_on; }
 	swp30_device   &swps() { return m_swps; }
 	hd44780_device &lcd()  { return m_lcd; }
 
@@ -399,7 +400,7 @@ private:
 	void native_fx_update();
 
 	smu2000::dsp::native_fx m_nfx;
-	bool m_nfx_on = false;
+	int  m_nfx_on = 0;
 	u32  m_nfx_tick = 0;
 
 	// MIDI IN A / B。バイトを 31250bps の直列に崩して RX 線に流す。

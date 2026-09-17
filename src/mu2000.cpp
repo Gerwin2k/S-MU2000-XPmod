@@ -4,6 +4,11 @@
 
 #include "mu2000.h"
 
+#if defined(__SSE2__) || defined(_M_X64) || defined(__x86_64__)
+#include <xmmintrin.h>
+#include <pmmintrin.h>
+#endif
+
 #include "xg/ram.h"
 #include "xg/fx_params.h"
 
@@ -970,13 +975,19 @@ void mu2000::midi_step(u64 now)
 
 
 // S-MU2000: 軽量モードの入り切り（doc/native-dsp.md）
-void mu2000::set_native_fx(bool on)
+void mu2000::set_native_fx(int mode)
 {
-	m_nfx_on = on;
+	m_nfx_on = mode;
+	// 軽量モードは float で計算する。非正規化数（0 に近すぎる値）が出ると命令が何十倍も遅くなるので、
+	// この糸では 0 に丸める（FTZ/DAZ）
+#if defined(__SSE2__) || defined(_M_X64) || defined(__x86_64__)
+	if (mode)
+		_mm_setcsr(_mm_getcsr() | 0x8040);
+#endif
 	m_nfx.set_rate(44100.0f);
 	m_nfx.reset();
-	m_swpm.set_native_fx(on ? &m_nfx : nullptr);
-	if (on)
+	m_swpm.set_native_fx(mode ? &m_nfx : nullptr, mode >= 2);
+	if (mode)
 		native_fx_update();
 }
 
@@ -1053,8 +1064,31 @@ void mu2000::native_fx_update()
 		// 戻り量。XG の 64 を基準にする（送りに対する量で、実機の中身とは別物）
 		if (s.ret_lo >= 0) {
 			const int ret = xg_read(ram, s.hi, s.mid, s.ret_lo, 1);
-			m_nfx.set_return(s.id, ret < 0 ? 0.3f : 0.3f * float(ret) / 64.0f);
+			// 戻り量の基準。実機の混ざり具合に合わせた実測の値（SMU2000_NATIVE_RETURN で変えられる）
+			static const float base = [] {
+				const char *e = std::getenv("SMU2000_NATIVE_RETURN");
+				return e ? float(std::atof(e)) : 0.8f;
+			}();
+			m_nfx.set_return(s.id, ret < 0 ? base : base * float(ret) / 64.0f);
 		}
+	}
+
+	// マスター EQ（02 40 00-14）
+	{
+		int gain[5], freq[5], q[5];
+		static const int G[5] = { 0x01, 0x05, 0x09, 0x0d, 0x11 };
+		bool ok = true;
+		for (int i = 0; i < 5; i++) {
+			gain[i] = xg_read(ram, 0x02, 0x40, G[i], 1);
+			freq[i] = xg_read(ram, 0x02, 0x40, G[i] + 1, 1);
+			q[i]    = xg_read(ram, 0x02, 0x40, G[i] + 2, 1);
+			if (gain[i] < 0 || freq[i] < 0 || q[i] < 0)
+				ok = false;
+		}
+		const int shape1 = xg_read(ram, 0x02, 0x40, 0x04, 1);
+		const int shape5 = xg_read(ram, 0x02, 0x40, 0x14, 1);
+		if (ok)
+			m_nfx.meq().set_raw(gain, freq, q, shape1 < 0 ? 0 : shape1, shape5 < 0 ? 0 : shape5);
 	}
 }
 

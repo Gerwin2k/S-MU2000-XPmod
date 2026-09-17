@@ -128,7 +128,7 @@ public:
 		const float corr = sum * (2.0f / float(TAPS));
 
 		for (int i = 0; i < TAPS; i++) {
-			float y = (v[i] - corr) * m_gain[i] + x * 0.25f;
+			float y = (v[i] - corr) * m_gain[i] + x * 0.4f;
 			// 高い音を早く減らす
 			m_lp[i] += m_damp * (y - m_lp[i]);
 			y = m_lp[i];
@@ -141,11 +141,12 @@ public:
 		}
 
 		// ---- 取り出し。左右で違う遅延をまぜて広がりを出す
-		const float l = (v[0] + v[2] - v[5] + v[7]) * 0.35f;
-		const float r = (v[1] - v[3] + v[4] + v[6]) * 0.35f;
+		const float l = (v[0] + v[2] - v[5] + v[7]) * 0.5f;
+		const float r = (v[1] - v[3] + v[4] + v[6]) * 0.5f;
 		const float mid = (l + r) * 0.5f, side = (l - r) * 0.5f * m_p.width;
-		out_l = mid + side + er * m_p.er_level;
-		out_r = mid - side + er * m_p.er_level;
+		const float erg = m_p.er_level * 0.3f;
+		out_l = mid + side + er * erg;
+		out_r = mid - side + er * erg;
 	}
 
 private:

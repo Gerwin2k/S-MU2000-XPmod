@@ -22,6 +22,17 @@ constexpr float PI_F = 3.14159265358979f;
 
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+// XG の EQ の周波数の表（値 0-60 → Hz）。ui/eq_curve.h と同じもの
+inline float xg_eq_hz(int index)
+{
+	static const int HZ[61] = {
+		20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 70, 80, 90, 100, 110, 125, 140, 160, 180,
+		200, 225, 250, 280, 315, 355, 400, 450, 500, 560, 630, 700, 800, 900, 1000, 1100, 1200, 1400, 1600, 1800,
+		2000, 2200, 2500, 2800, 3200, 3600, 4000, 4500, 5000, 5600, 6300, 7000, 8000, 9000, 10000, 11000, 12000, 14000, 16000, 18000,
+		20000 };
+	return float(HZ[index < 0 ? 0 : (index > 60 ? 60 : index)]);
+}
+
 // dB を倍率に
 inline float db_to_lin(float db) { return std::pow(10.0f, db / 20.0f); }
 
@@ -181,16 +192,28 @@ public:
 		if (m_phase >= 1.0f)
 			m_phase -= 1.0f;
 	}
-	float sine() const { return std::sin(2.0f * PI_F * m_phase); }
-	float sine_at(float offset) const
+	float sine() const { return sine_of(m_phase); }
+	float sine_at(float offset) const { return sine_of(m_phase + offset); }
+
+	// 0-1 の位相から正弦。表を線形につないで引く（std::sin は 1 サンプルに何度も呼ぶには重い）
+	static float sine_of(float p)
 	{
-		float p = m_phase + offset;
+		static const std::vector<float> TAB = [] {
+			std::vector<float> t(SINE_N + 1);
+			for (int i = 0; i <= SINE_N; i++)
+				t[size_t(i)] = std::sin(2.0f * PI_F * float(i) / float(SINE_N));
+			return t;
+		}();
 		p -= std::floor(p);
-		return std::sin(2.0f * PI_F * p);
+		const float x = p * float(SINE_N);
+		const int i = int(x);
+		const float f = x - float(i);
+		return TAB[size_t(i)] * (1.0f - f) + TAB[size_t(i + 1)] * f;
 	}
 	float phase() const { return m_phase; }
 
 private:
+	static constexpr int SINE_N = 1024;
 	float m_phase = 0.0f, m_step = 0.0f;
 };
 

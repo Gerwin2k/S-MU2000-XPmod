@@ -644,6 +644,57 @@ private:
 	uint32_t m_rand = 22222;
 };
 
+// ---- マスター EQ（5 帯。02 40 00-14） -------------------------------------------
+class master_eq
+{
+public:
+	void set_rate(float rate) { m_rate = rate; reset(); }
+
+	// XG の生の値: gain 52-76（64 が 0dB）、freq は表の番号、q 1-120（7 が 1.0）、
+	// shape は帯 1 と 5 だけ（0 シェルフ / 1 ピーク）
+	void set_raw(const int gain[5], const int freq[5], const int q[5], int shape1, int shape5)
+	{
+		for (int i = 0; i < 5; i++) {
+			const float db = clampf(float(gain[i] - 64), -12.0f, 12.0f);
+			const float hz = xg_eq_hz(freq[i]);
+			const float qq = std::max(0.1f, float(q[i]) / 7.0f);
+			for (int ch = 0; ch < 2; ch++) {
+				if (i == 0 && !shape1)
+					m_f[i][ch].low_shelf(hz, db, m_rate);
+				else if (i == 4 && !shape5)
+					m_f[i][ch].high_shelf(hz, db, m_rate);
+				else
+					m_f[i][ch].peak(hz, qq, db, m_rate);
+			}
+			m_flat[i] = std::fabs(db) < 0.05f;
+		}
+	}
+
+	void reset()
+	{
+		for (auto &band : m_f)
+			for (auto &f : band)
+				f.clear();
+	}
+
+	void process(float l, float r, float &ol, float &orr)
+	{
+		for (int i = 0; i < 5; i++) {
+			if (m_flat[i])
+				continue;
+			l = m_f[i][0].process(l);
+			r = m_f[i][1].process(r);
+		}
+		ol = l;
+		orr = r;
+	}
+
+private:
+	float m_rate = 44100.0f;
+	biquad m_f[5][2];
+	bool m_flat[5] = { true, true, true, true, true };
+};
+
 } // namespace smu2000::dsp
 
 #endif // S_MU2000_DSP_BLOCKS_H
