@@ -374,7 +374,9 @@ void program_menu(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 
 
 // 出しっぱなしの音色選び。品書きと違って、押しても閉じないので続けて選べる。
-//   分類（16 の組 + ドラム + 効果音）→ 音色 → バンク違い
+//   左: 分類（16 の組 + ドラム + 効果音）
+//   右上: その分類の基本の音色（キットならキットの並び）
+//   右下: いまの音色のバンク違い
 // 分類は自分で選べるが、外から音色が変わったときは今の音色の分類へ移す
 void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 {
@@ -398,30 +400,36 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 	last_seen = seen;
 
 	const float fs = ImGui::GetFontSize();
-	ImGui::SetNextItemWidth(-FLT_MIN);
-	const char *group_name = group == GROUP_DRUM ? "ドラムキット" : group == GROUP_SFX ? "効果音キット" : GM_GROUPS[group];
-	if (ImGui::BeginCombo("##group", group_name)) {
-		for (int g = 0; g < 16; g++)
-			if (ImGui::Selectable(GM_GROUPS[g], g == group))
-				group = g;
-		if (ImGui::Selectable("ドラムキット", group == GROUP_DRUM))
-			group = GROUP_DRUM;
-		if (ImGui::Selectable("効果音キット", group == GROUP_SFX))
-			group = GROUP_SFX;
-		ImGui::EndCombo();
-	}
+	const ImGuiStyle &st = ImGui::GetStyle();
+	const ImVec2 avail = ImGui::GetContentRegionAvail();
 
-	// ---- 音色（分類の中の 8 つ、キットなら並んでいるだけ全部）
+	// ---- 左: 分類。いまの音色がある分類には印
+	const float group_w = std::min(fs * 10.5f, avail.x * 0.45f);
+	if (ImGui::BeginChild("groups", ImVec2(group_w, 0), ImGuiChildFlags_Borders)) {
+		for (int g = 0; g < 18; g++) {
+			const char *name = g == GROUP_DRUM ? "ドラムキット" : g == GROUP_SFX ? "効果音キット" : GM_GROUPS[g];
+			char label[64];
+			std::snprintf(label, sizeof(label), "%s%s##g%d", name, known && g == now_group ? " ●" : "", g);
+			if (g == GROUP_DRUM)
+				ImGui::Separator();
+			if (ImGui::Selectable(label, g == group))
+				group = g;
+		}
+	}
+	ImGui::EndChild();
+	ImGui::SameLine();
+
+	// ---- 右: 上に音色、下にバンク違い。中身が無くても枠は残す（並びが跳ねないように）。
+	// 音色は 8 つなら 8 行ぶんの高さ、キットのように多いときは半分まで。残りはバンク違いに回す
 	const bool kits = group >= GROUP_DRUM;
 	const int kit_msb = group == GROUP_DRUM ? 127 : 126;
-	const std::vector<bank_choice> *banks =
-	    (!kits && vr) ? &bank_choices(*vr, mode, set, prog) : nullptr;
-	const bool has_banks = banks && banks->size() > 1;
-	// バンクの並びを出す分だけ、音色の並びを短くする
-	const float bank_h = has_banks ? std::min(fs * 6.5f, ImGui::GetContentRegionAvail().y * 0.45f) : 0.0f;
-	const float list_h = ImGui::GetContentRegionAvail().y - bank_h - (has_banks ? ImGui::GetStyle().ItemSpacing.y : 0.0f);
+	const std::vector<bank_choice> *banks = (known && msb < 126 && vr) ? &bank_choices(*vr, mode, set, prog) : nullptr;
+	const float right_h = ImGui::GetContentRegionAvail().y;
+	const float rows_h = ImGui::GetTextLineHeightWithSpacing() * 8 + st.WindowPadding.y * 2;
+	const float voices_h = kits ? (right_h - st.ItemSpacing.y) * 0.5f : std::min(rows_h, (right_h - st.ItemSpacing.y) * 0.5f);
 
-	if (ImGui::BeginChild("voices", ImVec2(0, list_h), ImGuiChildFlags_Borders)) {
+	ImGui::BeginGroup();
+	if (ImGui::BeginChild("voices", ImVec2(0, voices_h), ImGuiChildFlags_Borders)) {
 		if (kits) {
 			for (int i = 0; i < 128; i++) {
 				std::string kit = vr ? vr->kit_name(kit_msb, i) : std::string();
@@ -452,18 +460,26 @@ void program_pane(int part, xg::model &m, const xg_snapshot *ram, bridge &br)
 	}
 	ImGui::EndChild();
 
-	// ---- 同じ番号のバンク違い
-	if (has_banks) {
-		if (ImGui::BeginChild("banks", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
+	// ---- 同じ番号のバンク違い（いまの音色の）
+	if (ImGui::BeginChild("banks", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
+		if (banks && banks->size() > 1) {
+			ImGui::TextDisabled("%3d のバンク違い", prog + 1);
 			for (const bank_choice &c : *banks) {
 				char item[72];
 				std::snprintf(item, sizeof(item), "%s  %d/%d", c.name.c_str(), c.msb, c.lsb);
 				if (ImGui::Selectable(item, known && c.msb == msb && c.lsb == lsb))
 					select_voice(part, c.msb, c.lsb, prog, m, br);
 			}
+		} else if (known && msb >= 126) {
+			ImGui::TextDisabled("キットにはバンク違いが無い");
+		} else if (!vr) {
+			ImGui::TextDisabled("ROM から音色を読めないので、バンク違いを出せない");
+		} else {
+			ImGui::TextDisabled("この音色にはバンク違いが無い");
 		}
-		ImGui::EndChild();
 	}
+	ImGui::EndChild();
+	ImGui::EndGroup();
 }
 
 

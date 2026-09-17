@@ -136,7 +136,8 @@ void part_shapes::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	// ---- 左に 4 つの区画（2 × 2）、右に音色を選ぶ面
 	const ImGuiStyle &st = ImGui::GetStyle();
 	const ImVec2 avail = ImGui::GetContentRegionAvail();
-	const float pane_w = std::min(fs * 15.0f, avail.x * 0.4f);
+	// 音色を選ぶ面は、左に分類・右に音色とバンク違いの 2 列（xgui::program_pane）
+	const float pane_w = std::min(fs * 26.0f, avail.x * 0.5f);
 	const float shapes_w = avail.x - pane_w - st.ItemSpacing.x;
 	const float w = (shapes_w - st.ItemSpacing.x) * 0.5f;
 	const float h = (avail.y - st.ItemSpacing.y) * 0.5f;
