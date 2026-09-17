@@ -140,11 +140,12 @@ build/clapprobe.exe build/S-MU2000.clap --automation
 
 画面の操作は `vst3probe ... --view 30` で窓を出し、パネルのエディタの面のつまみを回すと、
 `beginEdit` / `performEdit` / `endEdit` が出る（Cutoff を上へドラッグして、beginEdit 1・performEdit 23・endEdit 1 を確かめた）。
+カードの差し込み口を右クリックして一覧を開き、INS 1 をダブルクリックしてインサーションの設定の窓で Drive を回すと、
+`INS1 Param 1`（67648）で beginEdit 1・performEdit 13・endEdit 1 が出た。
 
 ## まだ無いもの
 
 * システムエフェクト（リバーブ・コーラス・バリエーション）の中身（パラメータ 1-16）と、エフェクトの種類のオートメーション
-* インサーションの設定の窓で触ったときのホストへの知らせは、パートの値と同じ道を通るが、窓を開いての試しはまだ
 * 音色（バンク・プログラム）のオートメーション（今は MIDI のプログラムチェンジで）
 * Audio Unit（macOS）への同じ仕組み
 * 実際の DAW（Cubase・REAPER・Bitwig など）で記録と再生を試すこと。ここまでは DAW 無しの小さなホストで確かめただけ
