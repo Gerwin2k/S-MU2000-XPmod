@@ -100,6 +100,8 @@ public:
 	// カードの差し込み口と A/D INPUT のジャック。押すと品書きが出る
 	bool on_card_slot(int x, int y) const;
 	bool on_ad_input(int x, int y) const;
+	// PHONES のジャック。押すと音の出口（デジタル / アナログ）を選ぶ品書きが出る
+	bool on_phones(int x, int y) const;
 
 	// ---- 入力。窓からそのまま渡す。戻り値は「描き直しが要るか」
 
