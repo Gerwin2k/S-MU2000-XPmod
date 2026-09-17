@@ -173,7 +173,7 @@ layout::layout()
 
 	const double cd[4] = { 57, 336, 201, 21 };
 	const double ad[4] = { 8, 44, 60, 130 };
-	const double ph[4] = { 198, 250, 60, 70 };   // 丸（228, 269、半径 14）と下の札
+	const double ph[4] = { 198, 238, 74, 82 };   // 丸と下の札。組み込みの絵（丸 228, 269）と art/mame の絵（丸 251, 257）の両方に当たる
 	for (int i = 0; i < 4; i++) { card[i] = cd[i]; adin[i] = ad[i]; phones[i] = ph[i]; }
 
 	// ---- 飾り。実機の写真から採寸した
