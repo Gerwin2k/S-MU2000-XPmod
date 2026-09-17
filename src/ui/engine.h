@@ -172,8 +172,7 @@ struct engine {
 
 		u8 b;
 		while (midi.pop(b)) {
-			mu.midi_in(b, 0);
-			drv.watch(b, 0);
+			drv.watch(b, mu.midi_in(b, 0));
 			if (mout && guard_a.pass(b)) mout->send(b);
 		}
 		// B は実機の 2 つめの DIN（内蔵 SCI ch1）。パート 17-32 に届く。
@@ -185,8 +184,7 @@ struct engine {
 			if (!midi_p[p])
 				continue;
 			while (midi_p[p]->pop(b)) {
-				mu.midi_in(b, p);
-				drv.watch(b, p);
+				drv.watch(b, mu.midi_in(b, p));
 				if (p == 1 && mout_b && guard_b.pass(b)) mout_b->send(b);
 			}
 		}

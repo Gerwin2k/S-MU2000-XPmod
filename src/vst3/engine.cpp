@@ -463,15 +463,11 @@ void engine::midi(const uint8_t *bytes, size_t n, int port)
 		std::unique_lock<std::mutex> lock(m_machine, std::try_to_lock);
 		if (lock.owns_lock()) {
 			// 溜まっていた分を先に流して、順番を保つ
-			for (uint8_t b : m_pending[port]) {
-				m_mu->midi_in(b, port);
-				m_drv.watch(b, port);
-			}
+			for (uint8_t b : m_pending[port])
+				m_drv.watch(b, m_mu->midi_in(b, port));
 			m_pending[port].clear();
-			for (size_t i = 0; i < n; i++) {
-				m_mu->midi_in(bytes[i], port);
-				m_drv.watch(bytes[i], port);
-			}
+			for (size_t i = 0; i < n; i++)
+				m_drv.watch(bytes[i], m_mu->midi_in(bytes[i], port));
 			return;
 		}
 	}
@@ -547,11 +543,10 @@ void engine::fill(float *left, float *right, int n, const float *in_l, const flo
 	m_drv.pump_midi(*m_mu, m_bridge);
 	m_drv.pump_wheel(*m_mu, m_bridge);
 
-	for (int port = 0; port < 2; port++) {
-		for (uint8_t b : m_pending[port]) {
-			m_mu->midi_in(b, port);
-			m_drv.watch(b, port);
-		}
+	// 起動を待つ間に溜めた分。口 C・D も（前は A・B しか流さず、C・D はその口に次の MIDI が来るまで残っていた）
+	for (int port = 0; port < mu2000::MIDI_PORTS; port++) {
+		for (uint8_t b : m_pending[port])
+			m_drv.watch(b, m_mu->midi_in(b, port));
 		m_pending[port].clear();
 	}
 
