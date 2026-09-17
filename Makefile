@@ -203,6 +203,11 @@ $(BUILD)/xgtest$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/xg/model.o $(B
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
+# エフェクトのパラメータ番地（1-16）を firmware に確かめさせる（doc/fx-params.md）
+$(BUILD)/fx_probe$(EXE): $(OBJS) $(BUILD)/src/mu2000.o $(BUILD)/src/fx_probe.o
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
 # インサーションのパラメータの表（src/xg/fx_params.h）を firmware の LCD から作る（doc/pc-editor.md）。
 #   build/fxsweep.exe ../MU2000/roms > fxsweep.txt
 #   python tools/fxsweep/make_fx_params.py fxsweep.txt src/xg/fx_params.h
