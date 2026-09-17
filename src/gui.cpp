@@ -728,6 +728,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		// パラメータの層: 音源の返事を読み、見えている面の読み返しを頼む
 		if (g_win.br) {
 			g_win.panel.tick(*g_win.br);
+			// PC の窓（一覧の上の帯）に CPU の負荷を出すため
+			if (g_win.out && g_win.out->produced())
+				g_win.br->set_cpu(float(g_win.out->cpu_percent()));
 			g_win.pc.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 			g_win.list.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
 			g_win.fx.frame(g_win.panel.xg(), g_win.panel.ram(), *g_win.br);
@@ -799,11 +802,12 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		ui::snapshot s;
 		g_win.br->read(s);
 		u64 pressed = g_win.br->buttons();
-		char status[128] = {};
+		char status[320] = {};
 		if (g_win.out && g_win.out->produced())
 			std::snprintf(status, sizeof(status),
-			              "CPU %.0f%%  最悪 %.1f ms  待ち %.0f ms  遅れ %llu   IN: %s   OUT: %s"
+			              "発音 %d/64  CPU %.0f%%  最悪 %.1f ms  待ち %.0f ms  遅れ %llu   IN: %s   OUT: %s"
 			              "   （MIDI IN A のジャックか右クリックで口を選ぶ）",
+			              s.voices_master,
 			              g_win.out->cpu_percent(), g_win.out->worst_ms(),
 			              g_win.out->output_ms(),
 			              (unsigned long long)g_win.out->late(),

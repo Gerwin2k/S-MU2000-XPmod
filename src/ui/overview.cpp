@@ -1465,6 +1465,33 @@ void overview::draw(xg::model &m, const xg_snapshot &ram, bridge &br)
 	ImGui::SameLine();
 	ImGui::TextDisabled("表示の大きさ（小さな絵はダブルクリックで大きな窓に出る）");
 
+	// 同時発音数と CPU の負荷は右端へ。発音数はマスタの SWP30 の声のスロット（64）のうち鳴っているもの。
+	// 曲の声はマスタだけで鳴る（和音を 56 音重ねてもスレーブは 0 だった）。スレーブが鳴らしていれば + で足して出す。
+	// CPU は gui が音声を回しているときだけ出す（プラグインではホストの持ち物なので出さない）
+	{
+		snapshot s;
+		br.read(s);
+		const float cpu = br.cpu();
+		char voices[24], text[64];
+		if (s.voices_slave)
+			std::snprintf(voices, sizeof(voices), "%2d/64+%d", s.voices_master, s.voices_slave);
+		else
+			std::snprintf(voices, sizeof(voices), "%2d/64", s.voices_master);
+		if (cpu >= 0.0f)
+			std::snprintf(text, sizeof(text), "発音 %s   CPU %3.0f%%", voices, cpu);
+		else
+			std::snprintf(text, sizeof(text), "発音 %s", voices);
+		const float tw = ImGui::CalcTextSize(text).x;
+		ImGui::SameLine(std::max(ImGui::GetCursorPosX() + ImGui::GetFontSize(),
+		                         ImGui::GetWindowContentRegionMax().x - tw));
+		ImGui::TextUnformatted(text);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("発音: 鳴っている声の数（離して消え切るまでを含む）。1 音で 2 つ以上の声を使う音色もある\n"
+			                  "マスタの SWP30 %d / 64、スレーブ %d%s",
+			                  s.voices_master, s.voices_slave,
+			                  cpu >= 0.0f ? "\nCPU: 音声の処理にかかっている時間の、締め切りに対する割合" : "");
+	}
+
 	ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * zoom);
 	const float fs = ImGui::GetFontSize();
 	const float h = fs * 2.3f;

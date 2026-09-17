@@ -321,6 +321,9 @@ public:
 		// The window's timer is where this has to happen: it touches the bridge,
 		// so it must not run on the audio thread (same as gui.cpp's WM_TIMER)
 		panel.tick(br);
+		// the CPU load for the PC windows (the overview's top strip)
+		if (out && out->produced())
+			br.set_cpu(float(out->cpu_percent()));
 		// the PC editor windows, where the Windows side has its WM_TIMER
 		pc.frame(panel.xg(), panel.ram(), br);
 		list.frame(panel.xg(), panel.ram(), br);
@@ -343,11 +346,12 @@ public:
 		br.read(s);
 		const u64 pressed = br.buttons();
 
-		char status[256] = {};
+		char status[320] = {};
 		if (out && out->produced())
 			std::snprintf(status, sizeof(status),
-			              "CPU %.0f%%  最悪 %.1f ms  枯渇 %llu   IN: %s   OUT: %s"
+			              "発音 %d/64  CPU %.0f%%  最悪 %.1f ms  枯渇 %llu   IN: %s   OUT: %s"
 			              "   （MIDI IN A のジャックか右クリックで口を選ぶ）",
+			              s.voices_master,
 			              out->cpu_percent(), out->worst_ms(),
 			              (unsigned long long)out->starved(),
 			              in_name[0].empty() ? "なし" : in_name[0].c_str(),
