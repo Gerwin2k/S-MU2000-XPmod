@@ -250,6 +250,11 @@ public:
 
 	sh7043a_device &cpu()  { return *m_cpu; }
 	swp30_device   &swpm() { return m_swpm; }
+
+	// S-MU2000: エフェクトを C++ で鳴らす軽量モード（doc/native-dsp.md）。
+	// 既定は切。入れると MEG のエフェクトは無音を受け、代わりに dsp::native_fx が鳴る
+	void set_native_fx(bool on);
+	bool native_fx() const { return m_nfx_on; }
 	swp30_device   &swps() { return m_swps; }
 	hd44780_device &lcd()  { return m_lcd; }
 
@@ -389,6 +394,13 @@ public:
 		m_swpm.m_t_meg = m_swps.m_t_meg = 0;
 	}
 private:
+
+	// S-MU2000: 軽量モード（doc/native-dsp.md）。RAM の XG の設定を読んで C++ 側へ渡す
+	void native_fx_update();
+
+	smu2000::dsp::native_fx m_nfx;
+	bool m_nfx_on = false;
+	u32  m_nfx_tick = 0;
 
 	// MIDI IN A / B。バイトを 31250bps の直列に崩して RX 線に流す。
 	// 2 口は別々の SCI なので、状態も別々に持つ

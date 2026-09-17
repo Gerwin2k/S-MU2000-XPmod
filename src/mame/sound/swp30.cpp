@@ -1945,6 +1945,9 @@ void swp30_device::reset()
 	m_revram_data = 0;
 	m_revram_enable = 0;
 
+	for(auto &s : m_nsend)
+		s[0] = s[1] = 0;
+
 	std::fill(m_meli.begin(),  m_meli.end(),  0);
 	std::fill(m_melo.begin(),  m_melo.end(),  0);
 	std::fill(m_adc.begin(),   m_adc.end(),   0);
@@ -3025,6 +3028,24 @@ void swp30_device::mixer_step(const std::array<s32, 0x40> &samples_per_chan)
 	m_rec_bus = mixer_out[0x10];   // S-MU2000: 録音はミキサの出力 8 の左（sample_step）
 	std::copy(mixer_out.begin() + 0x00, mixer_out.begin() + 0x10, m_melo.begin());
 	std::copy(mixer_out.begin() + 0x10, mixer_out.begin() + 0x20, m_meg->m_m.begin() + 0x20);
+	// S-MU2000: 軽量モードでは、エフェクトへの送りを横取りして MEG には渡さない。
+	// MEG 側は無音を受けるので、出てくるのはこちらの C++ のエフェクトだけになる
+	if(m_native) {
+		static const int SLOT[4] = { 0x24, 0x26, 0x2c, 0x28 };   // リバーブ・コーラス・バリエーション・インサーション 1
+		for(int i = 0; i != 4; i++) {
+			m_nsend[i][0] = m_meg->m_m[SLOT[i]];
+			m_nsend[i][1] = m_meg->m_m[SLOT[i] + 1];
+			m_meg->m_m[SLOT[i]] = m_meg->m_m[SLOT[i] + 1] = 0;
+		}
+	}
+	// 調べもの用（一時）: エフェクトへの送り 16 本を書き出す
+	if(m_dbg_dac && m_meg->m_sample_counter >= m_dbg_dac_from &&
+	   m_meg->m_sample_counter < m_dbg_dac_from + m_dbg_dac_count) {
+		fprintf(m_dbg_dac, "send %u", m_meg->m_sample_counter);
+		for(int i = 0x10; i != 0x20; i++)
+			fprintf(m_dbg_dac, " s%02x=%d", i - 0x10, mixer_out[i]);
+		fprintf(m_dbg_dac, "\n");
+	}
 }
 
 
@@ -4134,6 +4155,21 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 	// DAC は出力 0-3 の先頭 2 本。scale は 1<<17。
 	left  = m_adc[0];
 	right = m_adc[1];
+
+	// S-MU2000: 軽量モードの C++ エフェクトを、ここで足す（doc/native-dsp.md）
+	if(m_native) {
+		constexpr float SCALE = 131072.0f;      // m_adc の全振幅（0x20000）
+		using nfx = smu2000::dsp::native_fx;
+		static const nfx::slot_id ID[4] = { nfx::REVERB, nfx::CHORUS, nfx::VARIATION, nfx::INS1 };
+		for(int i = 0; i != 4; i++) {
+			const float il = float(m_nsend[i][0]) / SCALE, ir = float(m_nsend[i][1]) / SCALE;
+			float ol = 0.0f, orr = 0.0f;
+			m_native->process(ID[i], il, ir, ol, orr);
+			const float g = m_native->ret(ID[i]);
+			left  += s32(ol * SCALE * g);
+			right += s32(orr * SCALE * g);
+		}
+	}
 
 	// S-MU2000: 音が出ないときの手掛かり。-v のときだけ最大値を覚える
 	if(::smu2000::g_verbose) {

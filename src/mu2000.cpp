@@ -4,6 +4,9 @@
 
 #include "mu2000.h"
 
+#include "xg/ram.h"
+#include "xg/fx_params.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -966,8 +969,101 @@ void mu2000::midi_step(u64 now)
 }
 
 
+// S-MU2000: 軽量モードの入り切り（doc/native-dsp.md）
+void mu2000::set_native_fx(bool on)
+{
+	m_nfx_on = on;
+	m_nfx.set_rate(44100.0f);
+	m_nfx.reset();
+	m_swpm.set_native_fx(on ? &m_nfx : nullptr);
+	if (on)
+		native_fx_update();
+}
+
+namespace {
+
+// XG の番地から、ワーク RAM の値を読む（7bit ずつ。無ければ -1）
+int xg_read(const std::vector<u8> &ram, int hi, int mid, int lo, int size)
+{
+	int v = 0;
+	for (int i = 0; i < size; i++) {
+		u32 off = 0;
+		if (!xg::ram::locate(u32(hi << 14 | mid << 7 | (lo + i)), off) || off >= ram.size())
+			return -1;
+		v = (v << 7) | (ram[off] & 0x7f);
+	}
+	return v;
+}
+
+// インサーション n のパラメータ 1-10 が 2 バイトの種類のときの値（16bit がそのまま並ぶ）
+int ins_wide(const std::vector<u8> &ram, int n, int addr)
+{
+	const u32 off = xg::ram::INS_BLOCK[n] + xg::ram::INS_WIDE + u32(2 * (addr - 0x30));
+	if (off + 1 >= ram.size())
+		return -1;
+	return ram[off] << 8 | ram[off + 1];
+}
+
+} // namespace
+
+// RAM に入っている XG の設定を読んで、C++ のエフェクトに渡す。
+// 音を作る糸から 512 サンプルごとに呼ぶ（設定はそんなに速く変わらない）
+void mu2000::native_fx_update()
+{
+	using nfx = smu2000::dsp::native_fx;
+	const std::vector<u8> &ram = m_ram;
+	if (ram.size() < 0x30000)
+		return;
+
+	struct slot_def { nfx::slot_id id; int hi, mid, base, ret_lo, ins; };
+	static const slot_def SLOTS[] = {
+		{ nfx::REVERB,    0x02, 0x01, 0x00, 0x0c, -1 },
+		{ nfx::CHORUS,    0x02, 0x01, 0x20, 0x2c, -1 },
+		{ nfx::VARIATION, 0x02, 0x01, 0x40, 0x56, -1 },
+		{ nfx::INS1,      0x03, 0x00, 0x00, -1,    0 },
+	};
+
+	for (const slot_def &s : SLOTS) {
+		const int type = xg_read(ram, s.hi, s.mid, s.base, 2);
+		if (type < 0)
+			continue;
+		const xg::fx_def *def = xg::fx_find(type);
+		int raw[16] = {};
+		const int n = def ? std::min(def->count, 16) : 0;
+		for (int i = 0; i < n; i++) {
+			const xg::fx_param &p = def->params[i];
+			int v;
+			if (s.ins >= 0 && p.addr >= 0x30)
+				v = ins_wide(ram, s.ins, p.addr);
+			else
+				v = xg_read(ram, s.hi, s.mid, s.base + p.addr, p.size);
+			raw[i] = v < 0 ? int(p.lo) : v;
+		}
+		m_nfx.set(s.id, type, raw, n);
+		// 調べもの用: SMU2000_NATIVE_FX_DEBUG=1 で、読んだ値を出す
+		static const bool dbg = std::getenv("SMU2000_NATIVE_FX_DEBUG") != nullptr;
+		if (dbg) {
+			std::printf("nfx slot %d type %02x %02x kind %d:", int(s.id), type >> 7, type & 0x7f,
+			            int(m_nfx.slot(s.id).current()));
+			for (int i = 0; i < n; i++)
+				std::printf(" %s=%d", def->params[i].label, raw[i]);
+			std::putchar(10);
+		}
+
+		// 戻り量。XG の 64 を基準にする（送りに対する量で、実機の中身とは別物）
+		if (s.ret_lo >= 0) {
+			const int ret = xg_read(ram, s.hi, s.mid, s.ret_lo, 1);
+			m_nfx.set_return(s.id, ret < 0 ? 0.3f : 0.3f * float(ret) / 64.0f);
+		}
+	}
+}
+
 void mu2000::run_sample(s32 &left, s32 &right)
 {
+	// S-MU2000: 軽量モードでは、XG の設定をときどき読み直す
+	if (m_nfx_on && !(++m_nfx_tick & 0x1ff))
+		native_fx_update();
+
 	// 台数が変わっていたら別スレッドの使い方を見直す（8192 サンプルごと）
 	if (m_want_threaded && !(++m_thread_check & 0x1fff))
 		apply_threading();
