@@ -28,6 +28,7 @@
 #include <vector>
 
 class mu2000;
+namespace xg { struct param; }
 
 namespace smu2000 {
 namespace vst3 {
@@ -115,8 +116,25 @@ public:
 	// 壊れた状態がプロジェクトに入ったりした（issue #9）
 	void set_processing(bool on) { m_processing.store(on, std::memory_order_release); }
 	std::vector<uint8_t> save_state();
-	// 起動が終わっていなければ、終わってから最初の区間で戻す
-	bool load_state(const uint8_t *p, size_t n);
+	// 起動が終わっていなければ、終わってから最初の区間で戻す。
+	// setup は XG の値だけの控え（save_xg_setup）。機械まるごとの状態が読めなかったとき
+	// （版が違う、壊れている、無い）は、これを MIDI IN A に流して戻す
+	bool load_state(const uint8_t *p, size_t n, const uint8_t *setup = nullptr, size_t setup_n = 0);
+	// XG の値だけの控え。システム・エフェクト・64 パートを、流し込めば同じ設定になる MIDI にしたもの
+	// （ui/xg_state.h の setup_messages）。S-MU2000 の版が変わって機械まるごとの状態が読めなくなっても、
+	// 音色とエフェクトの設定はこれで戻る
+	std::vector<uint8_t> save_xg_setup();
+
+	// ---- 画面で値を触ったことを、プラグインの口（ホストのオートメーション）へ知らせる
+	//
+	// 画面（パネルとPC の窓）の層が値を書くたびに edit が呼ばれる（xg::model の edit_listener）。
+	// idle は画面の 1 コマごと。closing が true なら画面が閉じるところで、続いている操作を全部終える。
+	// どちらも画面の糸から呼ばれる
+	using edit_fn = std::function<void(const xg::param &p, int part, int value)>;
+	using idle_fn = std::function<void(bool closing)>;
+	void set_edit_handlers(edit_fn edit, idle_fn idle);
+	void notify_edit(const xg::param &p, int part, int value);
+	void notify_idle(bool closing);
 
 	// ---- SmartMedia（前面のカードの差し込み口）
 	//
@@ -136,12 +154,20 @@ private:
 
 	void boot();
 	void apply_deferred_state();   // 起動前に来た状態を戻す（m_machine を持って呼ぶ）
+	// 機械まるごとの状態を戻す。読めなければ XG の値の控えを流す（m_machine を持って呼ぶ）
+	bool restore(const uint8_t *p, size_t n, const std::vector<uint8_t> &setup);
 	void one_sample(float &l, float &r);
 	void build_table();
 
 	std::atomic<status> m_state{status::loading};
 	std::atomic<bool> m_processing{false};
 	std::vector<uint8_t> m_deferred_state;  // 起動が終わる前に来た状態（m_machine で守る）
+	std::vector<uint8_t> m_deferred_setup;  // 同じく、XG の値の控え
+	bool                 m_deferred = false;
+
+	std::mutex m_hook_mutex;
+	edit_fn    m_on_edit;
+	idle_fn    m_on_idle;
 	std::thread         m_thread;
 	std::atomic<bool>   m_abort{false};
 

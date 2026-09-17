@@ -177,6 +177,10 @@ MIDI ファイルは窓に落とすか `--play` で流せる。
 入力は実機の MIDI IN A〜D と同じ 4 本（64 パート）。Cubase のように MIDI の
 プログラムチェンジを `IUnitInfo` の音色の一覧で扱うホストでも、パートごとに音色が替わる。
 
+**音色やエフェクトの設定はプロジェクトに残り、パートの音量・フィルタ・EG・EQ やマスター EQ などは
+名前付きのパラメータとしてオートメーションで動かせる**（VST3・CLAP。画面で触った値もホストへ伝わる）。
+[doc/automation.md](doc/automation.md)。
+
 ```
 make vst3             build/S-MU2000.vst3/ にバンドルができる
 make install-vst3     VST3 の置き場へ複製する

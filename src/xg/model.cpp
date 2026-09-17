@@ -362,6 +362,8 @@ std::vector<u8> model::set(const param &p, int part, int value)
 		m_pinned[a + u32(i)] = m_now;
 	}
 	std::vector<u8> out = param_change(p, part, value);
+	if (m_edit)
+		m_edit(p, part, value);
 	// バンクはプログラムを書くまで効かない。写しに今のプログラムがあれば続けて送る。
 	// 無ければバンクだけ送る（次にプログラムを選んだときに効く）
 	int prog = 0;

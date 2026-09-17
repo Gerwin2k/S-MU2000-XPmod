@@ -120,6 +120,10 @@ plug_view::plug_view(engine &eng)
 		std::string err;
 		m_impl->panel.lay().load(lay, err);
 	}
+	// 画面（パネルと PC の窓）で XG の値を触ったら、プラグインの口からホストのオートメーションへ伝える
+	m_impl->panel.xg().set_edit_listener([&eng](const xg::param &p, int part, int value) {
+		eng.notify_edit(p, part, value);
+	});
 	m_impl->panel.resize(m_w, m_h);
 }
 
@@ -181,6 +185,7 @@ tresult PLUGIN_API plug_view::removed()
 		delete m_window;
 		m_window = nullptr;
 	}
+	m_engine.notify_idle(true);
 	m_impl->forget_backing();
 	return kResultOk;
 }
@@ -247,6 +252,8 @@ void plug_view::repaint(void *native, int w, int h)
 	// PC で触る窓（一覧・エディタ）。見えていなければ何もしない
 	if (m_window)
 		m_window->pc_frame(m_impl->panel.xg(), m_impl->panel.ram(), m_engine.panel());
+	// 触っている最中の値の操作（ホストへの beginEdit / endEdit）を、しばらく触られていなければ終える
+	m_engine.notify_idle(false);
 
 #if defined(_WIN32)
 	HDC dst = static_cast<HDC>(native);
