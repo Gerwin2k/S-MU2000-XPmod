@@ -1440,10 +1440,12 @@ int main(int argc, char **argv)
 	mout_b.close();
 	ain.stop();
 
-	if (out.produced())
+	// 音を出さずに終わったとき（起動に失敗した、音声デバイスを開けなかった）は、どちらも出さない
+	if (out.produced()) {
 		std::printf("CPU %.1f%%、1 回の最悪 %.2f ms、間に合わなかった %llu 回\n",
 		            out.cpu_percent(), out.worst_ms(),
 		            (unsigned long long)out.late());
 		std::printf("%s\n%s\n", out.format_line().c_str(), out.latency_line().c_str());
+	}
 	return 0;
 }
