@@ -385,7 +385,13 @@ public:
 		              1000.0 * double(m_worst_ticks) / double(m_qpc_freq),
 		              (unsigned long long)m_late);
 		m_engine.log_line(line);
-		m_busy_ticks = m_produced = m_worst_ticks = m_late = 0;
+		// 1 ブロックに MIDI が溜めきれないほど届いた（8192 件）ときは、捨てた数を書く
+		if (m_dropped) {
+			std::snprintf(line, sizeof(line), "1 ブロックの MIDI が多すぎて捨てたメッセージ %llu 件",
+			              (unsigned long long)m_dropped);
+			m_engine.log_line(line);
+		}
+		m_busy_ticks = m_produced = m_worst_ticks = m_late = m_dropped = 0;
 	}
 
 	tresult PLUGIN_API setState(IBStream *stream) override
@@ -866,8 +872,10 @@ private:
 
 	void queue(int32 port, int32 off, uint8 a, uint8 b = 0, uint8 c = 0, int n = 3)
 	{
-		if (m_msgs.size() >= m_msgs.capacity())
+		if (m_msgs.size() >= m_msgs.capacity()) {
+			m_dropped++;
 			return;
+		}
 		// 鳴らしたチャンネルを覚えておく。止めるときはここだけに流す（下の m_hush）
 		if ((a & 0xf0) == 0x90 && c)
 			m_sounded[port & 3] |= uint16(1u << (a & 15));
@@ -878,8 +886,12 @@ private:
 
 	void queue_bytes(int32 port, int32 off, const uint8 *bytes, int n)
 	{
-		if (m_msgs.size() >= m_msgs.capacity() || n <= 0 || n > 16)
+		if (n <= 0 || n > 16)
 			return;
+		if (m_msgs.size() >= m_msgs.capacity()) {
+			m_dropped++;
+			return;
+		}
 		msg m{ off, int32(m_msgs.size()), uint8(port), uint8(n), {}, nullptr, 0 };
 		std::memcpy(m.b, bytes, size_t(n));
 		m_msgs.push_back(m);
@@ -960,6 +972,7 @@ private:
 	std::atomic<uint16>   m_sounded[kPorts] = {};
 	// 間に合っているかの記録。音声スレッドだけが触る
 	uint64                m_busy_ticks = 0, m_produced = 0, m_worst_ticks = 0, m_late = 0;
+	uint64                m_dropped = 0;       // 溜めきれずに捨てた MIDI（report で書く）
 	int64                 m_qpc_freq = 1;
 	int32                 m_refs = 1;
 };
@@ -1107,6 +1120,8 @@ tresult PLUGIN_API mu_plugin::process(ProcessData &data)
 				if (m_msgs.size() < m_msgs.capacity())
 					m_msgs.push_back({ off, int32(m_msgs.size()), uint8(port), 0, { 0, 0, 0 },
 					                   e.data.bytes, e.data.size });
+				else
+					m_dropped++;
 				break;
 			}
 			default:

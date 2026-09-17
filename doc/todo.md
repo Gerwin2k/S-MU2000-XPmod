@@ -933,8 +933,8 @@ GlaclRtr・RotaryOr の音程が実機と合った。残っている分からな
 
 ### 細かいもの
 
-* 1 ブロックの MIDI が 8192 件を超えると黙って捨てる（`src/vst3/plugin.cpp:513`）。
-  まず起きないが、起きたときに分からない
-* `flush_resampler` を誰も呼んでいない（`set_output_rate` の中だけ）
+* ~~1 ブロックの MIDI が 8192 件を超えると黙って捨てる~~ 済（2026-09-18）。捨てた数を数え、止めるときに
+  log.txt へ「1 ブロックの MIDI が多すぎて捨てたメッセージ n 件」と書く（VST3。CLAP は上限を持たない）
+* ~~`flush_resampler` を誰も呼んでいない~~ 見直したら AUv3 の後始末からも呼ばれていた（`src/auv3/audio_unit.mm`）
 * LCD の行 0 桁 19 が未解明（doc/gui.md）、セグメントの表に不明 2 件
   （doc/lcd-segments.md）
