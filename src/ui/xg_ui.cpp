@@ -237,12 +237,41 @@ std::string voice_text(int msb, int lsb, int prog)
 
 namespace {
 
-// バンクとプログラムを 1 通で選ぶ。MSB と LSB を書いてからプログラムを送る
+// パートの受信チャンネル（口 × 16 + ch）。ほかのパートと同じチャンネルなら（または
+// 分からなければ）-1。チャンネルのメッセージはそのチャンネルのパート全部に効くので
+int own_channel(int part, xg::model &m)
+{
+	const xg::param &rp = P("part.rcv_channel");
+	int rcv = 127;
+	if (!m.get(rp, part, rcv) || rcv < 0 || rcv > 63)
+		return -1;
+	for (int i = 0; i < XG_PARTS; i++) {
+		int other = 127;
+		if (i != part && (!m.get(rp, i, other) || other == rcv))
+			return -1;
+	}
+	return rcv;
+}
+
+// バンクとプログラムを選ぶ。
+// 受信チャンネルがそのパートだけのものなら、普通のバンクセレクト（CC0・CC32）とプログラムチェンジで
+// 送る（SysEx だと LCD に Ex の印が出るので）。写しは set で書き換えるが、返ってくる SysEx は送らない。
+// チャンネルが OFF・ほかのパートと共有・分からないときは、パラメータチェンジで送る
 void select_voice(int part, int msb, int lsb, int prog, xg::model &m, bridge &br)
 {
-	br.send(m.set(P("part.bank_msb"), part, msb));
-	br.send(m.set(P("part.bank_lsb"), part, lsb));
-	br.send(m.set(P("part.program"), part, prog));
+	const int ch = own_channel(part, m);
+	if (ch < 0) {
+		br.send(m.set(P("part.bank_msb"), part, msb));
+		br.send(m.set(P("part.bank_lsb"), part, lsb));
+		br.send(m.set(P("part.program"), part, prog));
+		return;
+	}
+	m.set(P("part.bank_msb"), part, msb);
+	m.set(P("part.bank_lsb"), part, lsb);
+	m.set(P("part.program"), part, prog);
+	const u8 c = u8(ch & 15);
+	const u8 msg[8] = { u8(0xb0 | c), 0x00, u8(msb), u8(0xb0 | c), 0x20, u8(lsb), u8(0xc0 | c), u8(prog) };
+	br.send_port(ch / 16, msg, sizeof(msg));
 }
 
 // ---- 試聴。音色を替えたら、そのパートの受信チャンネルで 1 秒だけ鳴らす
