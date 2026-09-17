@@ -805,9 +805,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 		char status[320] = {};
 		if (g_win.out && g_win.out->produced())
 			std::snprintf(status, sizeof(status),
-			              "発音 %d/64  CPU %.0f%%  最悪 %.1f ms  待ち %.0f ms  遅れ %llu   IN: %s   OUT: %s"
+			              "発音 %d/128  CPU %.0f%%  最悪 %.1f ms  待ち %.0f ms  遅れ %llu   IN: %s   OUT: %s"
 			              "   （MIDI IN A のジャックか右クリックで口を選ぶ）",
-			              s.voices_master,
+			              s.voices_master + s.voices_slave,
 			              g_win.out->cpu_percent(), g_win.out->worst_ms(),
 			              g_win.out->output_ms(),
 			              (unsigned long long)g_win.out->late(),
