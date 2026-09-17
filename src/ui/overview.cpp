@@ -1375,43 +1375,57 @@ void overview::part_strip(int part, xg::model &m, const xg_snapshot &ram, bridge
 	ImGui::PushID("strip");
 	ImGui::PushID(part);
 
-	// ---- 1 行目: インサーション（バリエーションは VAR の棒の上に出す）
+	// 棒の並び。窓の幅いっぱいに同じ幅で割り振る（VOL〜HOLD の 6 本、間を空けて VAR・CHO・REV の 3 本）
+	static const char *const LEFT[]  = { "VOL", "EXP", "PAN", "P.BEND", "MOD", "HOLD" };
+	static const char *const RIGHT[] = { "VAR", "CHO", "REV" };
+	const float gap = fs * 1.0f;
+	const ImVec2 top = ImGui::GetCursorScreenPos();
+	const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+	const float unit = std::max(fs * 4.2f, (right - top.x - gap) / 9.0f);
+	const float var_x = top.x + unit * 6.0f + gap;         // VAR の棒の左端
+
+	// ---- 1 行目: 左にインサーション、VAR の棒の真上からバリエーション
+	const float line_h = ImGui::GetFrameHeight();
+	ImGui::SetCursorScreenPos(top);
 	ImGui::AlignTextToFramePadding();
 	ImGui::TextDisabled("インサーション");
 	help_tip("INS");
 	ImGui::SameLine();
 	{
 		const ImVec2 at = ImGui::GetCursorScreenPos();
-		ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + st.FramePadding.y - fs * 0.1f));
+		ImGui::SetCursorScreenPos(ImVec2(at.x, top.y));
+		// 印の並びは VAR の手前まで（はみ出す分は切る）
+		ImGui::BeginChild("##ins_row", ImVec2(std::max(fs, var_x - gap * 0.5f - at.x), line_h), ImGuiChildFlags_None,
+		                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
+		const ImVec2 in = ImGui::GetCursorScreenPos();
+		ImGui::SetCursorScreenPos(ImVec2(in.x, in.y + st.FramePadding.y - fs * 0.1f));
 		ins_cell(part, m, br, fs * 1.25f, true, fx_which::insertions);
+		ImGui::EndChild();
 	}
+	ImGui::SetCursorScreenPos(ImVec2(var_x, top.y));
+	ImGui::AlignTextToFramePadding();
+	ImGui::TextDisabled("バリエーション");
+	help_tip("VARIATION");
+	variation_label(part, m, br, var_x + ImGui::CalcTextSize("バリエーション ").x, top.y + st.FramePadding.y, right);
 
-	// ---- 2 行目: 見出しと棒。窓の幅いっぱいに割り振る（VAR はバリエーションの種類も出すので 2 つ分）
-	static const char *const LEFT[]  = { "VOL", "EXP", "PAN", "P.BEND", "MOD", "HOLD" };
-	static const char *const RIGHT[] = { "VAR", "CHO", "REV" };
-	const float gap = fs * 1.0f;
+	// ---- 2 行目: 見出しと棒
 	const float label_h = ImGui::GetTextLineHeight() + fs * 0.15f;
-	const ImVec2 origin = ImGui::GetCursorScreenPos();
-	const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-	const float units = 6.0f + 2.0f + 1.0f + 1.0f;
-	const float unit = std::max(fs * 4.2f, (right - origin.x - gap) / units);
+	const ImVec2 origin(top.x, top.y + line_h + st.ItemSpacing.y);
 	float x = origin.x;
-	auto one = [&](const char *title, float span) {
-		const float w = unit * span - fs * 0.25f;
+	auto one = [&](const char *title) {
+		const float w = unit - fs * 0.25f;
 		ImGui::SetCursorScreenPos(ImVec2(x, origin.y));
 		ImGui::TextDisabled("%s", title);
 		help_tip(title);
-		if (!std::strcmp(title, "VAR"))
-			variation_label(part, m, br, x + ImGui::CalcTextSize("VAR ").x, origin.y, x + w);
 		ImGui::SetCursorScreenPos(ImVec2(x, origin.y + label_h));
 		cell(column_of(title), part, m, ram, br, w, h);
-		x += unit * span;
+		x += unit;
 	};
 	for (const char *t : LEFT)
-		one(t, 1.0f);
+		one(t);
 	x += gap;
 	for (const char *t : RIGHT)
-		one(t, !std::strcmp(t, "VAR") ? 2.0f : 1.0f);
+		one(t);
 
 	// ---- 3 行目: 鍵盤。受信チャンネルから見張りの口×チャンネル（一覧でミュートしていても、この窓は受信チャンネルのまま）
 	const float keys_y = origin.y + label_h + h + st.ItemSpacing.y;
@@ -1427,7 +1441,7 @@ void overview::part_strip(int part, xg::model &m, const xg_snapshot &ram, bridge
 	ImGui::PopID();
 }
 
-// VAR の棒の見出しの横に、バリエーションの種類と繋がり方。このパートに INSERTION で掛かっていれば
+// バリエーションの種類と繋がり方（パートの帯の 1 行目、VAR の棒の真上）。このパートに INSERTION で掛かっていれば
 // 一覧の INS 欄と同じ V の印（ドラッグ・右クリックで触れる）、そうでなければ文字で（SYSTEM なら送りの棒が効く）
 void overview::variation_label(int part, xg::model &m, bridge &br, float x0, float y, float x1)
 {

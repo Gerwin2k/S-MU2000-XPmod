@@ -77,7 +77,7 @@ private:
 	// 右クリックで掛ける・外す・種類、印のドラッグで別のパートへ、印のダブルクリックで設定の窓
 	enum class fx_which { all, insertions, variation };
 	void ins_cell(int part, xg::model &m, bridge &br, float h, bool names = false, fx_which which = fx_which::all);
-	// パートの帯の VAR の見出しの横に、バリエーションの種類と繋がり方（x0-x1 の幅に収める）
+	// パートの帯の 1 行目（VAR の棒の真上）に、バリエーションの種類と繋がり方（x0-x1 の幅に収める）
 	void variation_label(int part, xg::model &m, bridge &br, float x0, float y, float x1);
 	// マスター EQ の 1 マス。見るだけで、ダブルクリックでマスターの窓
 	void master_eq_cell(xg::model &m, bridge &br, float h);
