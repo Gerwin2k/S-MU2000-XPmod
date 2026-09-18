@@ -280,14 +280,14 @@ int main(int argc, char **argv)
 		{
 			const std::vector<u8> &wr = mu.nvram();
 			std::vector<u8> a0 = wr;
-			for (u8 bb : { u8(0xb0), u8(101), u8(0), u8(0xb0), u8(100), u8(0),
-			               u8(0xb0), u8(6), u8(12) })
+			for (u8 bb : { u8(0xb0), u8(91), u8(100), u8(0xb0), u8(93), u8(77),
+			               u8(0xb0), u8(94), u8(55) })
 				mu.midi_in(bb, 0);
 			for (u32 i = 0; i < RATE / 10; i++)
 				mu.run_sample(l, r);
 			for (size_t a = part0; a < part0 + 0x134 && a < wr.size(); a++)
 				if (wr[a] != a0[a])
-					std::printf("ベンド幅 12: パートの塊 +%02x  %d -> %d%c",
+					std::printf("CC91=100 CC93=77 CC94=55: パートの塊 +%02x  %d -> %d%c",
 					            unsigned(a - part0), a0[a], wr[a], 10);
 			for (u8 bb : { u8(0xb0), u8(6), u8(2) })
 				mu.midi_in(bb, 0);
@@ -314,7 +314,9 @@ int main(int argc, char **argv)
 			{ "CC10=64",  0xb0, 0x0a, 64 },
 			{ "bend+",    0xe0, 0x00, 0x7f },{ "bend0",    0xe0, 0x00, 0x40 },
 			{ "CC1=64",   0xb0, 0x01, 64 },  { "CC1=0",    0xb0, 0x01, 0 },
-			{ "CC91=0",   0xb0, 0x5b, 0 },   { "CC93=0",   0xb0, 0x5d, 0 },
+			{ "CC91=0",   0xb0, 0x5b, 0 },   { "CC91=127", 0xb0, 0x5b, 127 },
+			{ "CC93=127", 0xb0, 0x5d, 127 }, { "CC93=0",   0xb0, 0x5d, 0 },
+			{ "CC94=127", 0xb0, 0x5e, 127 }, { "CC94=0",   0xb0, 0x5e, 0 },
 		};
 		for (const step &st : steps) {
 			std::map<u32, u16> prev = now;

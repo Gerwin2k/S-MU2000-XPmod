@@ -167,6 +167,16 @@ inline int pan_att(int x)
 	return v < 0 ? 0 : (v > 255 ? 255 : v);
 }
 
+// 送り（CC91 リバーブ・CC93 コーラス）→ レジスタ 0x33・0x34 の下位（減衰）。
+// 実測は **16 + level→減衰の表** で、音色によらない（GrandPno・Strings・Flute で同じ）。
+// 使うのは差ぶんだけなので、下駄の 16 は要らない
+inline int send_att(const u8 *rom, int cc)
+{
+	if (cc <= 0)
+		return 255;
+	return int(rom[LEVEL_TAB + u32(std::min(127, cc) - 1)]);
+}
+
 // モジュレーション（CC1）→ レジスタ 0x0a の下位（LFO の深さ）に足す。
 // 実測は 10 段で、**音色によらない**（GrandPno・Strings・SawLead で同じ）。
 // 0x0a の上位は LFO の型と刻みなので触らない
@@ -338,6 +348,7 @@ struct voice_cal {
 	int  cal_vel = 100;        // 写し取ったときの強さ（強さを変えるときの基準）
 	// 写し取ったときのコントローラの位置。ここからの差ぶんだけ動かす
 	int  cal_vol = 100, cal_expr = 127, cal_pan = 64, cal_mod = 0;
+	int  cal_rev = 40, cal_cho = 0;      // 写し取ったときの送り（CC91・CC93）
 	u16  reg[0x40] = {};       // 基準の鍵・強さでの値
 	u64  mask = 0;             // 覚えているレジスタ
 

@@ -213,6 +213,7 @@ public:
 		// -1 は「まだ動かされていない＝写し取ったときのまま」
 		int vol = -1, expr = -1, pan = -1;     // CC7 / CC11 / CC10
 		int mod = -1;                          // CC1（モジュレーション）
+		int rev = -1, cho = -1;                // CC91 / CC93（送り）
 		int bend = 8192, range = 2;            // ピッチベンドと、その幅（半音）
 		bool damper = false;                   // CC64
 	};
@@ -235,6 +236,10 @@ public:
 				m_cc[p].pan = b[0x0e];
 			if (m_cc[p].mod < 0)
 				m_cc[p].mod = b[ram::PART_MOD];
+			if (m_cc[p].rev < 0)
+				m_cc[p].rev = b[0x13];
+			if (m_cc[p].cho < 0)
+				m_cc[p].cho = b[0x12];
 			// ベンド幅（08 pp 23。64 が 0 半音）。RPN でも SysEx でもここに入る
 			const int r2 = int(b[0x23]) - 64;
 			m_cc[p].range = r2 < 0 ? 0 : (r2 > 24 ? 24 : r2);
@@ -246,10 +251,15 @@ public:
 	int part_expr(int part) const { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_EXP]) : 127; }
 	int part_pan(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0e]) : 64; }
 	int part_mod(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_MOD]) : 0; }
+	int part_rev(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x13]) : 40; }
+	int part_cho(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x12]) : 0; }
 
 	// その CC を native でさばけるか（実際にさばく前に決める）
 	static bool handles_cc(int cc)
-	{ return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01; }
+	{
+		return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01 ||
+		       cc == 0x5b || cc == 0x5d;
+	}
 
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
 	bool control(int part, int cc, int value)
@@ -262,6 +272,8 @@ public:
 		case 0x0b: p.expr = value; break;
 		case 0x0a: p.pan = value; break;
 		case 0x01: p.mod = value; break;
+		case 0x5b: p.rev = value; break;
+		case 0x5d: p.cho = value; break;
 		case 0x40:                             // ダンパー
 			p.damper = value >= 64;
 			if (!p.damper)
@@ -312,6 +324,12 @@ private:
 				m_poke(u32(i) * 64 + 0x32, pan_reg(*s.cal, part));
 			if (s.lfo)
 				m_poke(u32(i) * 64 + 0x0a, lfo_reg(s.lfo, *s.cal, part));
+			if (s.cal->has(0x33))
+				m_poke(u32(i) * 64 + 0x33,
+				       send_reg(*s.cal, 0x33, false, m_cc[part].rev, s.cal->cal_rev));
+			if (s.cal->has(0x34))
+				m_poke(u32(i) * 64 + 0x34,
+				       send_reg(*s.cal, 0x34, true, m_cc[part].cho, s.cal->cal_cho));
 		}
 	}
 
@@ -353,6 +371,26 @@ private:
 				a += nv::cc_vol_att(m_rom, p.expr) - nv::cc_vol_att(m_rom, c->cal_expr);
 		}
 		return nv::clamp_att(a);
+	}
+
+	// 送りのレジスタ。下位が減衰で、写し取ったときからの差ぶんだけ動かす。
+	// 写し取ったときに切れていた（0xff）送りは差が取れないので、
+	// **もう一方の送りから下駄を借りる**（どちらもパートの同じ下駄に乗っている）
+	// 0x32-0x37 は 1 つで 2 本ぶんの送りを持つ。リバーブは 0x33 の**下位**、
+	// コーラスは 0x34 の**上位**（nativeplay --ccwatch で確かめた）
+	u16 send_reg(const nv::voice_cal &c, int which, bool hi, int now, int was) const
+	{
+		const u16 base = c.reg[which];
+		if (now < 0 || now == was)
+			return base;
+		const int cur = hi ? (base >> 8) : (base & 0xff);
+		// 写し取ったときに切れていた（0xff）送りは差が取れない。
+		// 下駄は 16（CC91=127・CC93=127 のどちらも 16 になる）
+		const int v = (cur >= 0xff && was <= 0)
+		            ? 16 + nv::send_att(m_rom, now)
+		            : cur + nv::send_att(m_rom, now) - nv::send_att(m_rom, was);
+		const int w = nv::clamp_att(v);
+		return u16(hi ? ((w << 8) | (base & 0xff)) : ((base & 0xff00) | w));
 	}
 
 	// LFO のレジスタ。下位が深さで、モジュレーション（CC1）のぶんを足す
@@ -440,8 +478,13 @@ public:
 			if (c && c->has(0x32))
 				sr.set(0x32, pan_reg(*c, part));
 			su.lfo = sr.v[0x0a];
-			if (c)
+			if (c) {
 				sr.set(0x0a, lfo_reg(su.lfo, *c, part));
+				if (c->has(0x33))
+					sr.set(0x33, send_reg(*c, 0x33, false, pc.rev, c->cal_rev));
+				if (c->has(0x34))
+					sr.set(0x34, send_reg(*c, 0x34, true, pc.cho, c->cal_cho));
+			}
 			write_slot(slot, sr);
 			if (debug_on())
 				std::fprintf(stderr, "note part=%d note=%d vel=%d vol=%d/%d expr=%d/%d pan=%d/%d att=%d->%d\n",
@@ -520,8 +563,10 @@ public:
 					m_poke(u32(slot) * 64 + u32(i),
 					       i == 9 ? u16(att)
 					              : (i == 0x32 ? pan_reg(c, part)
-					                           : (i == 0x0a ? lfo_reg(c.reg[0x0a], c, part)
-					                                        : c.reg[i])));
+					              : (i == 0x0a ? lfo_reg(c.reg[0x0a], c, part)
+					              : (i == 0x33 ? send_reg(c, 0x33, false, m_cc[part].rev, c.cal_rev)
+					              : (i == 0x34 ? send_reg(c, 0x34, true, m_cc[part].cho, c.cal_cho)
+					                           : c.reg[i])))));
 
 			su.drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
 			if (debug_on())
