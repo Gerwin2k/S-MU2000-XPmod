@@ -175,7 +175,9 @@ int main(int argc, char **argv)
 				if (ch < 0 || n != 1)
 					continue;                    // 1 スロットだけのものを使う
 				const xg::nv::slot_regs mine =
-				    xg::nv::build_note(rom, xg::nv::element(rom, rec2, 0), nt, 0x1e);
+				    xg::nv::build_note(rom, xg::nv::element(rom, rec2, 0), nt,
+				                       std::min(0xff, (xg::nv::velocity_att(rom, vel) +
+				                                       xg::nv::VOICE_ATT_TYPICAL) * 2));
 				cases++;
 				for (int i = 0; i < 0x40; i++) {
 					if (!(mine.write & (u64(1) << i)))
@@ -237,7 +239,8 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		const u8 *elem = xg::nv::element(rom, rec, 0);
-		const xg::nv::slot_regs mine = xg::nv::build_note(rom, elem, note, 0x1e);
+		const xg::nv::slot_regs mine = xg::nv::build_note(rom, elem, note,
+		    std::min(0xff, (xg::nv::velocity_att(rom, vel) + xg::nv::VOICE_ATT_TYPICAL) * 2));
 		int same = 0, diff = 0, missing = 0;
 		std::printf("firmware はスロット %d を鳴らした。突き合わせ:%c", ch, 10);
 		for (int i = 0; i < 0x40; i++) {
@@ -267,9 +270,10 @@ int main(int argc, char **argv)
 		// ---- ここから SH-2 を止める
 		mu.set_cpu_enabled(false);
 		const u8 *elem = xg::nv::element(rom, rec, 0);
-		// 音量は「強さ → 表 0x1E6818」だけの粗い形（段 1 の残り）
-		const int level = std::min(127, vel);
-		const int att = std::min(0xff, int(rom[xg::nv::LEVEL_TAB + level]) * 2 + 20);
+		// 音量。強さの効き方は firmware と完全に一致する（6.5）。
+		// 音色ごとの下駄だけ、実測の中央値を置いている
+		const int att = std::min(0xff,
+		    (xg::nv::velocity_att(rom, vel) + xg::nv::VOICE_ATT_TYPICAL) * 2);
 		const xg::nv::slot_regs regs = xg::nv::build_note(rom, elem, note, att);
 		if (!regs.write) {
 			std::fprintf(stderr, "波形の記録が引けなかった%c", 10);

@@ -26,7 +26,8 @@ constexpr u32 SET_COUNT  = 0x1F8;
 constexpr u32 WAVE_BASE  = 0x1F55A0;   // 波形の記録（16 バイトずつ）
 constexpr u32 ATTACK_TAB = 0x1F4DB8;   // アタックの速さ（128 バイト）
 constexpr u32 DECAY_TAB  = 0x1F4E38;   // 減衰の速さ（128 バイト）
-constexpr u32 LEVEL_TAB  = 0x1E6818;   // 音量 0-127 → 減衰（128 バイト）
+constexpr u32 VEL_CURVE  = 0x1E5E5E;   // 強さの曲線（128 バイトの行が並ぶ。行 0 はそのまま）
+constexpr u32 LEVEL_TAB  = 0x1E6798;   // 0-127 → 減衰（128 バイトの行が並ぶ。行 1 が 0x1E6818）
 constexpr u32 SLOT_TABLE = 0x1F4F58;   // スロット番号 → レジスタの先頭（4 バイト × 64）
 constexpr u32 CUTOFF_TAB = 0x1E5B58;   // フィルタの切る高さ（16bit。索引は記録の byte37）
 
@@ -127,6 +128,22 @@ struct defaults {
 	// 声ごとの IIR（パートの EQ）。素通しのときの実測
 	u16 iir[6] = { 0xe05d, 0x1fa3, 0x2000, 0x0257, 0xfda9, 0x2000 };
 };
+
+// 強さから、音量レジスタに足す減衰を出す（firmware の 0x128DA0）。
+//
+//   減衰 = 表2[0x1E6798 + 表1[0x1E5E5E + 曲線*128 + 強さ]]
+//
+// 曲線は音色ごと（普通は 0 ＝ そのまま）。GrandPno の強さ 1-127 の全段で、
+// 実機の値とぴったり一致する。
+inline int velocity_att(const u8 *rom, int vel, int curve = 0)
+{
+	const int i = rom[VEL_CURVE + u32(curve) * 128 + u32(vel & 0x7f)];
+	return rom[LEVEL_TAB + u32(i & 0x7f)];
+}
+
+// 音色ごとの下駄。firmware は「音色の音量 → 表」と、鍵ごとの足し込み（+120）で作る。
+// そこはまだ解けていないので、実測の中央値を置く（5〜19 の幅がある）
+constexpr int VOICE_ATT_TYPICAL = 12;
 
 // 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
 inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
