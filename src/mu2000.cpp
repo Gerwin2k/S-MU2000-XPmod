@@ -458,7 +458,7 @@ void mu2000::build_bus()
 		d.r16 = [this, &dev, base](offs_t a) {
 			const u16 v = dev.read16((a - base) >> 1);
 			if (m_swp_trace && m_swp_trace_reads)
-				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x  t=%.6f\n", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
+				std::fprintf(m_swp_trace, "R %08x %04x %04x  pc=%08x  t=%.6f s=%llu\n", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0, (unsigned long long)trace_sample());
 			return v;
 		};
 		// 幅の内訳を数える。MAME は 16bit ハンドラに mem_mask を渡せるが
@@ -479,10 +479,10 @@ void mu2000::build_bus()
 			m_swp_w32++;
 			const offs_t reg = (a - base) >> 1;
 			if (m_swp_trace) {
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
-				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
-				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f s=%llu\n",
+				             m_swp_trace_reads ? "W " : "", base, reg, u16(v >> 16), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0, (unsigned long long)trace_sample());
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f s=%llu\n",
+				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0, (unsigned long long)trace_sample());
 			}
 			dev.write16(reg, u16(v >> 16));
 			dev.write16(reg + 1, u16(v));
@@ -491,8 +491,8 @@ void mu2000::build_bus()
 		d.w16 = [this, &dev, base, hold](offs_t a, u16 v) {
 			m_swp_w16++;
 			if (m_swp_trace)
-				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f\n",
-				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0);
+				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f s=%llu\n",
+				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0, (unsigned long long)trace_sample());
 			dev.write16((a - base) >> 1, v);
 			hold((a - base) >> 1);
 		};
@@ -1132,6 +1132,8 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	if (m_want_threaded && !(++m_thread_check & 0x1fff))
 		apply_threading();
 
+	m_sample_count++;
+
 	// SWP30 は 44100Hz で 1 サンプル。CPU はその間に 28MHz/44100 ≒ 634.9 サイクル
 	m_cycle_debt += 28000000;
 	const u64 cycles = m_cycle_debt / 44100;
@@ -1144,7 +1146,8 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	if (m_profile)
 		pt0 = smu2000::perf_ticks();
 
-	run_cycles(cycles);
+	if (m_cpu_enabled)
+		run_cycles(cycles);
 
 	if (m_profile) {
 		pt1 = smu2000::perf_ticks();

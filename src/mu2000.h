@@ -88,6 +88,12 @@ public:
 	// n サイクルぶん進める。周辺のイベントはこの中で挟む
 	void run_cycles(u64 n);
 
+	// S-MU2000: SH-2 を回さずに SWP30 だけ進める（レジスタ列の再生。doc/native-engine.md）
+	void set_cpu_enabled(bool on) { m_cpu_enabled = on; }
+	// 記録した書き込みを、外から SWP30 へ入れる（master=false でスレーブ）
+	void poke_swp(bool master, u32 reg, u16 value)
+	{ (master ? m_swpm : m_swps).write16(reg, value); }
+
 	// MIDI の入口。実機の DIN は **A と B の 2 口**で、それぞれ SH7043 の
 	// 内蔵 SCI ch0 / ch1 に繋がっている（docs/hardware.md）。
 	// パートは A が 1-16、B が 17-32。
@@ -307,6 +313,8 @@ private:
 	required_device<sh7043a_device> m_cpu_finder;
 	sh7043a_device *m_cpu = nullptr;
 
+	bool m_cpu_enabled = true;     // false なら SH-2 を回さない（再生のとき）
+
 	swp30_device m_swpm, m_swps;   // マスタ 0x800000 / スレーブ 0x802000
 	required_device<sci4_device> m_sci4_finder;
 	sci4_device *m_sci4 = nullptr;   // PLG ボード用 0xf00000
@@ -355,6 +363,9 @@ private:
 	// SWP30 へのアクセス幅の内訳（byte 幅があると片側が壊れる）
 	u64 m_swp_w8 = 0, m_swp_r8 = 0, m_swp_w16 = 0, m_swp_w32 = 0;
 
+	// 記録に入れるサンプル番号（0 起点。run_sample の頭で進めるので 1 引く）
+	u64 trace_sample() const { return m_sample_count ? m_sample_count - 1 : 0; }
+	u64         m_sample_count = 0;  // 電源投入から数えたサンプル数（記録と再生の目印）
 	std::FILE  *m_swp_trace = nullptr;
 	bool        m_swp_trace_reads = false;
 

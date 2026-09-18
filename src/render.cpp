@@ -176,9 +176,12 @@ int main(int argc, char **argv)
 	u32 meg_tr_from = 0, meg_tr_count = 0, meg_tr_pc0 = 0, meg_tr_pc1 = 0x180;
 	const char *adc_path = nullptr;    // A/D INPUT に流す WAV
 	const char *card_path = nullptr;   // 差す SmartMedia
+	const char *replay = nullptr;      // --replay-swp。記録したレジスタ列を SH-2 無しで流す
 	for (int i = 4; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--trace-swp") && i + 1 < argc)
 			swptrace = argv[++i];
+		else if (!std::strcmp(argv[i], "--replay-swp") && i + 1 < argc)
+			replay = argv[++i];
 		else if (!std::strcmp(argv[i], "--boot") && i + 1 < argc)
 			boot = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--dump-dac") && i + 3 < argc) {
@@ -265,6 +268,36 @@ int main(int argc, char **argv)
 
 	if (card_path && !mu.card().load(card_path, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
 
+	// --replay-swp: 記録した SWP30 への書き込みを、SH-2 を回さずに同じ時刻へ流し込む
+	// （doc/native-engine.md の段 0。「音は SWP30 だけで作れる」ことの確かめ）
+	struct swp_write { u64 sample; bool master; u32 reg; u16 value; };
+	std::vector<swp_write> replay_list;
+	size_t replay_at = 0;
+	if (replay) {
+		std::FILE *rf = std::fopen(replay, "r");
+		if (!rf) { std::fprintf(stderr, "開けない: %s\n", replay); return 1; }
+		char line[256];
+		while (std::fgets(line, sizeof(line), rf)) {
+			const char *p = line;
+			if (*p == 'R')
+				continue;               // 読み出しは要らない
+			if (*p == 'W')
+				p += 2;
+			unsigned base = 0, reg = 0, val = 0;
+			unsigned long long sample = 0;
+			if (std::sscanf(p, "%x %x %x pc=%*x t=%*f s=%llu", &base, &reg, &val, &sample) != 4)
+				continue;
+			replay_list.push_back({ u64(sample), base == 0x800000, reg, u16(val) });
+		}
+		std::fclose(rf);
+		std::printf("再生する書き込み: %zu 件\n", replay_list.size());
+		if (boot < 0.0) {
+			std::fprintf(stderr, "--replay-swp には --boot <記録したときの起動秒数> が要る\n");
+			return 1;
+		}
+		mu.set_cpu_enabled(false);
+	}
+
 	std::FILE *tf = swptrace ? std::fopen(swptrace, "w") : nullptr;
 	if (tf)
 		mu.set_swp_trace(tf, true);
@@ -325,7 +358,7 @@ int main(int argc, char **argv)
 			std::fprintf(stderr, "起動を待ったが MIDI 受信が有効にならなかった\n");
 			return 1;
 		}
-		std::printf("起動に %.2f 秒。ここから MIDI を流す\n", boot);
+		std::printf("起動に %.6f 秒。ここから MIDI を流す\n", boot);
 	}
 
 	const size_t boot_samples = size_t(boot * rate + 0.5);
@@ -390,6 +423,13 @@ int main(int argc, char **argv)
 			const double tin = t * rate;
 			const size_t k = tin < 0 ? adc_l.size() : size_t(tin);
 			mu.set_audio_input(k < adc_l.size() ? adc_l[k] : 0, k < adc_r.size() ? adc_r[k] : 0);
+		}
+		// 記録したときと同じサンプルの頭で入れ直す（CPU はそのサンプルぶんを
+		// SWP30 より先に回すので、頭で入れれば実機と同じ順になる）
+		while (replay_at < replay_list.size() && replay_list[replay_at].sample <= i) {
+			const swp_write &w = replay_list[replay_at];
+			mu.poke_swp(w.master, w.reg, w.value);
+			replay_at++;
 		}
 		s32 l = 0, r = 0;
 		mu.run_sample(l, r);
