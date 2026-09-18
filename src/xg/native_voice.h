@@ -1,4 +1,4 @@
-// license:BSD-3-Clause
+﻿// license:BSD-3-Clause
 //
 // 音色の記録（ROM の 84 バイト）から、SWP30 のスロットのレジスタを組み立てる。
 // **firmware を走らせずに音を出す**ための最初の部品（doc/native-engine.md の段 2）。
@@ -321,7 +321,10 @@ inline int level_key_curve(const u8 *rom, const u8 *elem, int note)
 	return int(s8(rom[a]));
 }
 
-// 減衰 → 音量の目盛り（表を逆に引く）。同じ減衰になる目盛りが複数あるので真ん中を返す
+// 減衰 → 音量の目盛り（表を逆に引く）。同じ減衰になる目盛りが 3-4 段
+// 並ぶので、**いちばん上（音量が大きい側）**を返す。真ん中を返していた
+// ときは、鍵の曲線を足したあとで表の段を 1 つ踏み外していた
+// （Strings の鍵 48 が 2 段ぶん静かになっていた）
 inline int level_from_att(const u8 *rom, int att)
 {
 	int lo = -1, hi = -1;
@@ -330,7 +333,7 @@ inline int level_from_att(const u8 *rom, int att)
 			if (lo < 0) lo = i;
 			hi = i;
 		}
-	return lo < 0 ? 64 : (lo + hi) / 2;
+	return lo < 0 ? 64 : hi;
 }
 
 // **校正**: 1 回だけ実機（firmware）に鳴らしてもらった減衰から、その音色の
