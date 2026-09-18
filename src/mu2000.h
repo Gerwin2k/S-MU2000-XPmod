@@ -416,7 +416,16 @@ private:
 	int  m_traj_chan[64];          // チャンネル → 何番目の写し取りか（-1 は使わない）
 	std::vector<xg::nv::voice_cal> *m_traj_cals = nullptr;
 	u32  m_traj_n = 0;
-	void traj_start(u32 rec, u64 drum_key, int ncal);
+	void traj_start(u32 rec, u64 drum_key, int ncal, u32 ctx);
+	u32  m_traj_ctx = 0;             // いま録っている写し取りの経路
+	u64  m_traj_rel_at[64] = {};     // そのスロットを離した時刻（0 はまだ）
+	// **短すぎる写しは取り直す**。フィルタの動きは firmware に鳴らさせた
+	// 1 音から録るので、その音が短いと途中で切れる。切れたぶんは native で
+	// 鳴らすときに「そこで止まった音」になり、実機より暗い（利用者の曲で
+	// 中域が 1dB 足りなかった）。何度か取り直して、いちばん長いものを使う
+	static constexpr u32 TRAJ_ENOUGH = 60;   // 60 段 ＝ 0.6 秒ぶん
+	static constexpr int TRAJ_TRIES  = 4;
+	std::map<u64, int> m_traj_tries;
 	void traj_finish();
 	// そのバイトを受け終える時刻を進めて、鳴らすべき時刻（サンプル）を返す
 	u64 rx_advance(int port)

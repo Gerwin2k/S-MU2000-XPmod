@@ -1280,7 +1280,7 @@ void mu2000::native_learn_finish()
 		const int ndcal = int(cals.size());
 		const u64 dkey = m_learn_drum;
 		m_ndrv.learn_drum(m_learn_drum, std::move(cals));
-		traj_start(0, dkey, ndcal);
+		traj_start(0, dkey, ndcal, 0);
 		m_learn_drum = 0;
 		return;
 	}
@@ -1404,8 +1404,9 @@ void mu2000::native_learn_finish()
 				             xg::nv::key_follow(e2), xg::nv::wave_set(e2), "\n");
 		}
 	}
+	const u32 learn_ctx = cals.empty() ? 0 : cals[0].cal_ctx;
 	m_ndrv.learn(m_learn_rec, std::move(cals));
-	traj_start(m_learn_rec, 0, ncal);
+	traj_start(m_learn_rec, 0, ncal, learn_ctx);
 }
 
 
@@ -1549,11 +1550,11 @@ bool mu2000::native_cal_load(const u8 *data, size_t n)
 
 // 写し取った音が鳴っている間、firmware がフィルタ（0x00・0x01・0x04）を
 // どう動かすかを録る。あとの音でも同じように動かせば、音色の動きまで揃う
-void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
+void mu2000::traj_start(u32 rec, u64 drum_key, int ncal, u32 ctx)
 {
 	if (!ncal)
 		return;
-	m_traj_cals = drum_key ? m_ndrv.drum_cals_of(drum_key) : m_ndrv.cals_of(rec, m_learn_part);
+	m_traj_cals = drum_key ? m_ndrv.drum_cals_of(drum_key) : m_ndrv.cals_of_ctx(rec, ctx);
 	if (!m_traj_cals)
 		return;
 	// 写し取ったチャンネルの順が、そのまま写し取りの並び
@@ -1577,6 +1578,9 @@ void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
 	m_ndrv.set_recording(true);
 	m_traj_rec_key = rec;
 	m_traj_drum_key = drum_key;
+	m_traj_ctx = ctx;
+	for (u64 &t : m_traj_rel_at)
+		t = 0;
 	m_traj_start = m_learn_key_clock ? m_learn_key_clock : m_ne_clock;
 	m_traj_left = 44100;                 // 1 秒ぶん見る
 	set_swp_watch([this](bool master, u32 reg, u16 value) {
@@ -1585,11 +1589,14 @@ void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
 		const int ch = int(reg / 64), r = int(reg % 64);
 		if (ch >= 64 || m_traj_chan[ch] < 0)
 			return;
-		// 離しに入ったらそこで打ち切る（離しの動きは鳴らすときには要らない）。
+		// **離しに入っても止めない**。実機はフィルタを離しのあいだも動かす。
+		// 写し取りの元にした音が短いと、録れる段のほとんどが離しのあとになる
+		// （利用者の曲では 110 段のうち 100 段がそちらだった）。
+		// ここから先の段には印を付けて、鳴らすときは離した時刻から流す。
 		// ただし鳴らし始めてすぐは見ない。前の音の離しが同じスロットに来る
 		if (r == 0x09 && (value & 0x8000)) {
-			if (m_ne_clock - m_traj_start > 44100 / 10)
-				m_traj_left = 1;
+			if (m_ne_clock - m_traj_start > 44100 / 10 && !m_traj_rel_at[ch])
+				m_traj_rel_at[ch] = m_ne_clock;
 			return;
 		}
 		// フィルタ（0x00・0x01・0x04）と LFO（0x05・0x0a）。
@@ -1600,8 +1607,10 @@ void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
 			return;
 		// **その場で**写し取りに足す。いま鳴っている native の音も、
 		// 次の tick でこの段を拾う（xg/native_driver.h の tick）
+		const u64 rel = m_traj_rel_at[ch];
 		(*m_traj_cals)[m_traj_chan[ch]].filter_env.push_back(
-		    xg::nv::fstep{ u32(m_ne_clock - m_traj_start), u8(r), value });
+		    xg::nv::fstep{ u32(m_ne_clock - (rel ? rel : m_traj_start)),
+		                   u8(r), value, u8(rel ? 1 : 0) });
 		m_traj_n++;
 	});
 }
@@ -1611,9 +1620,30 @@ void mu2000::traj_finish()
 	set_swp_watch(nullptr);
 	m_traj_rec = false;
 	m_ndrv.set_recording(false);
-	if (std::getenv("SMU2000_NATIVE_DEBUG"))
-		std::fprintf(stderr, "traj rec=%06x drum=%llx 段 %u%c", m_traj_rec_key,
-		             (unsigned long long)m_traj_drum_key, m_traj_n, 10);
+	// 録れた段が少なければ、写し取りごと捨ててつぎの音でやり直す。
+	// 回数を切っておかないと、短い音しか鳴らさない音色がいつまでも
+	// firmware 送りのままになる
+	bool again = false;
+	if (!m_traj_drum_key && m_traj_rec_key && m_traj_n < TRAJ_ENOUGH) {
+		const u64 k = u64(m_traj_rec_key) | (u64(m_traj_ctx) << 32);
+		int &n = m_traj_tries[k];
+		if (n < TRAJ_TRIES) {
+			n++;
+			again = true;
+			m_ndrv.drop_cal(m_traj_rec_key, m_traj_ctx);
+		}
+	}
+	if (std::getenv("SMU2000_NATIVE_DEBUG")) {
+		u32 nrel = 0, ntot = 0;
+		if (m_traj_cals && !m_traj_cals->empty()) {
+			ntot = u32((*m_traj_cals)[0].filter_env.size());
+			for (const auto &e : (*m_traj_cals)[0].filter_env)
+				nrel += e.rel ? 1 : 0;
+		}
+		std::fprintf(stderr, "traj rec=%06x drum=%llx 段 %u（写し1 は %u 段、うち離し %u）%s%c",
+		             m_traj_rec_key, (unsigned long long)m_traj_drum_key, m_traj_n,
+		             ntot, nrel, again ? "（短いので取り直す）" : "", 10);
+	}
 	m_traj_cals = nullptr;
 }
 
@@ -1897,8 +1927,15 @@ bool mu2000::native_midi(u8 byte, int port)
 	// まだ写し取っていない音（ドラムは音ごと）。firmware に鳴らさせて覚える
 	const u32 rec = m_ndrv.record_of(part);
 	const bool drum = m_ndrv.is_drum(part);
-	// 知らない CC で firmware に任せているパートは、写し取っても使わない
-	if ((rec || drum) && !m_learning && !m_ndrv.delegated(part)) {
+	// 知らない CC で firmware に任せているパートは、写し取っても使わない。
+	// **前の音色のフィルタの動きを録っている間は始めない**（m_traj_rec）。
+	// 写し取りも録りも SWP30 の覗き口（set_swp_watch）を 1 つしか持てないので、
+	// 新しい写し取りを始めると前の録りがそこで切れる。実測では、曲の頭で
+	// 3 パートがほぼ同時に鳴り出すと、最後の 1 つ以外は **4 段（139ms）**で
+	// 切れていた（実機は 110 段・1.1 秒かけてフィルタを閉じる）。
+	// 録り終わるまで待つぶん、その音色が native になるのは遅れるが、
+	// その間は firmware が鳴らすので音は正しい
+	if ((rec || drum) && !m_learning && !m_traj_rec && !m_ndrv.delegated(part)) {
 		m_learn_note = note;
 		m_learn_vel = vel;
 		m_learn_drum = drum ? m_ndrv.drum_key(part, note) : 0;
@@ -2115,6 +2152,13 @@ void mu2000::run_sample(s32 &left, s32 &right)
 		// 追従をやっているのは firmware なので、止めるとその音だけ変わってしまう。
 		// MIDI の溜まり具合は、止まっているときだけ見る（毎サンプル数えると重い）
 		if (m_fw_note_total && m_ne_clock < m_fw_note_until)
+			m_fw_hold = std::max(m_fw_hold, u32(2));
+		// **フィルタの動きを録っている間は firmware を全速で回す**。
+		// 包絡線を動かしているのは firmware のソフトで、10ms ごとに
+		// 0x00・0x01・0x04 を書き直す。細く回している（100ms につき 5ms）
+		// ままだと firmware の時間が 20 分の 1 しか進まず、1 秒の窓で
+		// 実機の 5% ぶんしか録れない。音色 1 つにつき 1 秒だけの負担
+		if (m_traj_rec)
 			m_fw_hold = std::max(m_fw_hold, u32(2));
 		// **firmware を細く回し続ける**。ここを入れるまでは、全部 native で
 		// 鳴る曲だと MIDI が来たときしか CPU を回さず、firmware が丸ごと
