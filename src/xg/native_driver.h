@@ -547,7 +547,7 @@ public:
 			if (!nv::element_active(el, note, vel))
 				continue;
 			// 波形の番地で、写し取ったスロットと結び付ける
-			const u8 *we = nv::wave_entry(m_rom, nv::wave_set(el), note);
+			const u8 *we = nv::wave_entry(m_rom, nv::wave_set(el), nv::wave_note(el, note));
 			const nv::voice_cal *c =
 			    we ? nv::match_cal(cals, nv::read_wave(we).format_addr, &taken) : nullptr;
 			if (!c && size_t(used) < cals.size()) {

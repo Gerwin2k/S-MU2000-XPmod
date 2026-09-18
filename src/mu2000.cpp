@@ -1157,7 +1157,7 @@ void mu2000::native_learn_finish()
 				if (used_elem & (1u << k))
 					continue;
 				const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
-				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), m_learn_note);
+				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), xg::nv::wave_note(e2, m_learn_note));
 				if (w2 && xg::nv::read_wave(w2).format_addr == want) {
 					idx = k;
 					used_elem |= 1u << k;
@@ -1189,7 +1189,7 @@ void mu2000::native_learn_finish()
 		for (int k = 0; k < ncal; k++) {
 			const xg::nv::voice_cal &c = cals[size_t(k)];
 			const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
-			const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), m_learn_note);
+			const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), xg::nv::wave_note(e2, m_learn_note));
 			std::fprintf(stderr, "  写し%d 0x11=%04x 0x32=%04x 0x09=%04x 波形=%08x"
 			                     " / 式 0x11=%04x 要素b18=%d b0=%d b1=%d\n",
 			             k, c.reg[0x11], c.reg[0x32], c.reg[0x09], c.wave_addr(),
