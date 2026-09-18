@@ -81,12 +81,22 @@ inline wave_info read_wave(const u8 *e)
 
 // 音程のレジスタ（0x11）。1 オクターブ = 1024、細かい調整はセント（**足す**）。
 // 実測（鍵 0-127・18 区画）と ±0.7 目盛りで合う
-inline u16 pitch_reg(const wave_info &w, int note, int cents_extra = 0)
+// 鍵の追従率（記録の byte19）。0 が普通の 100 セント/半音で、
+// 1 が半分、2 が 1/5、3 が 1/10。効果音の音色でよく使う
+inline int key_follow(const u8 *elem)
+{
+	static const int F[4] = { 100, 50, 20, 10 };
+	return F[elem[19] & 3];
+}
+
+inline u16 pitch_reg(const wave_info &w, int note, int follow = 100, int cents_extra = 0)
 {
 	// 整数で計算する（firmware と同じ丸めになる。0 の側へ切り捨て）
-	const int cents = (note - w.base_key) * 100 + w.fine_cents + cents_extra;
+	const int cents = (note - w.base_key) * follow + w.fine_cents + cents_extra;
 	const int v = cents * 1024 / 1200;
-	return u16(v & 0x3fff);
+	// ビット 14 は波形の**形式**で決まる（形式 3 のときだけ立つ。402 組で確かめた）
+	const u16 flag = ((w.format_addr >> 30) & 3) == 3 ? 0x4000 : 0;
+	return u16((v & 0x3fff) | flag);
 }
 
 // 組み立てたスロットのレジスタ。write が立っている所だけ書く
@@ -165,7 +175,7 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	r.set(0x09, u16(att & 0xff));
 
 	// --- 音程と波形（6.2）
-	r.set(0x11, pitch_reg(w, note));
+	r.set(0x11, pitch_reg(w, note, key_follow(elem)));
 	r.set(0x12, u16(w.pre_loop >> 16));
 	r.set(0x13, u16(w.pre_loop));
 	r.set(0x14, u16(w.loop_len >> 16));

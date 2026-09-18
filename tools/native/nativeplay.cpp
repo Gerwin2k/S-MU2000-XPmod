@@ -77,6 +77,7 @@ int main(int argc, char **argv)
 	int msb = 0, lsb = 0, prog = 0, note = 60, vel = 100, slot = 0;
 	double seconds = 2.0;
 	bool firmware = false, compare = false;
+	int sweep = 0;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -86,6 +87,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--slot") && i + 1 < argc) slot = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--firmware")) firmware = true;
 		else if (!std::strcmp(argv[i], "--compare")) compare = true;
+		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 	}
 
 	mu2000 mu;
@@ -125,6 +127,85 @@ int main(int argc, char **argv)
 	std::printf("音色 %d,%d,%d = %s（記録 %06x、要素 %d）%c", msb, lsb, prog,
 	            vr.record_name(rec).c_str(), rec, xg::nv::element_count(rom, rec), 10);
 
+	// --sweep: 音色をいくつも替えて、レジスタの一致率をまとめて出す
+	if (sweep > 0) {
+		int total_same = 0, total_diff = 0;
+		std::map<int, int> bad;                 // レジスタ番号 → 合わなかった回数
+		int cases = 0, shown = 0;
+		for (int pg = 0; pg < sweep; pg++) {
+			for (u8 b : { u8(0xb0), u8(0x00), u8(msb & 0x7f), u8(0xb0), u8(0x20), u8(lsb & 0x7f),
+			              u8(0xc0), u8(pg & 0x7f) })
+				mu.midi_in(b, 0);
+			for (u32 i = 0; i < RATE / 4; i++)
+				mu.run_sample(l, r);
+			const u8 *pr2 = mu.nvram().data() + part0;
+			const u32 rec2 = u32(pr2[xg::ram::PART_VOICE]) << 24 | u32(pr2[xg::ram::PART_VOICE + 1]) << 16 |
+			                 u32(pr2[xg::ram::PART_VOICE + 2]) << 8 | pr2[xg::ram::PART_VOICE + 3];
+			if (!rec2 || xg::nv::element_count(rom, rec2) != 1)
+				continue;                        // 1 要素のものだけ
+			for (int nt : { 36, 60, 84 }) {
+				std::map<u32, u16> seen;
+				u64 mask = 0, keyed = 0;
+				mu.set_swp_watch([&](bool master, u32 reg, u16 value) {
+					if (!master) return;
+					seen.emplace(reg, value);        // **最初の書き込み**を採る
+					switch (reg) {
+					case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(value) << 48); break;
+					case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(value) << 32); break;
+					case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(value) << 16); break;
+					case 0x1cf: mask = (mask & ~u64(0xffff)) | value; break;
+					// 引き金が引かれた瞬間の値を残す。これより後は LFO などの
+					// 書き直しなので、組み立ての答え合わせには使えない
+					case 0x20e: keyed |= mask; break;
+					default: break;
+					}
+				});
+				for (u8 b : { u8(0x90), u8(nt), u8(vel & 0x7f) })
+					mu.midi_in(b, 0);
+				for (u32 i = 0; i < RATE / 25; i++)
+					mu.run_sample(l, r);
+				mu.set_swp_watch(nullptr);
+				for (u8 b : { u8(0x80), u8(nt), u8(0x40) })
+					mu.midi_in(b, 0);
+				for (u32 i = 0; i < RATE / 10; i++)
+					mu.run_sample(l, r);
+				int ch = -1, n = 0;
+				for (int c = 0; c < 64; c++)
+					if (keyed & (u64(1) << c)) { ch = ch < 0 ? c : ch; n++; }
+				if (ch < 0 || n != 1)
+					continue;                    // 1 スロットだけのものを使う
+				const xg::nv::slot_regs mine =
+				    xg::nv::build_note(rom, xg::nv::element(rom, rec2, 0), nt, 0x1e);
+				cases++;
+				for (int i = 0; i < 0x40; i++) {
+					if (!(mine.write & (u64(1) << i)))
+						continue;
+					const auto it = seen.find(u32(ch) * 64 + u32(i));
+					if (it == seen.end())
+						continue;
+					if (it->second == mine.v[i]) {
+						total_same++;
+					} else {
+						total_diff++;
+						bad[i]++;
+						if (i == 0x11 && shown < 6) {
+							shown++;
+							std::printf("  [音程] prog%3d 鍵%3d  firmware %04x  こちら %04x  byte19=%02x%c",
+							            pg, nt, it->second, mine.v[i], xg::nv::element(rom, rec2, 0)[19], 10);
+						}
+					}
+				}
+			}
+		}
+		std::printf("%d 件（音色 × 鍵）で、レジスタ 一致 %d / 違い %d（%.1f%% 一致）%c",
+		            cases, total_same, total_diff,
+		            100.0 * total_same / std::max(1, total_same + total_diff), 10);
+		std::printf("合わないレジスタ:%c", 10);
+		for (auto [reg, cnt] : bad)
+			std::printf("  %02x  %d 回（%.0f%%）%c", reg, cnt, 100.0 * cnt / std::max(1, cases), 10);
+		return 0;
+	}
+
 	// --compare: firmware に 1 音鳴らさせて、そのとき書かれたレジスタと
 	// 自分で組み立てたものを突き合わせる（段 2 の「レジスタ列が一致」の物差し）
 	if (compare) {
@@ -133,7 +214,7 @@ int main(int argc, char **argv)
 		mu.set_swp_watch([&](bool master, u32 reg, u16 value) {
 			if (!master)
 				return;
-			seen[reg] = value;
+			seen.emplace(reg, value);        // **最初の書き込み**を採る
 			switch (reg) {
 			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(value) << 48); break;
 			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(value) << 32); break;
