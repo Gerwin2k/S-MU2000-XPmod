@@ -1345,7 +1345,7 @@ void mu2000::native_learn_finish()
 namespace {
 
 constexpr u32 CAL_MAGIC = 0x43563253u;   // "S2VC"
-constexpr u32 CAL_VERSION = 7;
+constexpr u32 CAL_VERSION = 8;
 
 void put8(std::vector<u8> &v, u8 x) { v.push_back(x); }
 void put16v(std::vector<u8> &v, u16 x) { v.push_back(u8(x)); v.push_back(u8(x >> 8)); }

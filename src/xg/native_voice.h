@@ -341,26 +341,34 @@ inline int wave_level(const u8 *rom, const u8 *elem, int note)
 	return we ? int(we[0]) : 0;
 }
 
-// 鍵の曲線が音量の目盛りに効く倍率。実測（GrandPno の鍵 12-75）では 1 倍
-constexpr int LEVEL_CURVE_MUL = 1;
-
-inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref, int vel_ref)
+// **鍵の曲線は「減衰」に効く**（目盛りに足すのではない）。
+// `nativeplay --levelcheck` で Strings を測ったら、曲線が 0/-1/-2/-3/-5/-7 の
+// 鍵で実機の減衰が 32/32/34/34/36/38 だった。これは
+//   減衰 = 素の減衰 + (-曲線) / 2      （2 で割るのは切り捨て）
+// でぴったり合う（6 鍵とも）。目盛りに足す形では、どんな素の音量を
+// 入れても全部の鍵を合わせられない（0-127 を総当たりして解なし）
+inline int level_curve_att(const u8 *rom, const u8 *elem, int note)
 {
-	const int rest = att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref);
-	return level_from_att(rom, rest) - LEVEL_CURVE_MUL * level_key_curve(rom, elem, note_ref);
+	return -level_key_curve(rom, elem, note) / 2;
 }
 
-// 校正した素の音量から、その鍵・強さの減衰（0x09 に入れる値）
-inline int volume_att(const u8 *rom, const u8 *elem, int base_level, int note, int vel)
+// **校正**: 実機に 1 音鳴らしてもらった減衰から、鍵・強さによらない
+// 「素の減衰」を出す。表の逆引きが要らないので、逆引きの曖昧さ
+// （同じ減衰になる目盛りが 3-4 段並ぶ）も入らない
+inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref, int vel_ref)
 {
-	int l = base_level + LEVEL_CURVE_MUL * level_key_curve(rom, elem, note);
-	if (l < 0) l = 0;
-	if (l > 127) l = 127;
+	return att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref)
+	     - level_curve_att(rom, elem, note_ref);
+}
+
+// 校正した素の減衰から、その鍵・強さの減衰（0x09 に入れる値）
+inline int volume_att(const u8 *rom, const u8 *elem, int base_att, int note, int vel)
+{
 	// 波形の記録の先頭のバイトが、その段ぶんの減衰。多段サンプルの音色では
 	// 段の変わり目で 1.5dB ほど動くので、これを入れないと段ごとにずれる
-	const int a = rom[LEVEL_TAB + 0x80 + u32(l)] + velocity_att(rom, vel)
-	            + wave_level(rom, elem, note);
-	return std::min(0xff, a * 2);
+	const int a = base_att + velocity_att(rom, vel) + wave_level(rom, elem, note)
+	            + level_curve_att(rom, elem, note);
+	return std::min(0xff, std::max(0, a * 2));
 }
 
 // 減衰・離しの速さに乗る、鍵による補正（firmware の 0x12ADD0）
