@@ -368,6 +368,17 @@ private:
 	u32  m_nown[64][4] = {};       // native で鳴らしている鍵（パートごとに 128 ビット）
 
 	void native_pump();
+	// 写し取った音の、フィルタの動きを録る（doc/native-engine.md の 6.17）
+	bool m_traj_rec = false;
+	u32  m_traj_left = 0;
+	u64  m_traj_start = 0;
+	u32  m_traj_rec_key = 0;
+	u64  m_traj_drum_key = 0;
+	int  m_traj_chan[64];          // チャンネル → 何番目の写し取りか（-1 は使わない）
+	std::vector<xg::nv::voice_cal> *m_traj_cals = nullptr;
+	u32  m_traj_n = 0;
+	void traj_start(u32 rec, u64 drum_key, int ncal);
+	void traj_finish();
 	// そのバイトを受け終える時刻を進めて、鳴らすべき時刻（サンプル）を返す
 	u64 rx_advance(int port)
 	{

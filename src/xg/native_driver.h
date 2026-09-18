@@ -47,6 +47,8 @@ public:
 	// スロット 1 つの使われ方
 	struct slot_use {
 		bool on = false;
+		u32 tpos = 0;                   // フィルタの包絡線の、つぎに書く段
+		u64 tstart = 0;                 // 鳴らし始めた時刻
 		bool held = false;              // ダンパーで離しを待たせている
 		int part = -1, note = -1, att = 0;
 		const u8 *elem = nullptr;
@@ -72,6 +74,8 @@ public:
 			s = slot_use();
 		for (auto &c : m_cc)
 			c = part_cc();
+		m_clock = 0;
+		m_traj = false;
 		m_age = 0;
 	}
 
@@ -100,6 +104,39 @@ public:
 		if (!m_ram || part < 0 || part >= PARTS)
 			return false;
 		return m_ram[ram::part_base(part) + 0x07] != 0;
+	}
+
+	// 写し取ったものを、あとから直せるように渡す（フィルタの包絡線の追記用）
+	std::vector<nv::voice_cal> *cals_of(u32 rec)
+	{
+		const auto it = m_cal.find(rec);
+		return it == m_cal.end() ? nullptr : &it->second;
+	}
+	std::vector<nv::voice_cal> *drum_cals_of(u64 key)
+	{
+		const auto it = m_drum.find(key);
+		return it == m_drum.end() ? nullptr : &it->second;
+	}
+
+	// フィルタの包絡線を、鳴っているスロットに流す。1 サンプルに 1 回呼ぶ
+	void tick(u64 clock)
+	{
+		m_clock = clock;
+		if (!m_traj)
+			return;
+		int live = 0;
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (!s.on || !s.cal || s.tpos >= s.cal->filter_env.size())
+				continue;
+			live++;
+			const std::vector<nv::fstep> &fe = s.cal->filter_env;
+			while (s.tpos < fe.size() && s.tstart + fe[s.tpos].at <= clock) {
+				m_poke(u32(i) * 64 + fe[s.tpos].reg, fe[s.tpos].v);
+				s.tpos++;
+			}
+		}
+		m_traj = live > 0;
 	}
 
 	// ドラムの覚え先の鍵（バンクとプログラムと音の高さ）
@@ -232,7 +269,8 @@ private:
 				continue;
 			m_poke(u32(i) * 64 + 0x11,
 			       nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(s.elem),
-			                     nv::bend_cents(m_cc[part].bend, m_cc[part].range)));
+			                     nv::bend_cents(m_cc[part].bend, m_cc[part].range)
+			                     + nv::elem_tune(s.elem)));
 		}
 	}
 
@@ -302,6 +340,7 @@ public:
 
 		const int nelem = nv::element_count(m_rom, rec);
 		u64 keymask = 0;
+		u32 taken = 0;                   // もう使った写し取りの印
 		int used = 0;
 		for (int k = 0; k < nelem; k++) {
 			const u8 *el = nv::element(m_rom, rec, k);
@@ -309,9 +348,12 @@ public:
 				continue;
 			// 波形の番地で、写し取ったスロットと結び付ける
 			const u8 *we = nv::wave_entry(m_rom, nv::wave_set(el), note);
-			const nv::voice_cal *c = we ? nv::match_cal(cals, nv::read_wave(we).format_addr) : nullptr;
-			if (!c && size_t(used) < cals.size())
+			const nv::voice_cal *c =
+			    we ? nv::match_cal(cals, nv::read_wave(we).format_addr, &taken) : nullptr;
+			if (!c && size_t(used) < cals.size()) {
 				c = &cals[used];
+				taken |= u32(1) << used;
+			}
 			used++;
 			const int slot = take_slot(part, note);
 			if (slot < 0)
@@ -320,6 +362,10 @@ public:
 			su.elem = el;
 			su.wave = we;
 			su.cal = c;
+			su.tpos = 0;
+			su.tstart = m_clock;
+			if (c && !c->filter_env.empty())
+				m_traj = true;
 			su.att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
 			const part_cc &pc = m_cc[part];
 			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,
@@ -386,6 +432,10 @@ public:
 			su.elem = nullptr;               // ドラムは離しの速さを写しの値で済ませる
 			su.wave = nullptr;
 			su.cal = &c;
+			su.tpos = 0;
+			su.tstart = m_clock;
+			if (!c.filter_env.empty())
+				m_traj = true;
 			su.att = att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel));
 			const int att = note_att(su, part);
 			for (int i = 0; i < 0x40; i++)
@@ -394,6 +444,10 @@ public:
 					       i == 9 ? u16(att) : (i == 0x32 ? pan_reg(c, part) : c.reg[i]));
 
 			su.drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
+			if (debug_on())
+				std::fprintf(stderr, "drum part=%d note=%d vel=%d/%d att=%d->%d 段 %d 写し %016llx%s",
+				             part, note, vel, c.cal_vel, att0, att,
+				             int(c.filter_env.size()), (unsigned long long)c.mask, "\n");
 			keymask |= u64(1) << slot;
 		}
 		if (!keymask)
@@ -403,6 +457,17 @@ public:
 	}
 
 private:
+
+	slot_use fresh(int part, int note)
+	{
+		slot_use s;
+		s.on = true;
+		s.part = part;
+		s.note = note;
+		s.tstart = m_clock;
+		s.age = ++m_age;
+		return s;
+	}
 
 	// 空きスロットを取る。無ければ一番古い声を止めて使う。
 	// **上から**取る。firmware は下から使うので、写し取りのために firmware が
@@ -414,7 +479,7 @@ private:
 		for (int n2 = 0; n2 < SLOTS; n2++) {
 			const int i = SLOTS - 1 - n2;
 			if (!m_slot[i].on) {
-				m_slot[i] = slot_use{ true, false, part, note, 0, nullptr, nullptr, nullptr, 0, ++m_age };
+				m_slot[i] = fresh(part, note);
 				return i;
 			}
 			if (m_slot[i].age < oldest_age) {
@@ -424,7 +489,7 @@ private:
 		}
 		if (oldest < 0)
 			return -1;
-		m_slot[oldest] = slot_use{ true, false, part, note, 0, nullptr, nullptr, nullptr, 0, ++m_age };
+		m_slot[oldest] = fresh(part, note);
 		return oldest;
 	}
 
@@ -450,6 +515,8 @@ private:
 	std::unordered_map<u64, std::vector<nv::voice_cal>> m_drum;
 	std::array<slot_use, SLOTS> m_slot;
 	std::array<part_cc, PARTS> m_cc;
+	u64 m_clock = 0;
+	bool m_traj = false;
 	u64 m_age = 0;
 };
 

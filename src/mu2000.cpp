@@ -993,6 +993,9 @@ void mu2000::set_native_engine(int mode)
 		c = 0;
 	m_fw_note_total = 0;
 	m_nq.clear();
+	m_traj_rec = false;
+	m_traj_left = 0;
+	m_traj_cals = nullptr;
 	m_ne_clock = 0;
 	for (u64 &t : m_rx_at)
 		t = 0;
@@ -1076,7 +1079,10 @@ void mu2000::native_learn_finish()
 			cal.have = true;
 			cals.push_back(cal);
 		}
+		const int ndcal = int(cals.size());
+		const u64 dkey = m_learn_drum;
 		m_ndrv.learn_drum(m_learn_drum, std::move(cals));
+		traj_start(0, dkey, ndcal);
 		m_learn_drum = 0;
 		return;
 	}
@@ -1092,6 +1098,7 @@ void mu2000::native_learn_finish()
 	}
 	const u8 *rom = m_prog->data();
 	const int nel = xg::nv::element_count(rom, m_learn_rec);
+	unsigned used_elem = 0;
 	std::vector<xg::nv::voice_cal> cals;
 	for (int ch = 0; ch < 64; ch++) {
 		if (!(m_learn_keyed & (u64(1) << ch)))
@@ -1106,14 +1113,21 @@ void mu2000::native_learn_finish()
 			if (it != src.end())
 				cal.set(i, it->second);
 		}
-		// どの要素かは、そのスロットが鳴らしている波形の番地で見分ける
+		// どの要素かは、そのスロットが鳴らしている波形の番地で見分ける。
+		// 同じ波形の要素が 2 つあるときは、まだ使っていないほうを取る
 		int idx = -1;
 		if (cal.has(0x16) && cal.has(0x17)) {
 			const u32 want = u32(cal.reg[0x16]) << 16 | cal.reg[0x17];
 			for (int k = 0; k < nel; k++) {
+				if (used_elem & (1u << k))
+					continue;
 				const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
 				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), m_learn_note);
-				if (w2 && xg::nv::read_wave(w2).format_addr == want) { idx = k; break; }
+				if (w2 && xg::nv::read_wave(w2).format_addr == want) {
+					idx = k;
+					used_elem |= 1u << k;
+					break;
+				}
 			}
 		}
 		if (idx < 0)
@@ -1128,7 +1142,81 @@ void mu2000::native_learn_finish()
 		cal.have = true;
 		cals.push_back(cal);
 	}
+	const int ncal = int(cals.size());
+	if (std::getenv("SMU2000_NATIVE_DEBUG")) {
+		std::fprintf(stderr, "learn rec=%06x 要素 %d 写し %d 鍵いた %d\n", m_learn_rec, nel, ncal,
+		             __builtin_popcountll(m_learn_keyed));
+		for (int k = 0; k < ncal; k++) {
+			const xg::nv::voice_cal &c = cals[size_t(k)];
+			const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
+			const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), m_learn_note);
+			std::fprintf(stderr, "  写し%d 0x11=%04x 0x32=%04x 0x09=%04x 波形=%08x"
+			                     " / 式 0x11=%04x 要素b18=%d b0=%d b1=%d\n",
+			             k, c.reg[0x11], c.reg[0x32], c.reg[0x09], c.wave_addr(),
+			             w2 ? xg::nv::pitch_reg(xg::nv::read_wave(w2), m_learn_note,
+			                                    xg::nv::key_follow(e2)) : 0,
+			             e2[18], e2[0], e2[1]);
+			if (w2)
+				std::fprintf(stderr, "        こちらの波形=%08x 基準鍵=%d 微調=%d 上限鍵=%d 追従=%d 組=%d%s",
+				             xg::nv::read_wave(w2).format_addr, xg::nv::read_wave(w2).base_key,
+				             xg::nv::read_wave(w2).fine_cents, xg::nv::read_wave(w2).key_max,
+				             xg::nv::key_follow(e2), xg::nv::wave_set(e2), "\n");
+		}
+	}
 	m_ndrv.learn(m_learn_rec, std::move(cals));
+	traj_start(m_learn_rec, 0, ncal);
+}
+
+// 写し取った音が鳴っている間、firmware がフィルタ（0x00・0x01・0x04）を
+// どう動かすかを録る。あとの音でも同じように動かせば、音色の動きまで揃う
+void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
+{
+	if (!ncal)
+		return;
+	m_traj_cals = drum_key ? m_ndrv.drum_cals_of(drum_key) : m_ndrv.cals_of(rec);
+	if (!m_traj_cals)
+		return;
+	// 写し取ったチャンネルの順が、そのまま写し取りの並び
+	int n = 0;
+	for (int ch = 0; ch < 64; ch++)
+		m_traj_chan[ch] = (m_learn_keyed & (u64(1) << ch)) ? n++ : -1;
+	m_traj_n = 0;
+	m_traj_rec = true;
+	m_traj_rec_key = rec;
+	m_traj_drum_key = drum_key;
+	m_traj_start = m_ne_clock;
+	m_traj_left = 44100;                 // 1 秒ぶん見る
+	set_swp_watch([this](bool master, u32 reg, u16 value) {
+		if (!master)
+			return;
+		const int ch = int(reg / 64), r = int(reg % 64);
+		if (ch >= 64 || m_traj_chan[ch] < 0)
+			return;
+		// 離しに入ったらそこで打ち切る（離しの動きは鳴らすときには要らない）
+		if (r == 0x09 && (value & 0x8000)) {
+			m_traj_left = 1;
+			return;
+		}
+		if (r != 0x00 && r != 0x01 && r != 0x04)
+			return;
+		if (m_traj_n >= 2048 || size_t(m_traj_chan[ch]) >= m_traj_cals->size())
+			return;
+		// **その場で**写し取りに足す。いま鳴っている native の音も、
+		// 次の tick でこの段を拾う（xg/native_driver.h の tick）
+		(*m_traj_cals)[m_traj_chan[ch]].filter_env.push_back(
+		    xg::nv::fstep{ u32(m_ne_clock - m_traj_start), u8(r), value });
+		m_traj_n++;
+	});
+}
+
+void mu2000::traj_finish()
+{
+	set_swp_watch(nullptr);
+	m_traj_rec = false;
+	if (std::getenv("SMU2000_NATIVE_DEBUG"))
+		std::fprintf(stderr, "traj rec=%06x drum=%llx 段 %u%c", m_traj_rec_key,
+		             (unsigned long long)m_traj_drum_key, m_traj_n, 10);
+	m_traj_cals = nullptr;
 }
 
 // 待っている native の出来事を、時が来たものから実行する
@@ -1467,6 +1555,9 @@ void mu2000::run_sample(s32 &left, s32 &right)
 		m_ne_clock++;
 		if (!m_nq.empty())
 			native_pump();
+		m_ndrv.tick(m_ne_clock);
+		if (m_traj_rec && m_traj_left && --m_traj_left == 0)
+			traj_finish();
 	}
 	if (run_cpu)
 		run_cycles(cycles);

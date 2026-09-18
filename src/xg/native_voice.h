@@ -110,6 +110,12 @@ inline int key_follow(const u8 *elem)
 	return F[elem[19] & 3];
 }
 
+// 要素ぶんの音程のずらし（セント）。byte17 が半音、byte18 がセント
+inline int elem_tune(const u8 *elem)
+{
+	return (int(elem[17]) - 64) * 100 + (int(elem[18]) - 64);
+}
+
 inline u16 pitch_reg(const wave_info &w, int note, int follow = 100, int cents_extra = 0)
 {
 	// 整数で計算する（firmware と同じ丸めになる。0 の側へ切り捨て）
@@ -295,6 +301,14 @@ inline u16 release_reg(const u8 *rom, const u8 *elem, int note, int att)
 // 起動のときに firmware へ 1 音だけ鳴らしてもらって、そのときの値を覚えておく。
 // 鍵や強さで動かないものが多いので、これだけで実機にかなり近くなる。
 // 覚えるのは**利用者の ROM から起こした値**で、配らない（起動のたびに作る）
+// フィルタの包絡線の 1 段。firmware はこれをソフトで動かして、鳴っている間
+// 0x00・0x01・0x04 を 10ms ごとに書き直す（doc/native-engine.md の 6.17）
+struct fstep {
+	u32 at;            // 鳴らし始めてからのサンプル数
+	u8  reg;
+	u16 v;
+};
+
 struct voice_cal {
 	bool have = false;
 	int  base_level = 64;      // 校正した素の音量
@@ -307,17 +321,31 @@ struct voice_cal {
 	bool has(int r) const { return (mask & (u64(1) << r)) != 0; }
 	void set(int r, u16 v) { reg[r] = v; mask |= u64(1) << r; }
 
+	// 写し取った音で、firmware がフィルタをどう動かしたか。
+	// あとの音でも同じように動かす（鍵と強さは変わるが、形は近い）
+	std::vector<fstep> filter_env;
+
 	// そのスロットが鳴らしていた波形の番地（0x16/0x17）
 	u32 wave_addr() const { return u32(reg[0x16]) << 16 | reg[0x17]; }
 };
 
 // 要素と、写し取ったスロットを**波形の番地で**結び付ける。
 // 要素の並びとスロットの並びが同じとは限らないので、順番では当てにならない
-inline const voice_cal *match_cal(const std::vector<voice_cal> &cals, u32 want)
+// used には「もう使った写し取り」の印を立てる。同じ波形を鳴らす要素が
+// 2 つあるとき（重ねの音色ではよくある）、両方が同じ写し取りを掴むと
+// 片方の音量が丸ごと違ってしまう
+inline const voice_cal *match_cal(const std::vector<voice_cal> &cals, u32 want, u32 *used = nullptr)
 {
-	for (const voice_cal &c : cals)
-		if (c.has(0x16) && c.has(0x17) && c.wave_addr() == want)
+	for (size_t i = 0; i < cals.size(); i++) {
+		if (used && (*used & (u32(1) << i)))
+			continue;
+		const voice_cal &c = cals[i];
+		if (c.has(0x16) && c.has(0x17) && c.wave_addr() == want) {
+			if (used)
+				*used |= u32(1) << i;
 			return &c;
+		}
+	}
 	return nullptr;
 }
 
@@ -366,7 +394,10 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	r.set(0x09, u16(att & 0xff));
 
 	// --- 音程と波形（6.2）
-	r.set(0x11, pitch_reg(w, note, key_follow(elem), cents_extra));
+	// 要素の byte17 は**半音単位の粗調**、byte18 は**セント単位の離調**（どちらも 64 が中央）。
+	// 離調は重ねの音色で 2 つの層をずらすのに使う。入れないと層がぴったり重なって
+	// 打ち消し合わず、3dB ほど大きくなる（doc/native-engine.md の 6.18）
+	r.set(0x11, pitch_reg(w, note, key_follow(elem), cents_extra + elem_tune(elem)));
 	r.set(0x12, u16(w.pre_loop >> 16));
 	r.set(0x13, u16(w.pre_loop));
 	r.set(0x14, u16(w.loop_len >> 16));
