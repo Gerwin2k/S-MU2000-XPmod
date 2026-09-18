@@ -138,6 +138,17 @@ public:
 	size_t cal_count() const { return m_cal.size() + m_drum.size(); }
 	int peak_slots() const { return m_peak; }
 
+	// いまこちらが鳴らしているスロットの印。firmware が写し取りのために
+	// 鳴らすとき、ここと重なっていないかを見るのに使う
+	u64 slot_mask() const
+	{
+		u64 m = 0;
+		for (int i = 0; i < SLOTS; i++)
+			if (m_slot[i].on)
+				m |= u64(1) << i;
+		return m;
+	}
+
 	// 写し取りの最中は、段が後から増えるので毎サンプル見る
 	void set_recording(bool on) { m_rec = on; m_traj_next = 0; }
 

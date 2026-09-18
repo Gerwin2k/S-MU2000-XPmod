@@ -181,6 +181,7 @@ int main(int argc, char **argv)
 	int catoff = -1;
 	bool xgmap = false;
 	const char *sxsettle = nullptr;
+	bool egwatch = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -208,6 +209,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--at")) atwatch = true;
 		else if (!std::strcmp(argv[i], "--xgmap")) xgmap = true;
 		else if (!std::strcmp(argv[i], "--sxsettle") && i + 1 < argc) sxsettle = argv[++i];
+		else if (!std::strcmp(argv[i], "--egwatch")) egwatch = true;
 		else if (!std::strcmp(argv[i], "--catoff") && i + 1 < argc) catoff = int(std::strtol(argv[++i], nullptr, 0));
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
@@ -677,6 +679,54 @@ int main(int argc, char **argv)
 			if (o.vel == 100 && o.cut >= 0)
 				std::printf("CUT 鍵 %3d 強さ %3d  0x00=%04x 切る高さ %4d（表との差 %+d） 0x04=%04x%c",
 				            o.note, o.vel, o.cut, o.cut & 0x7ff, (o.cut & 0x7ff) - tab, o.res, 10);
+		return 0;
+	}
+
+	// --egwatch: 1 音鳴らして、**包絡線のレジスタ（0x06/0x07/0x08/0x09）を
+	// firmware がいつ書くか**を鍵を押した時刻からの相対で出す。
+	// 写し取りの窓（鳴り始めてから 5ms）がこれを取り切れているかを見るための口
+	if (egwatch) {
+		u64 mask = 0, keyed = 0, t = 0, t0 = 0;
+		struct ev { u64 t; u8 ch, reg; u16 v; };
+		std::vector<ev> log;
+		mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+			if (!master) return;
+			switch (r2) {
+			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+			case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+			case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+			case 0x20e: keyed |= mask; if (!t0) t0 = t; break;
+			default: {
+				const u32 rr = r2 % 64;
+				if (r2 < 0x1000 && rr >= 0x06 && rr <= 0x09)
+					log.push_back({ t, u8(r2 / 64), u8(rr), v2 });
+				break;
+			}
+			}
+		});
+		for (u8 bb : { u8(0x90), u8(note & 0x7f), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (; t < RATE / 2; t++)
+			mu.run_sample(l, r);
+		const u64 key_at = t0;
+		for (u8 bb : { u8(0x80), u8(note & 0x7f), u8(64) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 2; i++) { mu.run_sample(l, r); t++; }
+		mu.set_swp_watch(nullptr);
+		std::printf("== 包絡線のレジスタを書いた時刻（鍵を押した時点を 0 とする）%c", 10);
+		std::printf("   写し取りの窓は「鳴り始めから 5ms」= +5.0ms まで%c", 10);
+		int n = 0;
+		for (const ev &e : log) {
+			if (!(keyed & (u64(1) << e.ch)))
+				continue;
+			const double ms = (double(s64(e.t)) - double(s64(key_at))) * 1000.0 / RATE;
+			std::printf("  %+9.2f ms  スロット%2d  0x%02x = %04x%s%c", ms, int(e.ch),
+			            int(e.reg), e.v, ms > 5.0 && ms < 300.0 ? "   ← 窓の外" : "", 10);
+			if (++n > 60)
+				break;
+		}
+		std::printf("  書いた回数 %d%c", int(log.size()), 10);
 		return 0;
 	}
 

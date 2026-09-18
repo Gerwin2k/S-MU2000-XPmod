@@ -1076,8 +1076,31 @@ void mu2000::native_learn_start(u32 rec)
 		case 0x20e:
 			// **要素のぶんだけ**。速い曲では、写し取りの窓の中に次の音の
 			// 引き金が入ってしまい、余計なスロットまで拾っていた
-			if (__builtin_popcountll(m_learn_keyed) < m_learn_want)
+			// **写し取りの窓の中で、別の音が同じスロットに鳴り始めたか**。
+			// 写し取りは「窓の中で最後に見た値」を取るので、ここで重なると
+			// その音色の包絡線が別の音の値で焼き付いてしまう
+			if (m_learn_keyed && (m_learn_mask & m_learn_keyed)) {
+				m_ne_learn_dirty++;
+				if (std::getenv("SMU2000_NATIVE_DEBUG"))
+					std::fprintf(stderr, "写し取りが汚れた: すでに %d 個、新しい鍵 %016llx 重なり %016llx\n",
+					             __builtin_popcountll(m_learn_keyed),
+					             (unsigned long long)m_learn_mask,
+					             (unsigned long long)(m_learn_mask & m_learn_keyed));
+			}
+			if (__builtin_popcountll(m_learn_keyed) < m_learn_want) {
+				// **firmware がこちらの鳴っているスロットを取ったか**を見る。
+				// firmware は native の使用中を知らないので、声が増えると
+				// 奪い合いになり、写し取りに 2 つの音の値が混ざる
+				if (const u64 clash = m_learn_mask & m_ndrv.slot_mask()) {
+					m_ne_slot_clash++;
+					if (std::getenv("SMU2000_NATIVE_DEBUG"))
+						std::fprintf(stderr, "スロットの奪い合い: firmware=%016llx native=%016llx 重なり=%016llx\n",
+						             (unsigned long long)m_learn_mask,
+						             (unsigned long long)m_ndrv.slot_mask(),
+						             (unsigned long long)clash);
+				}
 				m_learn_keyed |= m_learn_mask;
+			}
 			if (m_learn_first.empty())
 				m_learn_first = m_learn_last;
 			if (!m_learn_key_clock)
@@ -1185,8 +1208,18 @@ void mu2000::native_learn_finish()
 				}
 			}
 		}
-		if (idx < 0)
+		if (idx < 0) {
+			// **波形の番地が取れているのに、どの要素とも合わない**＝この
+			// スロットはこの音色のものではない。同時に音が鳴ると firmware の
+			// 鳴らす順で関係ないスロットを掴むことがあり、そのまま覚えると
+			// **その音の包絡線がこの音色に焼き付く**（アタックが極端に遅い、
+			// リリースが無い、など）。捨てて次の音でやり直す
+			if (cal.has(0x16) && cal.has(0x17)) {
+				m_ne_learn_wrong++;
+				continue;
+			}
 			idx = int(cals.size()) < nel ? int(cals.size()) : 0;
+		}
 		cal.base_level = xg::nv::calibrate_level(rom, xg::nv::element(rom, m_learn_rec, idx),
 		                                         cal.has(9) ? (cal.reg[9] & 0xff) : 64,
 		                                         m_learn_note, m_learn_vel);
