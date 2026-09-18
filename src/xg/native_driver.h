@@ -21,6 +21,7 @@
 #include "xg/native_voice.h"
 #include "xg/ram.h"
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <unordered_map>
@@ -45,6 +46,7 @@ public:
 	void reset()
 	{
 		m_cal.clear();
+		m_drum.clear();
 		for (auto &s : m_slot)
 			s = slot_use();
 		m_age = 0;
@@ -58,6 +60,36 @@ public:
 	{
 		if (!cals.empty())
 			m_cal[rec] = std::move(cals);
+	}
+
+	// ドラムは音ごとに中身が違うので、**鍵ごと**に覚える。
+	// 同じ音を何度も叩くので、これだけで打楽器のほとんどが native になる
+	void learn_drum(u64 key, std::vector<nv::voice_cal> cals)
+	{
+		if (!cals.empty())
+			m_drum[key] = std::move(cals);
+	}
+
+	// ドラムのパートか。XG の「パートモード」（08 pp 07。0 が普通、1 以上がドラム）を見る。
+	// 「記録が引けない＝ドラム」では、音色を選び終える前の旋律パートまで拾ってしまう
+	bool is_drum(int part) const
+	{
+		if (!m_ram || part < 0 || part >= PARTS)
+			return false;
+		return m_ram[ram::part_base(part) + 0x07] != 0;
+	}
+
+	// ドラムの覚え先の鍵（バンクとプログラムと音の高さ）
+	u64 drum_key(int part, int note) const
+	{
+		if (!m_ram)
+			return 0;
+		const u8 *p = m_ram + ram::part_base(part);
+		return u64(p[1]) << 24 | u64(p[2]) << 16 | u64(p[3]) << 8 | u64(note & 0x7f);
+	}
+	bool drum_known(int part, int note) const
+	{
+		return m_drum.find(drum_key(part, note)) != m_drum.end();
 	}
 
 	// パートの音色の記録を、ワーク RAM から読む（firmware が入れた値）
@@ -74,6 +106,8 @@ public:
 	// 鍵を押す。写し取りが無ければ false（呼んだ側が firmware に回す）
 	bool note_on(int part, int note, int vel)
 	{
+		if (is_drum(part))
+			return drum_on(part, note, vel);
 		const u32 rec = record_of(part);
 		if (!rec || !m_rom)
 			return false;
@@ -120,6 +154,7 @@ public:
 				continue;
 			if (s.elem)
 				m_poke(u32(i) * 64 + 9, nv::release_reg(m_rom, s.elem, note, s.att));
+			// ドラムは離しでも音を切らない（実機も打ったら鳴りきる）
 			s.on = false;
 			any = true;
 		}
@@ -134,11 +169,41 @@ public:
 				note_off(part, m_slot[i].note);
 	}
 
+	// ドラムの 1 打。写し取った値をそのまま使い、音量だけ強さで動かす
+	bool drum_on(int part, int note, int vel)
+	{
+		const auto it = m_drum.find(drum_key(part, note));
+		if (it == m_drum.end() || !m_rom)
+			return false;
+		u64 keymask = 0;
+		for (const nv::voice_cal &c : it->second) {
+			const int slot = take_slot(part, note);
+			if (slot < 0)
+				break;
+			// 減衰は足し算なので、強さのぶんだけずらせばよい（6.5）
+			const int att0 = c.has(9) ? (c.reg[9] & 0xff) : 0x40;
+			const int att = std::max(0, std::min(0xff,
+			    att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel))));
+			for (int i = 0; i < 0x40; i++)
+				if (c.has(i))
+					m_poke(u32(slot) * 64 + u32(i), i == 9 ? u16(att) : c.reg[i]);
+			m_slot[slot].elem = nullptr;     // ドラムは離しの速さを写しの値で済ませる
+			m_slot[slot].att = att;
+			m_slot[slot].drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
+			keymask |= u64(1) << slot;
+		}
+		if (!keymask)
+			return false;
+		key_on(keymask);
+		return true;
+	}
+
 private:
 	struct slot_use {
 		bool on = false;
 		int part = -1, note = -1, att = 0;
 		const u8 *elem = nullptr;
+		u16 drum_rel = 0;
 		u64 age = 0;
 	};
 
@@ -152,7 +217,7 @@ private:
 		for (int n2 = 0; n2 < SLOTS; n2++) {
 			const int i = SLOTS - 1 - n2;
 			if (!m_slot[i].on) {
-				m_slot[i] = slot_use{ true, part, note, 0, nullptr, ++m_age };
+				m_slot[i] = slot_use{ true, part, note, 0, nullptr, 0, ++m_age };
 				return i;
 			}
 			if (m_slot[i].age < oldest_age) {
@@ -162,7 +227,7 @@ private:
 		}
 		if (oldest < 0)
 			return -1;
-		m_slot[oldest] = slot_use{ true, part, note, 0, nullptr, ++m_age };
+		m_slot[oldest] = slot_use{ true, part, note, 0, nullptr, 0, ++m_age };
 		return oldest;
 	}
 
@@ -185,6 +250,7 @@ private:
 	const u8 *m_rom = nullptr;
 	const u8 *m_ram = nullptr;
 	std::unordered_map<u32, std::vector<nv::voice_cal>> m_cal;
+	std::unordered_map<u64, std::vector<nv::voice_cal>> m_drum;
 	std::array<slot_use, SLOTS> m_slot;
 	u64 m_age = 0;
 };

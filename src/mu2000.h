@@ -357,6 +357,7 @@ private:
 	nmidi m_nmidi[MIDI_PORTS];
 
 	int  m_learn_note = 60, m_learn_vel = 100;
+	u64  m_learn_drum = 0;         // ドラムのとき、覚える鍵
 	native_stats m_ne_stats;
 
 	bool native_midi(u8 byte, int port);

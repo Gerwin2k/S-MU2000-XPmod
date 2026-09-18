@@ -1029,6 +1029,10 @@ void mu2000::native_learn_start(u32 rec)
 			m_learn_keyed |= m_learn_mask;
 			if (m_learn_first.empty())
 				m_learn_first = m_learn_last;
+			// 鳴り始めたら、あと少しだけ見て終える（0x01 が落ち着くぶん）。
+			// 長く占有すると、その間ほかの音色が写し取りを始められない
+			if (m_learn_left > 44100 / 200)
+				m_learn_left = 44100 / 200;
 			break;
 		default: break;
 		}
@@ -1041,6 +1045,30 @@ void mu2000::native_learn_finish()
 	m_learning = false;
 	if (!m_learn_keyed || !m_prog)
 		return;
+	// ドラムは、音色の記録が引けないので中身を写すだけ（音ごとに覚える）
+	if (m_learn_drum) {
+		std::vector<xg::nv::voice_cal> cals;
+		for (int ch = 0; ch < 64; ch++) {
+			if (!(m_learn_keyed & (u64(1) << ch)))
+				continue;
+			xg::nv::voice_cal cal;
+			for (int i = 0; i < 0x40; i++) {
+				const bool at_key = (i == 0x05 || i == 0x0a || i == 0x11);
+				const std::map<u32, u16> &src = at_key ? m_learn_first : m_learn_last;
+				const auto it = src.find(u32(ch) * 64 + u32(i));
+				if (it != src.end())
+					cal.set(i, it->second);
+			}
+			if (!cal.has(0x16) || !cal.has(0x17))
+				continue;
+			cal.cal_vel = m_learn_vel;
+			cal.have = true;
+			cals.push_back(cal);
+		}
+		m_ndrv.learn_drum(m_learn_drum, std::move(cals));
+		m_learn_drum = 0;
+		return;
+	}
 	// 波形の番地まで取れていなければ、写し取りとして使えない（次の音でやり直す）
 	{
 		bool ok = false;
@@ -1082,6 +1110,7 @@ void mu2000::native_learn_finish()
 		cal.base_level = xg::nv::calibrate_level(rom, xg::nv::element(rom, m_learn_rec, idx),
 		                                         cal.has(9) ? (cal.reg[9] & 0xff) : 64,
 		                                         m_learn_note, m_learn_vel);
+		cal.cal_vel = m_learn_vel;
 		cal.have = true;
 		cals.push_back(cal);
 	}
@@ -1137,11 +1166,13 @@ bool mu2000::native_midi(u8 byte, int port)
 		return true;
 	}
 	m_ne_stats.note_fw++;
-	// まだ写し取っていない音色。firmware に鳴らさせて、そのときの値を覚える
+	// まだ写し取っていない音（ドラムは音ごと）。firmware に鳴らさせて覚える
 	const u32 rec = m_ndrv.record_of(part);
-	if (rec && !m_learning) {
+	const bool drum = m_ndrv.is_drum(part);
+	if ((rec || drum) && !m_learning) {
 		m_learn_note = note;
 		m_learn_vel = vel;
+		m_learn_drum = drum ? m_ndrv.drum_key(part, note) : 0;
 		m_ne_stats.learn++;
 		native_learn_start(rec);
 	}

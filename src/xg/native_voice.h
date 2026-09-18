@@ -243,6 +243,7 @@ inline u16 release_reg(const u8 *rom, const u8 *elem, int note, int att)
 struct voice_cal {
 	bool have = false;
 	int  base_level = 64;      // 校正した素の音量
+	int  cal_vel = 100;        // 写し取ったときの強さ（強さを変えるときの基準）
 	u16  reg[0x40] = {};       // 基準の鍵・強さでの値
 	u64  mask = 0;             // 覚えているレジスタ
 
