@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -73,10 +74,10 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "nativeplay <rom ディレクトリ> <出力.wav> [-b msb,lsb,prog] [-n 鍵] [-v 強さ] [-s 秒] [--firmware]%c", 10);
 		return 1;
 	}
-	const std::string dir = argv[1], out = argv[2];
+	const std::string dir = argv[1], out_path = argv[2];
 	int msb = 0, lsb = 0, prog = 0, note = 60, vel = 100, slot = 0;
 	double seconds = 2.0;
-	bool firmware = false, compare = false;
+	bool firmware = false, compare = false, song = false;
 	int sweep = 0;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
@@ -87,6 +88,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--slot") && i + 1 < argc) slot = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--firmware")) firmware = true;
 		else if (!std::strcmp(argv[i], "--compare")) compare = true;
+		else if (!std::strcmp(argv[i], "--song")) song = true;
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 	}
 
@@ -259,6 +261,60 @@ int main(int argc, char **argv)
 		return diff ? 2 : 0;
 	}
 
+	// --song: SH-2 を止めたまま、何音かを順に鳴らす（段 2 の「和音と声の取り合い」の入口）
+	if (song) {
+		mu.set_cpu_enabled(false);
+		const u8 *elem = xg::nv::element(rom, rec, 0);
+		std::vector<s16> out;
+		struct ev { double t; int note; bool on; int slot; };
+		// ドレミファソラシド＋和音
+		static const int SCALE[] = { 60, 62, 64, 65, 67, 69, 71, 72 };
+		std::vector<ev> evs;
+		int slot_at = 0;
+		for (int i = 0; i < 8; i++) {
+			evs.push_back({ 0.25 * i,        SCALE[i], true,  slot_at });
+			evs.push_back({ 0.25 * i + 0.22, SCALE[i], false, slot_at });
+			slot_at = (slot_at + 1) & 7;
+		}
+		for (int i = 0; i < 3; i++) {      // 最後に和音
+			const int n = 60 + i * 4;
+			evs.push_back({ 2.2, n, true,  slot_at });
+			evs.push_back({ 3.4, n, false, slot_at });
+			slot_at = (slot_at + 1) & 7;
+		}
+		std::sort(evs.begin(), evs.end(), [](const ev &a, const ev &b) { return a.t < b.t; });
+		const int att = std::min(0xff,
+		    (xg::nv::velocity_att(rom, vel) + xg::nv::VOICE_ATT_TYPICAL) * 2);
+		size_t at = 0;
+		const size_t total = size_t(std::max(seconds, 4.5) * RATE);
+		out.reserve(total * 2);
+		for (size_t i = 0; i < total; i++) {
+			const double t = double(i) / RATE;
+			while (at < evs.size() && evs[at].t <= t) {
+				const ev &e = evs[at];
+				if (e.on) {
+					poke_slot(mu, e.slot, xg::nv::build_note(rom, elem, e.note, att));
+					key_on(mu, e.slot);
+				} else {
+					mu.poke_swp(true, u32(e.slot) * 64 + 9,
+					            xg::nv::release_reg(rom, elem, e.note, att));
+				}
+				at++;
+			}
+			s32 li = 0, ri = 0;
+			mu.run_sample(li, ri);
+			out.push_back(s16(std::clamp(li * 32768 / mu2000::DAC_FULL_SCALE, -32768, 32767)));
+			out.push_back(s16(std::clamp(ri * 32768 / mu2000::DAC_FULL_SCALE, -32768, 32767)));
+		}
+		double pk = 0.0, sm = 0.0;
+		for (s16 v : out) { pk = std::max(pk, double(std::abs(v))); sm += double(v) * v; }
+		std::printf("SH-2 なしで %zu 音: 山 %.0f  rms %.1f%c", evs.size() / 2, pk,
+		            std::sqrt(sm / double(out.size())), 10);
+		if (!write_wav(out_path, out, RATE)) { std::fprintf(stderr, "書けない%c", 10); return 1; }
+		std::printf("書き出した: %s%c", out_path.c_str(), 10);
+		return 0;
+	}
+
 	std::vector<s16> pcm;
 	pcm.reserve(size_t(seconds * RATE) * 2);
 
@@ -299,10 +355,10 @@ int main(int argc, char **argv)
 	for (s16 v : pcm) { peak = std::max(peak, double(std::abs(v))); sum += double(v) * v; }
 	std::printf("%s: 山 %.0f  rms %.1f%c", firmware ? "firmware" : "SH-2 なし",
 	            peak, std::sqrt(sum / double(pcm.size())), 10);
-	if (!write_wav(out, pcm, RATE)) {
-		std::fprintf(stderr, "書けない: %s%c", out.c_str(), 10);
+	if (!write_wav(out_path, pcm, RATE)) {
+		std::fprintf(stderr, "書けない: %s%c", out_path.c_str(), 10);
 		return 1;
 	}
-	std::printf("書き出した: %s%c", out.c_str(), 10);
+	std::printf("書き出した: %s%c", out_path.c_str(), 10);
 	return 0;
 }

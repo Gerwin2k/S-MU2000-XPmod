@@ -145,6 +145,33 @@ inline int velocity_att(const u8 *rom, int vel, int curve = 0)
 // そこはまだ解けていないので、実測の中央値を置く（5〜19 の幅がある）
 constexpr int VOICE_ATT_TYPICAL = 12;
 
+// 減衰・離しの速さに乗る、鍵による補正（firmware の 0x12ADD0）
+inline int rate_key_corr(const u8 *elem, int note)
+{
+	int c = (note - int(elem[71])) * (int(elem[70]) - 64) * 16;
+	if (c < 0)
+		c += 0xff;
+	return c >> 8;
+}
+
+inline int rate_scale(int raw, int corr)
+{
+	int v = raw + corr;
+	if (v <= 0) v = 1;
+	if (v > 63) v = 63;
+	return v * 2;
+}
+
+// 鍵を離すときに 0x09 へ入れる値。
+// 上位のビット 15 が「離せ」の印で、残りが離しの速さ（swp30.cpp の release_glo_w）。
+// 速さは減衰と同じ表を **byte76** で引き、鍵の補正も同じだけ乗る
+// （実機が離すときに書く値と、GrandPno の鍵 60 で一致する: 0xBE1E）
+inline u16 release_reg(const u8 *rom, const u8 *elem, int note, int att)
+{
+	const int r = rom[DECAY_TAB + rate_scale(elem[76], rate_key_corr(elem, note))];
+	return u16(((0x80 | (r & 0x7f)) << 8) | (att & 0xff));
+}
+
 // 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
 inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
                             const defaults &d = defaults())
@@ -178,20 +205,10 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	//   目盛り = clamp(記録の値 + 補正, 1, 63) * 2
 	// で、その目盛りで ROM の表を引いたものがレジスタの上位バイトになる。
 	// 深さは byte70、折れ点の鍵は byte71（鍵 36・60・84 で確かめた）。
-	const int depth = int(elem[70]) - 64;
-	int corr = (note - int(elem[71])) * depth * 16;
-	if (corr < 0)
-		corr += 0xff;
-	corr >>= 8;
-	auto rate = [&](int raw) {
-		int v = raw + corr;
-		if (v <= 0) v = 1;
-		if (v > 63) v = 63;
-		return v * 2;
-	};
+	const int corr = rate_key_corr(elem, note);
 	const u8 atk = rom[ATTACK_TAB + std::min(0x7f, int(elem[73]) * 2)];
-	const u8 dc1 = rom[DECAY_TAB  + rate(elem[74])];
-	const u8 dc2 = rom[DECAY_TAB  + rate(elem[75])];
+	const u8 dc1 = rom[DECAY_TAB  + rate_scale(elem[74], corr)];
+	const u8 dc2 = rom[DECAY_TAB  + rate_scale(elem[75], corr)];
 	// はじめの音量。アタックが最速（63）のときだけ 0 で、あとは 0x7e
 	r.set(0x06, u16(atk << 8 | (elem[73] >= 0x3f ? 0x00 : 0x7e)));
 	r.set(0x07, u16(dc1 << 8 | (((0x7f - elem[77]) * 2) & 0xff)));

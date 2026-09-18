@@ -393,10 +393,28 @@ python tools/dump/sh2dis.py <rom> 0x12dec0 0x90
 4. WAV に書き出す
 
 ```
-build/nativeplay.exe <rom> out.wav -b 0,0,0 -n 60            # SH-2 なしで鳴らす
+build/nativeplay.exe <rom> out.wav -b 0,0,0 -n 60            # SH-2 なしで 1 音
+build/nativeplay.exe <rom> out.wav -b 0,0,0 --song           # SH-2 なしで音階と和音
 build/nativeplay.exe <rom> out.wav -b 0,0,0 -n 60 --firmware # 比べる用
 build/nativeplay.exe <rom> nul     -b 0,0,0 -n 60 --compare  # レジスタを突き合わせる
+build/nativeplay.exe <rom> nul     -b 0,0,0 --sweep 128      # まとめて一致率を出す
 ```
+
+**`--song` で音階（ド-ド）と和音を鳴らす**。スロットを順に割り当てて keyon し、
+離すときは `0x09` に「離せ」の印を書く。出てきた音を測ると
+
+* 8 音の基音が **262 295 331 350 392 441 494 524Hz**（狙いは 261 293 329 349 392 440 493 523）
+* 音を離すと 0.2 秒ほどで静かになり、和音のあと完全に 0 まで落ちる
+
+**離すときの値**（`0x09`）は
+
+```
+  上位 = 0x80 | ROM[0x1F4E38 + clamp(byte76 + 鍵の補正, 1, 63) * 2]
+  下位 = 鳴らしたときと同じ減衰
+```
+
+上位のビット 15 が「離せ」の印（`swp30.cpp` の `release_glo_w`）。速さは減衰と同じ表を
+**byte76** で引き、鍵の補正も同じだけ乗る。実機が離すときに書く値（GrandPno の鍵 60 で `0xBE1E`）と一致する。
 
 `--compare` は、firmware に同じ音を鳴らさせて**そのとき書かれたレジスタを拾い**、
 こちらが組み立てたものと 1 つずつ比べる（段 2 の「レジスタ列が一致」の物差し）。
