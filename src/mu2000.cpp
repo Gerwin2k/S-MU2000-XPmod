@@ -1494,9 +1494,10 @@ bool mu2000::native_midi(u8 byte, int port)
 		}
 		n.status = byte;
 		n.have = 0;
-		// アフタータッチは native では何も起きないので、そのパートは firmware に任せる
+		// アフタータッチ。**割り当て（CAT / PAT）が既定なら音に何も起きない**ので、
+		// そのときは firmware に任せなくてよい（doc/native-engine.md の 6.43）
 		if ((byte & 0xf0) == 0xd0 || (byte & 0xf0) == 0xa0)
-			m_ndrv.aftertouch((byte & 0x0f) + port * 16, 1);
+			m_ndrv.aftertouch((byte & 0x0f) + port * 16, (byte & 0xf0) == 0xa0);
 		// 鍵の上げ下げ・CC・ベンドはこちらで見る。残り（音色の指定など）は firmware へ
 		const u8 kind = byte & 0xf0;
 		if (kind == 0xc0)

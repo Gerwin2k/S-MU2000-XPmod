@@ -354,29 +354,86 @@ public:
 	int part_bri(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x18]) : 64; }
 	int part_res(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x19]) : 64; }
 
-	// こちらでさばけない CC のうち、**音に効くもの**。既定から外れたら
-	// そのパートは firmware に任せる（native では何も起きないため）
-	static int unknown_bit(int cc, int value)
+	// ---- つまみの割り当て（doc/native-engine.md の 6.43）
+	//
+	// XG の「モジュレーション・ベンド・アフタータッチ・AC1・AC2 が音の何を
+	// どれだけ動かすか」は、パートの塊に**6 つ組**（音程・フィルタ・音量・
+	// LFO の PMOD/FMOD/AMOD）で並んでいる。位置は `nativeplay --xgmap` で
+	// XG のアドレスを 1 つずつ書いて見つけた（08 pp 4D → +0x46 など）。
+	//
+	// **既定のままなら、そのつまみは SWP30 のレジスタを 1 つも動かさない**
+	// （`nativeplay --at` で確かめた）。だから既定のあいだは firmware に
+	// 任せる必要がない。既定から外れているときだけ任せる
+	static constexpr u32 MW_BLOCK  = 0x1d;   // モジュレーション（CC1）
+	static constexpr u32 PB_BLOCK  = 0x23;   // ベンド（+0x23 は幅なので別扱い）
+	static constexpr u32 AT_BLOCK  = 0x46;   // アフタータッチ（08 pp 4D-52）
+	static constexpr u32 PAT_BLOCK = 0x4c;   // 鍵ごとのアフタータッチ
+	static constexpr u32 AC1_NUM   = 0x52;   // AC1 の CC 番号（既定 16）
+	static constexpr u32 AC1_BLOCK = 0x53;
+	static constexpr u32 AC2_NUM   = 0x59;   // AC2 の CC 番号（既定 17）
+	static constexpr u32 AC2_BLOCK = 0x5a;
+
+	// その 6 つ組が既定（＝音に何も起きない）か。既定は 64,64,64,0,0,0
+	bool assign_idle(int part, u32 off) const
 	{
-		struct e { u8 cc, def; };
-		static const e LIST[] = {
-		};
-		for (size_t i = 0; i < sizeof(LIST) / sizeof(LIST[0]); i++)
-			if (LIST[i].cc == cc)
-				return value == LIST[i].def ? -int(i) - 1 : int(i) + 1;
-		return 0;
+		if (!m_ram || part < 0 || part >= PARTS)
+			return false;                  // 分からないときは任せる側に倒す
+		const u8 *b = m_ram + ram::part_base(part) + off;
+		return b[0] == 64 && b[1] == 64 && b[2] == 64 && !b[3] && !b[4] && !b[5];
 	}
 
-	// アフタータッチ（触れた強さ）も native では何も起きない
-	void aftertouch(int part, int value)
+	// モジュレーションの割り当ては既定が 64,64,64,**10**,0,0（LFO の音程が 10）。
+	// ここが動いていると、こちらの CC1 の式（6.14 の 10 段の表）が合わない
+	bool mod_idle(int part) const
+	{
+		if (!m_ram || part < 0 || part >= PARTS)
+			return false;
+		const u8 *b = m_ram + ram::part_base(part) + MW_BLOCK;
+		return b[0] == 64 && b[1] == 64 && b[2] == 64 && b[3] == 10 && !b[4] && !b[5];
+	}
+
+	// ベンドは +0x23 が幅（RPN で普通に動く。こちらも読んでいる）なので、
+	// 音程以外の 5 つだけを見る
+	bool bend_idle(int part) const
+	{
+		if (!m_ram || part < 0 || part >= PARTS)
+			return false;
+		const u8 *b = m_ram + ram::part_base(part) + PB_BLOCK;
+		return b[1] == 64 && b[2] == 64 && !b[3] && !b[4] && !b[5];
+	}
+
+	// アフタータッチ（触れた強さ）。**割り当てが既定なら音に何も起きない**
+	void aftertouch(int part, bool poly)
 	{
 		if (part < 0 || part >= PARTS)
 			return;
-		if (value)
-			m_cc[part].unknown |= 1u << 31;
+		const u32 bit = poly ? 30u : 31u;
+		if (assign_idle(part, poly ? PAT_BLOCK : AT_BLOCK))
+			m_cc[part].unknown &= ~(1u << bit);
 		else
-			m_cc[part].unknown &= ~(1u << 31);
+			m_cc[part].unknown |= 1u << bit;
 	}
+
+	// AC1・AC2（好きな CC を割り当てられるつまみ）。番号が合っていて割り当てが
+	// 既定から外れていれば、native では何も起きないので firmware に任せる
+	void assignable(int part, int cc, int value)
+	{
+		if (!m_ram || part < 0 || part >= PARTS)
+			return;
+		const u8 *pb = m_ram + ram::part_base(part);
+		const u32 num[2] = { AC1_NUM, AC2_NUM };
+		const u32 blk[2] = { AC1_BLOCK, AC2_BLOCK };
+		for (int k = 0; k < 2; k++) {
+			if (cc != int(pb[num[k]]))
+				continue;
+			const u32 bit = k ? 28u : 29u;
+			if (value && !assign_idle(part, blk[k]))
+				m_cc[part].unknown |= 1u << bit;
+			else
+				m_cc[part].unknown &= ~(1u << bit);
+		}
+	}
+
 
 	// その CC を native でさばけるか（実際にさばく前に決める）
 	static bool handles_cc(int cc)
@@ -396,7 +453,14 @@ public:
 		case 0x07: p.vol = value; break;
 		case 0x0b: p.expr = value; break;
 		case 0x0a: p.pan = value; break;
-		case 0x01: p.mod = value; break;
+		case 0x01:
+			p.mod = value;
+			// モジュレーションの割り当てが動いていると、こちらの式が合わない
+			if (value && !mod_idle(part))
+				p.unknown |= 1u << 27;
+			else
+				p.unknown &= ~(1u << 27);
+			break;
 		case 0x5b: p.rev = value; break;
 		case 0x5d: p.cho = value; break;
 		case 0x4a: p.bri = value; break;
@@ -421,12 +485,8 @@ public:
 				p.var = value;
 				return false;                  // firmware にも見せる（写し取りのため）
 			}
-			// 音に効く「知らない CC」は、既定から外れている間だけ印を立てる
-			const int bit = unknown_bit(cc, value);
-			if (bit > 0)
-				p.unknown |= 1u << (bit - 1);
-			else if (bit < 0)
-				p.unknown &= ~(1u << (-bit - 1));
+			// 知らない CC は AC1・AC2 に割り当てられているかもしれない
+			assignable(part, cc, value);
 			return false;                      // 知らない CC は firmware に任せる
 		}
 		}
@@ -439,6 +499,11 @@ public:
 		if (part < 0 || part >= PARTS)
 			return;
 		m_cc[part].bend = value14;
+		// ベンドの割り当て（音程以外）が動いていると、こちらの式が合わない
+		if (value14 != 8192 && !bend_idle(part))
+			m_cc[part].unknown |= 1u << 26;
+		else
+			m_cc[part].unknown &= ~(1u << 26);
 		apply_bend(part);
 	}
 

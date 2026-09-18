@@ -177,6 +177,9 @@ int main(int argc, char **argv)
 	int ccbyte = -1;
 	int porta = -1;
 	int portasweep = 0;
+	bool atwatch = false;
+	int catoff = -1;
+	bool xgmap = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -201,6 +204,9 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--ccbyte") && i + 1 < argc) ccbyte = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--porta") && i + 1 < argc) porta = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--portasweep") && i + 1 < argc) portasweep = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--at")) atwatch = true;
+		else if (!std::strcmp(argv[i], "--xgmap")) xgmap = true;
+		else if (!std::strcmp(argv[i], "--catoff") && i + 1 < argc) catoff = int(std::strtol(argv[++i], nullptr, 0));
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -669,6 +675,184 @@ int main(int argc, char **argv)
 			if (o.vel == 100 && o.cut >= 0)
 				std::printf("CUT 鍵 %3d 強さ %3d  0x00=%04x 切る高さ %4d（表との差 %+d） 0x04=%04x%c",
 				            o.note, o.vel, o.cut, o.cut & 0x7ff, (o.cut & 0x7ff) - tab, o.res, 10);
+		return 0;
+	}
+
+	// --xgmap: XG のパート parameter（08 pp rr）を 1 つずつ書いて、
+	// **ワーク RAM のどのバイトに入るか**と、書く前の値（＝既定）を出す。
+	// どの設定がどこにあるか分からないと、写し取りの「経路の印」に何を
+	// 混ぜればよいかが決められない
+	if (xgmap) {
+		const std::vector<u8> &wr = mu.nvram();
+		std::printf("== XG のパート parameter → ワーク RAM（パートの塊からの位置）%c", 10);
+		for (int o = 0; o <= 0x7f; o++) {
+			const std::vector<u8> prev = wr;
+			const u8 body[4] = { 0x08, 0x00, u8(o), 0x7f };
+			u32 sum = 0;
+			for (u8 x : body) sum += x;
+			for (u8 bb : { u8(0xf0), u8(0x43), u8(0x10), u8(0x4c), body[0], body[1],
+			               body[2], body[3], u8((0x80 - (sum & 0x7f)) & 0x7f), u8(0xf7) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 20; i++)
+				mu.run_sample(l, r);
+			std::printf("  08 pp %02x →", o);
+			int n = 0;
+			for (u32 q = 0; q < 0x100; q++)
+				if (wr[part0 + q] != prev[part0 + q] && ++n <= 4)
+					std::printf(" +0x%02x（前 %d → 後 %d）", q, prev[part0 + q], wr[part0 + q]);
+			if (!n)
+				std::printf(" 効かない");
+			std::printf("%c", 10);
+		}
+		return 0;
+	}
+
+	// --at: 音を鳴らしたまま**アフタータッチ**（触れた強さ）を振って、
+	// firmware がどのレジスタ・どのワーク RAM を書き替えるかを見る
+	if (atwatch) {
+		std::map<u32, u16> now;
+		u64 mask = 0, keyed = 0;
+		mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+			if (!master) return;
+			now[r2] = v2;
+			switch (r2) {
+			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+			case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+			case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+			case 0x20e: keyed |= mask; break;
+			default: break;
+			}
+		});
+		for (u8 bb : { u8(0x90), u8(note & 0x7f), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 5; i++)
+			mu.run_sample(l, r);
+		int ch = 0;
+		for (int c2 = 0; c2 < 64; c2++)
+			if (keyed & (u64(1) << c2)) { ch = c2; break; }
+		const std::vector<u8> &wr = mu.nvram();
+		// **行き来する順**で振る。包絡線がひとりでに減っているだけなら単調に動く
+		const int vals[] = { 0, 127, 0, 127, 0, 64 };
+		std::vector<std::map<u32, u16>> rs;
+		std::vector<std::vector<u8>> ms;
+		for (int v : vals) {
+			for (u8 bb : { u8(0xd0), u8(v & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 10; i++)
+				mu.run_sample(l, r);
+			rs.push_back(now);
+			ms.push_back(wr);
+		}
+		mu.set_swp_watch(nullptr);
+		std::printf("== アフタータッチ（スロット %d）%c", ch, 10);
+		int found = 0;
+		for (int rr = 0; rr < 0x40; rr++) {
+			const u32 key = u32(ch) * 64 + u32(rr);
+			bool same = true;
+			for (size_t k = 1; k < rs.size(); k++) {
+				const auto a = rs[k].find(key), b = rs[0].find(key);
+				if ((a == rs[k].end()) != (b == rs[0].end()) ||
+				    (a != rs[k].end() && a->second != b->second))
+					same = false;
+			}
+			if (same) continue;
+			std::printf("  レジスタ 0x%02x :", rr);
+			for (size_t k = 0; k < rs.size(); k++) {
+				const auto a = rs[k].find(key);
+				std::printf(" %d=%04x", vals[k], a == rs[k].end() ? 0xffff : a->second);
+			}
+			std::printf("%c", 10);
+			found++;
+		}
+		for (u32 o = 0; o < 0x100; o++) {
+			bool same = true;
+			for (size_t k = 1; k < ms.size(); k++)
+				if (ms[k][part0 + o] != ms[0][part0 + o]) same = false;
+			if (same) continue;
+			std::printf("  パート+0x%02x :", o);
+			for (size_t k = 0; k < ms.size(); k++)
+				std::printf(" %d=%d", vals[k], ms[k][part0 + o]);
+			std::printf("%c", 10);
+			found++;
+		}
+		if (!found)
+			std::printf("  何も動かなかった%c", 10);
+		// パートの塊の 0x29-0x34（XG の CAT・PAT コントロール）を出す
+		std::printf("  パート+0x29-0x34:");
+		for (u32 o = 0x29; o <= 0x34; o++)
+			std::printf(" %d", wr[part0 + o]);
+		std::printf("%c", 10);
+		// **CAT フィルタコントロール**（08 pp 2A）を既定から外して、もう一度振る
+		for (u8 bb : { u8(0x80), u8(note & 0x7f), u8(64) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 4; i++) mu.run_sample(l, r);
+		// XG のパラメータは **チェックサムが要る**。08 pp <o> <v>
+		const std::vector<u8> prev = wr;
+		auto xgset = [&](u8 o, u8 v) {
+			const u8 body[4] = { 0x08, 0x00, o, v };
+			u32 sum = 0;
+			for (u8 x : body) sum += x;
+			const u8 ck = u8((0x80 - (sum & 0x7f)) & 0x7f);
+			for (u8 bb : { u8(0xf0), u8(0x43), u8(0x10), u8(0x4c),
+			               body[0], body[1], body[2], body[3], ck, u8(0xf7) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 4; i++) mu.run_sample(l, r);
+		};
+		// CAT の 6 つ（XG 08 pp 30-35）をまとめて極端にする。
+		// --catoff を渡したときはその 1 つだけ 0 にする
+		if (catoff >= 0) {
+			xgset(u8(catoff), 0);
+		} else {
+			// CAT は 08 pp 4D-52（ワーク RAM のパート +0x46-0x4B）。--xgmap で見つけた
+			xgset(0x4d, 0x58);   // CAT ピッチ（最大に上げる）
+			xgset(0x4e, 0x00);   // CAT フィルタ（最大に下げる）
+			xgset(0x4f, 0x00);   // CAT アンプ（最大に下げる）
+			xgset(0x50, 0x7f);   // CAT LFO PMOD
+			xgset(0x51, 0x7f);   // CAT LFO FMOD
+			xgset(0x52, 0x7f);   // CAT LFO AMOD
+		}
+		std::printf("  上の書き込みでパートの塊が動いたバイト:");
+		for (size_t o = 0; o < wr.size(); o++)
+			if (wr[o] != prev[o]) {
+				if (o >= part0 && o < part0 + 0x100)
+					std::printf(" +0x%02x(%d)", unsigned(o - part0), wr[o]);
+			}
+		std::printf("%c", 10);
+		now.clear(); keyed = 0; mask = 0;
+		mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+			if (!master) return;
+			now[r2] = v2;
+			switch (r2) {
+			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+			case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+			case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+			case 0x20e: keyed |= mask; break;
+			default: break;
+			}
+		});
+		for (u8 bb : { u8(0x90), u8(note & 0x7f), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 5; i++) mu.run_sample(l, r);
+		int ch2 = 0;
+		for (int c2 = 0; c2 < 64; c2++)
+			if (keyed & (u64(1) << c2)) { ch2 = c2; break; }
+		std::printf("== CAT フィルタコントロール = 0 にしてから（スロット %d）%c", ch2, 10);
+		for (int v : vals) {
+			for (u8 bb : { u8(0xd0), u8(v & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 10; i++) mu.run_sample(l, r);
+			const auto it0 = now.find(u32(ch2) * 64 + 0x00);
+			const auto it9 = now.find(u32(ch2) * 64 + 0x09);
+			std::printf("  AT=%3d  0x00=%04x  0x09=%04x  0x11=%04x%c", v,
+			            it0 == now.end() ? 0xffff : it0->second,
+			            it9 == now.end() ? 0xffff : it9->second,
+			            now.count(u32(ch2) * 64 + 0x11) ? now[u32(ch2) * 64 + 0x11] : 0xffff, 10);
+		}
+		mu.set_swp_watch(nullptr);
+		for (u8 bb : { u8(0xd0), u8(0), u8(0x80), u8(note & 0x7f), u8(64) })
+			mu.midi_in(bb, 0);
 		return 0;
 	}
 

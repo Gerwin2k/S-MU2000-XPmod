@@ -221,6 +221,25 @@ def case_porta():
     return [track(seq(ev))], 7.0
 
 
+def case_at():
+    """アフタータッチ。**割り当て（CAT）が既定のあいだは音に何も起きない**ので
+    native のまま鳴らす（doc/native-engine.md の 6.43）。08 pp 4E（CAT フィルタ）を
+    既定から外したら、そのパートは firmware に任せる。
+    ここが壊れると、アフタータッチが効くはずの所で効かない音になる"""
+    ev = head()
+    ev += [(1.0, b'\xc0\x00')]                       # GrandPno
+    ev += note(0, 60, 100, 1.2, 0.8)                 # 1 音目。ここで写し取る
+    ev += note(0, 62, 100, 2.1, 0.8)                 # native
+    ev += [(2.9, b'\xd0\x7f')]                       # 触れた強さ（既定なので効かない）
+    ev += note(0, 64, 100, 3.0, 0.8)                 # native のまま
+    ev += [(3.9, xg([0x08, 0x00, 0x4e, 0x00]))]      # CAT フィルタを既定から外す
+    ev += [(4.0, b'\xd0\x7f')]
+    ev += note(0, 65, 100, 4.1, 1.0)                 # ここからは firmware に任せる
+    ev += [(5.2, b'\xd0\x00')]
+    ev += note(0, 67, 100, 5.3, 0.8)
+    return [track(seq(ev))], 6.5
+
+
 CASES = {
     "piano":   case_piano,
     "chord":   case_chord,
@@ -232,6 +251,7 @@ CASES = {
     "lofi":    case_lofi,
     "egcc":    case_egcc,
     "porta":   case_porta,
+    "at":      case_at,
 }
 
 
