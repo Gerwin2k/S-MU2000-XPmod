@@ -280,6 +280,31 @@ public:
 		}
 	}
 
+	// **パートの「経路」の印**。素通しの量（08 pp 11）・バリエーション送り（14）・
+	// パートの EQ（+0x6A-0x6F）・インサーション 4 つの掛かり先を混ぜる。
+	// 写し取りはこの経路ごとの値なので、違う経路では使い回せない
+	u32 part_ctx(int part) const
+	{
+		if (!m_ram || part < 0 || part >= PARTS)
+			return 0;
+		u32 h = 2166136261u;
+		auto mix = [&h](u8 x) { h ^= x; h *= 16777619u; };
+		const u8 *b = m_ram + ram::part_base(part);
+		mix(b[0x11]);
+		mix(b[0x14]);
+		for (int i = 0; i < 6; i++)
+			mix(b[ram::PART_EQ_RAM + i]);
+		for (int n = 0; n < 4; n++)
+			mix(m_ram[ram::INS_BLOCK[n] + 0x0c]);
+		return h ? h : 1;
+	}
+
+	// その写し取りが、いまのパートの経路で使えるか
+	bool ctx_ok(const std::vector<nv::voice_cal> &cals, int part) const
+	{
+		return !cals.empty() && cals[0].cal_ctx == part_ctx(part);
+	}
+
 	// 写し取ったときのつまみの位置（ワーク RAM から）
 	int part_vol(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0b]) : 100; }
 	int part_expr(int part) const { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_EXP]) : 127; }
@@ -526,7 +551,10 @@ public:
 		if (is_drum(part))
 			return !m_drum.empty();
 		const u32 rec = record_of(part);
-		return rec && m_cal.find(rec) != m_cal.end();
+		if (!rec)
+			return false;
+		const auto it = m_cal.find(rec);
+		return it != m_cal.end() && ctx_ok(it->second, part);
 	}
 
 	// その音を native で鳴らせるか（実際に鳴らす前に決める必要がある。
@@ -537,10 +565,15 @@ public:
 			return false;
 		if (m_cc[part].unknown)              // 知らない CC が効いている間は firmware へ
 			return false;
-		if (is_drum(part))
-			return m_drum.find(drum_key(part, note)) != m_drum.end();
+		if (is_drum(part)) {
+			const auto d = m_drum.find(drum_key(part, note));
+			return d != m_drum.end() && ctx_ok(d->second, part);
+		}
 		const u32 rec = record_of(part);
-		return rec && m_cal.find(rec) != m_cal.end();
+		if (!rec)
+			return false;
+		const auto it = m_cal.find(rec);
+		return it != m_cal.end() && ctx_ok(it->second, part);
 	}
 
 	// 鍵を押す。写し取りが無ければ false（呼んだ側が firmware に回す）
@@ -552,7 +585,7 @@ public:
 		if (!rec || !m_rom)
 			return false;
 		const auto it = m_cal.find(rec);
-		if (it == m_cal.end())
+		if (it == m_cal.end() || !ctx_ok(it->second, part))
 			return false;
 		const std::vector<nv::voice_cal> &cals = it->second;
 
@@ -660,7 +693,7 @@ public:
 	bool drum_on(int part, int note, int vel)
 	{
 		const auto it = m_drum.find(drum_key(part, note));
-		if (it == m_drum.end() || !m_rom)
+		if (it == m_drum.end() || !m_rom || !ctx_ok(it->second, part))
 			return false;
 		u64 keymask = 0;
 		for (const nv::voice_cal &c : it->second) {

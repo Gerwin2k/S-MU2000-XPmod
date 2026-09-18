@@ -180,8 +180,8 @@ int main(int argc, char **argv)
 	const char *card_path = nullptr;   // 差す SmartMedia
 	const char *replay = nullptr;      // --replay-swp。記録したレジスタ列を SH-2 無しで流す
 	int native_engine = 0;             // --native-engine。firmware を走らせない口
-	// --voicecache: 写し取りをファイルに残す・読む（voicecache.h）。
-	// 別の曲で取った写しはその曲の音にならないので既定は切
+	// 写し取りをファイルに残す・読む（voicecache.h）。経路の印が付いているので
+	// 別の曲の写しが混ざっても安全。--no-voicecache で切る
 	bool voicecache = false;
 	for (int i = 4; i < argc; i++) {
 		if (!std::strcmp(argv[i], "--trace-swp") && i + 1 < argc)
@@ -222,6 +222,8 @@ int main(int argc, char **argv)
 			native_engine = 1;
 		else if (!std::strcmp(argv[i], "--voicecache"))
 			voicecache = true;
+		else if (!std::strcmp(argv[i], "--no-voicecache"))
+			voicecache = false;
 		else if (!std::strcmp(argv[i], "--native-fx-full"))
 			native_fx = 2;
 		else if (!std::strcmp(argv[i], "--bootcache"))

@@ -1124,6 +1124,7 @@ void mu2000::native_learn_finish()
 			cal.cal_cho  = m_ndrv.part_cho(m_learn_part);
 			cal.cal_bri  = m_ndrv.part_bri(m_learn_part);
 			cal.cal_res  = m_ndrv.part_res(m_learn_part);
+			cal.cal_ctx  = m_ndrv.part_ctx(m_learn_part);
 			cal.have = true;
 			cals.push_back(cal);
 		}
@@ -1194,13 +1195,15 @@ void mu2000::native_learn_finish()
 		cal.cal_cho  = m_ndrv.part_cho(m_learn_part);
 		cal.cal_bri  = m_ndrv.part_bri(m_learn_part);
 		cal.cal_res  = m_ndrv.part_res(m_learn_part);
+		cal.cal_ctx  = m_ndrv.part_ctx(m_learn_part);
 		cal.have = true;
 		cals.push_back(cal);
 	}
 	const int ncal = int(cals.size());
 	if (std::getenv("SMU2000_NATIVE_DEBUG")) {
-		std::fprintf(stderr, "learn rec=%06x 要素 %d 写し %d 鍵いた %d\n", m_learn_rec, nel, ncal,
-		             __builtin_popcountll(m_learn_keyed));
+		std::fprintf(stderr, "learn rec=%06x 要素 %d 写し %d 鍵いた %d part=%d ctx=%08x\n",
+		             m_learn_rec, nel, ncal, __builtin_popcountll(m_learn_keyed),
+		             m_learn_part, m_ndrv.part_ctx(m_learn_part));
 		for (int k = 0; k < ncal; k++) {
 			const xg::nv::voice_cal &c = cals[size_t(k)];
 			const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
@@ -1233,7 +1236,7 @@ void mu2000::native_learn_finish()
 namespace {
 
 constexpr u32 CAL_MAGIC = 0x43563253u;   // "S2VC"
-constexpr u32 CAL_VERSION = 4;
+constexpr u32 CAL_VERSION = 5;
 
 void put8(std::vector<u8> &v, u8 x) { v.push_back(x); }
 void put16v(std::vector<u8> &v, u16 x) { v.push_back(u8(x)); v.push_back(u8(x >> 8)); }
@@ -1266,6 +1269,7 @@ void write_cals(std::vector<u8> &out, u8 kind, u64 key, const std::vector<xg::nv
 		put16v(out, u16(c.cal_cho));
 		put16v(out, u16(c.cal_bri));
 		put16v(out, u16(c.cal_res));
+		put32v(out, c.cal_ctx);
 		for (int i = 0; i < 0x40; i++)
 			if (c.mask & (u64(1) << i))
 				put16v(out, c.reg[i]);
@@ -1326,6 +1330,7 @@ bool mu2000::native_cal_load(const u8 *data, size_t n)
 			c.cal_cho = s16(r.g16());
 			c.cal_bri = s16(r.g16());
 			c.cal_res = s16(r.g16());
+			c.cal_ctx = r.g32();
 			for (int i = 0; i < 0x40; i++)
 				if (c.mask & (u64(1) << i))
 					c.reg[i] = r.g16();
