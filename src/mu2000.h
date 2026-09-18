@@ -327,7 +327,9 @@ public:
 	u8   m_fw_why = 0;                   // いまの hold の理由（1 SysEx / 2 そのほか）
 	// SysEx の頭を少し覚えて、長く回す必要があるかを見分ける
 	int  m_sx_pos = -1;
-	u8   m_sx[6] = {};
+	// XG のパラメータチェンジは 43 1n 4C hh mm ll dd… の形。パートの設定
+	// （08 pp ll）は自分でも効かせたいので、値まで取っておく
+	u8   m_sx[24] = {};
 
 	struct native_stats { u64 note_native = 0, note_fw = 0, learn = 0, other = 0; };
 	native_stats native_counts() const { return m_ne_stats; }
@@ -398,7 +400,8 @@ private:
 	static constexpr u32 NATIVE_PROC  = 32;          // バイトを受け終えてから鳴るまで
 	static constexpr u64 RX_BYTE_TICK = 903;         // 1 バイト（1/64 サンプル単位）
 	u64  m_rx_at[MIDI_PORTS] = {};                   // その口が次のバイトを受け終える時刻
-	struct nev { u64 at; u8 kind, part, d0, d1; };   // kind 0=離し 1=押し 2=CC 3=ベンド
+	// kind 0=離し 1=押し 2=CC 3=ベンド 4=音色の指定 5=XG のパートの設定（08 pp d0=d1）
+	struct nev { u64 at; u8 kind, part, d0, d1; };
 	std::deque<nev> m_nq;
 	u64  m_ne_clock = 0;
 	u32  m_nown[64][4] = {};       // native で鳴らしている鍵（パートごとに 128 ビット）
@@ -437,6 +440,8 @@ private:
 	struct part_prog { u8 msb = 0, lsb = 0, prog = 0; };
 	part_prog m_prog_sel[64];
 	void native_select_voice(int part);
+	// 受け取り終えた XG の SysEx を、native の側にも効かせる
+	void native_sysex(u64 fire);
 
 	// 口ごとの MIDI の読み取り
 	struct nmidi { u8 status = 0; u8 d0 = 0; int have = 0; };

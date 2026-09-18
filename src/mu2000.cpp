@@ -1561,6 +1561,35 @@ void mu2000::native_select_voice(int part)
 	m_ndrv.set_record(part, rec, rec ? 0 : -1);
 }
 
+// **受け取り終えた XG の SysEx を native の側にも効かせる**。
+// 43 1n 4C hh mm ll dd… のうち、いま見るのは 08 pp ll（パートの設定）だけ。
+// ここを入れるまでは、パートの設定を SysEx で送る曲（CC ではなく SysEx で
+// 送りや音量を決める打ち込みは珍しくない）で、firmware がその SysEx を
+// 処理し終えるまで native が古い値のまま鳴らしていた。native の口では
+// firmware を 100ms につき 5ms しか回さないので、その遅れは 1 秒を超える
+void mu2000::native_sysex(u64 fire)
+{
+	if (m_sx_pos < 7)
+		return;
+	if (!(m_sx[0] == 0x43 && (m_sx[1] & 0xf0) == 0x10 && m_sx[2] == 0x4c))
+		return;
+	const u8 hh = m_sx[3], mm = m_sx[4], ll = m_sx[5];
+	if (hh != 0x08 || mm >= 32)
+		return;
+	// **1 回の SysEx で続けて何バイトも書ける**（ll から順に並ぶ）
+	const int n = m_sx_pos - 6;
+	for (int i = 0; i < n && i + 6 < int(sizeof(m_sx)); i++) {
+		const u8 addr = u8(ll + i), dd = m_sx[6 + i] & 0x7f;
+		if (addr == 0x01 || addr == 0x02 || addr == 0x03) {
+			// バンクと音色。音色の指定と同じ行列に乗せる
+			m_nq.push_back({ fire, 4, u8(mm),
+			                 u8(addr == 0x01 ? 0 : addr == 0x02 ? 1 : 2), dd });
+		} else if (addr <= 0x28) {
+			m_nq.push_back({ fire, 5, u8(mm), addr, dd });
+		}
+	}
+}
+
 // 待っている native の出来事を、時が来たものから実行する
 void mu2000::native_pump()
 {
@@ -1575,6 +1604,23 @@ void mu2000::native_pump()
 			break;
 		case 2: m_ndrv.control(e.part, e.d0, e.d1); break;
 		case 3: m_ndrv.bend(e.part, int(e.d1) << 7 | e.d0); break;
+		// **音色の指定も行列に乗せる**。CC は線の遅れを模して行列に入れて
+		// いるのに、音色の指定だけその場で効かせていたので、順番が入れ替わって
+		// いた。曲が「CC91 → 音色の指定」の順で送っていても、こちらでは
+		// 音色の指定が先に効き、そのあと CC91 が上書きしてしまう。
+		// 実機では音色の指定がパートのつまみを音色の既定値に戻すので、
+		// 送りの値が 7 音ぶん違っていた（doc/native-engine.md の 6.53）
+		case 4:
+			if (e.part >= 0 && e.part < 64) {
+				if (e.d0 == 0) m_prog_sel[e.part].msb = e.d1;
+				else if (e.d0 == 1) m_prog_sel[e.part].lsb = e.d1;
+				else m_prog_sel[e.part].prog = e.d1;
+				native_select_voice(e.part);
+			}
+			break;
+		// XG のパートの設定（08 pp ll）。ワーク RAM の並びと同じなので、
+		// 番地をそのまま渡す
+		case 5: m_ndrv.set_part_param(e.part, e.d0, e.d1); break;
 		default: break;
 		}
 	}
@@ -1598,6 +1644,13 @@ bool mu2000::native_midi(u8 byte, int port)
 				m_sx_pos = 0;
 				m_fw_hold = std::max(m_fw_hold, u32(44100 / 30));
 			} else {
+				// **F7 で XG のパートの設定を自分にも効かせる**。native の口では
+				// firmware を 100ms につき 5ms しか回さないので、firmware が
+				// この SysEx を処理し終えるのは 1 秒以上あと。それまで待つと、
+				// 曲の頭の何音かが古いつまみの値で鳴る（利用者の曲で、送りを
+				// SysEx で 33 にしているのに CC91 の 40 のまま鳴っていた）
+				if (byte == 0xf7)
+					native_sysex(fire);
 				m_sx_pos = -1;
 				m_fw_hold = std::max(m_fw_hold, u32(44100 / 30));
 			}
@@ -1633,14 +1686,14 @@ bool mu2000::native_midi(u8 byte, int port)
 	if (m_sx_pos >= 0) {
 		// 長い SysEx（MEG のプログラムなど）の間は待ちを切らさない
 		m_fw_hold = std::max(m_fw_hold, u32(44100 / 200));
-		if (m_sx_pos < 6)
+		if (m_sx_pos < int(sizeof(m_sx)))
 			m_sx[m_sx_pos] = byte;
 		m_sx_pos++;
 		// XG のパラメータチェンジ（43 1n 4C hh mm ll …）かどうかは 3 バイトで分かる。
 		// そうならもう 1 バイト（ll）まで待って細かく分ける。そうでないもの
 		// （GM システムオンなど）は 5 バイトで決める＝前と同じ
 		const bool xg_param = m_sx[0] == 0x43 && (m_sx[1] & 0xf0) == 0x10 && m_sx[2] == 0x4c;
-		if (m_sx_pos >= (xg_param ? 6 : 5)) {
+		if (m_sx_pos == (xg_param ? 6 : 5)) {
 			// **重いのは「MEG のプログラムを書き直すもの」だけ**。
 			// `nativeplay --sxsettle` で SWP30 を触り終わるまでを測った:
 			//   00 00 7E XG システムオン       212ms
@@ -1669,7 +1722,8 @@ bool mu2000::native_midi(u8 byte, int port)
 				m_fw_hold = std::max(m_fw_hold, u32(44100 * 3 / 10));
 				m_fw_why = 1;
 			}
-			m_sx_pos = -1;
+			// ここでは**止めない**。F7 まで受け取って、パートの設定なら
+			// 値まで読む（native_sysex）
 		}
 		return false;
 	}
@@ -1678,8 +1732,7 @@ bool mu2000::native_midi(u8 byte, int port)
 	// 音色の指定（1 バイト）。自分で記録を引いて、firmware にも渡す
 	if (kind == 0xc0) {
 		const int part2 = (n.status & 0x0f) + port * 16;
-		m_prog_sel[part2].prog = byte & 0x7f;
-		native_select_voice(part2);
+		m_nq.push_back({ fire, 4, u8(part2), 2, u8(byte & 0x7f) });
 		m_ne_stats.other++;
 		// 記録はこちらで引けたが、firmware も自分の下ごしらえに時間が要る
 		// （5ms に詰めると piano の残差が -58dB から -53dB に落ちる）
@@ -1719,8 +1772,8 @@ bool mu2000::native_midi(u8 byte, int port)
 	if (kind == 0xb0) {
 		m_ne_stats.other++;
 		const int cc = n.d0 & 0x7f;
-		if (cc == 0x00) { m_prog_sel[part].msb = byte & 0x7f; native_select_voice(part); }
-		if (cc == 0x20) { m_prog_sel[part].lsb = byte & 0x7f; native_select_voice(part); }
+		if (cc == 0x00) m_nq.push_back({ fire, 4, u8(part), 0, u8(byte & 0x7f) });
+		if (cc == 0x20) m_nq.push_back({ fire, 4, u8(part), 1, u8(byte & 0x7f) });
 		const bool mine = m_ndrv.handles_cc(n.d0 & 0x7f);
 		if (mine)
 			m_nq.push_back({ fire, 2, u8(part), u8(n.d0 & 0x7f), u8(byte & 0x7f) });

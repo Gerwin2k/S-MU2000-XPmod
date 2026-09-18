@@ -283,6 +283,29 @@ public:
 		forget_cc(part);
 	}
 
+	// **XG のパートの設定（08 pp ll）を自分にも効かせる**。番地はワーク RAM の
+	// パートの塊の並びと同じ。ここが無いと、つまみを CC ではなく SysEx で
+	// 決める曲で、firmware がその SysEx を処理し終えるまで（native の口では
+	// 1 秒以上かかる）古い値のまま鳴ってしまう
+	void set_part_param(int part, u8 addr, u8 dd)
+	{
+		if (part < 0 || part >= PARTS)
+			return;
+		part_cc &p = m_cc[part];
+		// **m_seen は触らない**。ワーク RAM はまだ firmware が書き替えて
+		// いないので、ここで「見た」ことにすると、次の同期で古い値を
+		// 取り込み直してしまう
+		switch (addr) {
+		case 0x0b: p.vol = dd; break;
+		case 0x0e: p.pan = dd; break;
+		case 0x12: p.cho = dd; break;
+		case 0x13: p.rev = dd; break;
+		case 0x18: p.bri = dd; break;
+		case 0x19: p.res = dd; break;
+		default: break;
+		}
+	}
+
 	// そのパートの「こちらが覚えているつまみ」を捨てて、ワーク RAM から
 	// 読み直させる（firmware が書き替えたかもしれないとき）
 	void forget_cc(int part)
