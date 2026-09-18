@@ -180,6 +180,7 @@ int main(int argc, char **argv)
 	bool atwatch = false;
 	int catoff = -1;
 	bool xgmap = false;
+	const char *sxsettle = nullptr;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -206,6 +207,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--portasweep") && i + 1 < argc) portasweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--at")) atwatch = true;
 		else if (!std::strcmp(argv[i], "--xgmap")) xgmap = true;
+		else if (!std::strcmp(argv[i], "--sxsettle") && i + 1 < argc) sxsettle = argv[++i];
 		else if (!std::strcmp(argv[i], "--catoff") && i + 1 < argc) catoff = int(std::strtol(argv[++i], nullptr, 0));
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
@@ -675,6 +677,51 @@ int main(int argc, char **argv)
 			if (o.vel == 100 && o.cut >= 0)
 				std::printf("CUT 鍵 %3d 強さ %3d  0x00=%04x 切る高さ %4d（表との差 %+d） 0x04=%04x%c",
 				            o.note, o.vel, o.cut, o.cut & 0x7ff, (o.cut & 0x7ff) - tab, o.res, 10);
+		return 0;
+	}
+
+	// --sxsettle hh,mm,ll,dd[,dd...]: その XG パラメータチェンジを送って、
+	// **firmware が SWP30 を触り終わるまで**の時間を測る。
+	// 「種類を変える」と「値だけ変える」で桁が違うかを見るための口。
+	// 毎サンプル書き替わるレジスタ（MEG の戻りのミキサ 0x38-0x3F と 0x0E/0x0F）は
+	// 数えない。数えると永久に落ち着かない
+	if (sxsettle) {
+		std::vector<u8> body;
+		for (const char *p = sxsettle; *p; ) {
+			body.push_back(u8(std::strtol(p, nullptr, 16)));
+			const char *c = std::strchr(p, ',');
+			if (!c)
+				break;
+			p = c + 1;
+		}
+		if (body.size() < 4) {
+			std::fprintf(stderr, "--sxsettle は hh,mm,ll,dd の形で（16 進）%c", 10);
+			return 1;
+		}
+		u32 last = 0, n2 = 0;
+		mu.set_swp_watch([&](bool master, u32 r2, u16) {
+			if (!master)
+				return;
+			const u32 rr = r2 % 64;
+			if (r2 < 0x1000 && (rr == 0x0e || rr == 0x0f || (rr >= 0x38 && rr <= 0x3f)))
+				return;              // 毎サンプル書き替わるので数えない
+			last = n2;
+		});
+		std::vector<u8> msg = { 0xf0, 0x43, 0x10, 0x4c };
+		u32 sum = 0;
+		for (u8 b : body) { msg.push_back(b); sum += b; }
+		msg.push_back(u8((0x80 - (sum & 0x7f)) & 0x7f));
+		msg.push_back(0xf7);
+		for (u8 b : msg)
+			mu.midi_in(b, 0);
+		for (; n2 < RATE * 2; n2++)
+			mu.run_sample(l, r);
+		mu.set_swp_watch(nullptr);
+		std::printf("== 08 xx …: ");
+		for (u8 b : body)
+			std::printf("%02X ", b);
+		std::printf("%c   SWP30 を触り終わるまで %u サンプル（%.1f ms）%c",
+		            10, last, double(last) * 1000.0 / RATE, 10);
 		return 0;
 	}
 

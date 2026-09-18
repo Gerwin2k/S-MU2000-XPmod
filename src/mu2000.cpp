@@ -1520,17 +1520,39 @@ bool mu2000::native_midi(u8 byte, int port)
 	if (m_sx_pos >= 0) {
 		// 長い SysEx（MEG のプログラムなど）の間は待ちを切らさない
 		m_fw_hold = std::max(m_fw_hold, u32(44100 / 200));
-		if (m_sx_pos < 5)
+		if (m_sx_pos < 6)
 			m_sx[m_sx_pos] = byte;
-		if (++m_sx_pos == 5) {
-			const bool yamaha_param = m_sx[0] == 0x43 && (m_sx[1] & 0xf0) == 0x10;
-			// 43 1n 4C hh … の hh。00 システム / 02 エフェクト / 03 インサーション
-			const u8 hh = m_sx[3];
-			const bool heavy = !yamaha_param || hh == 0x00 || hh == 0x02 || hh == 0x03;
+		m_sx_pos++;
+		// XG のパラメータチェンジ（43 1n 4C hh mm ll …）かどうかは 3 バイトで分かる。
+		// そうならもう 1 バイト（ll）まで待って細かく分ける。そうでないもの
+		// （GM システムオンなど）は 5 バイトで決める＝前と同じ
+		const bool xg_param = m_sx[0] == 0x43 && (m_sx[1] & 0xf0) == 0x10 && m_sx[2] == 0x4c;
+		if (m_sx_pos >= (xg_param ? 6 : 5)) {
+			// **重いのは「MEG のプログラムを書き直すもの」だけ**。
+			// `nativeplay --sxsettle` で SWP30 を触り終わるまでを測った:
+			//   00 00 7E XG システムオン       212ms
+			//   02 01 00 リバーブの種類        176ms
+			//   02 01 20 コーラスの種類        177ms
+			//   02 01 40 バリエーションの種類  182ms
+			//   03 0n 00 インサーションの種類  182ms
+			// 一方、**値を変えるだけ**のものは 0〜4ms で終わる:
+			//   00 00 04 マスターボリューム 0ms / 02 01 02 リバーブのパラメータ 3.9ms
+			//   03 0n 02 インサーションのパラメータ 3.1ms / 08 pp xx パートの設定 0ms
+			// 前はエフェクトとシステムなら何でも 300ms 待っていたので、
+			// エフェクトのパラメータを流す曲で SH-2 を無駄に回していた
+			const u8 hh = m_sx[3], mm = m_sx[4], ll = m_sx[5];
+			bool heavy = !xg_param;
+			if (xg_param) {
+				if (hh == 0x00 && mm == 0x00 && (ll == 0x7e || ll == 0x7f))
+					heavy = true;               // システムオン・全パラメータリセット
+				else if (hh == 0x02 && mm == 0x01 &&
+				         (ll <= 0x01 || ll == 0x20 || ll == 0x21 || ll == 0x40 || ll == 0x41))
+					heavy = true;               // リバーブ・コーラス・バリエーションの種類
+				else if (hh == 0x03 && ll <= 0x01)
+					heavy = true;               // インサーションの種類
+			}
 			if (heavy) {
-				// 実測（nativeplay --ccwatch）で SWP30 を触り終わるまで
-				// XG On が 224ms、リバーブの種類が 168ms、インサーションが 176ms。
-				// 余裕を見て 300ms（前は 500ms だった）
+				// 実測の 212ms に余裕を見て 300ms（前は 500ms だった）
 				m_fw_hold = std::max(m_fw_hold, u32(44100 * 3 / 10));
 				m_fw_why = 1;
 			}
