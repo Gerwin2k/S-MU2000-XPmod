@@ -332,17 +332,35 @@ inline int rd16s(const u8 *rom, u32 a)
 // 0 の側へ丸める >>8（実機は符号で分けている）
 inline int sh8(int v) { return v >= 0 ? (v >> 8) : -((-v) >> 8); }
 
-// レベルのバイト → 目標。
-// **深さ（実機の `[音+93]`）はまだ起こせていない**。実機は `0x128ADC` で
-// 要素の byte46・byte8・強さ・パートの塊 +210 から作っていて、
-// Kitayama では 72（byte49 と同じ）、GrandPno では 111（byte49 は 60）。
-// いまは byte49 で代用している。目標は「段がいつ終わるか」にしか効かず、
-// 坂の速さ（増分）には効かないので、段の終わりまで伸ばさない音では
-// 差が出ない。長い音で段が変わる所だけずれる
-inline int fenv_target(const u8 *elem, int level)
+// **包絡線の深さ**（実機の `[音+93]`。`0x128ADC`）。
+// 強さの表を byte8 で選び、byte46 の深さと掛け合わせる。
+//   深さ = ((36 × (byte46 - 64)) × (0x80 - 表[強さ]) × 2) >> 8
+// 表は byte8 が 0 なら 0x1E5D58、そうでなければ 0x1E5DD8。
+// GrandPno（byte46=70・byte8=1・強さ 100）で 111、
+// Kitayama（byte46=71・byte8=0）で 72。どちらも実機の値と一致した。
+// **パートの塊 +210 が 0 でないときの枝はまだ起こしていない**
+// （そこは深さがもう一段変わる。既定の音色では 0）
+constexpr u32 FENV_VEL_TAB0 = 0x1E5D58;
+constexpr u32 FENV_VEL_TAB1 = 0x1E5DD8;
+
+inline int fenv_depth(const u8 *rom, const u8 *elem, int vel)
+{
+	if (!rom || !elem)
+		return 0;
+	const int d = int(elem[46]) - 64;
+	if (d < 0)
+		return 0;                    // 負の枝はまだ起こしていない
+	const u32 tab = elem[8] ? FENV_VEL_TAB1 : FENV_VEL_TAB0;
+	const int t = rom[tab + u32(vel & 0x7f)];
+	const int v = (36 * d) * (0x80 - t);
+	return int((u32(v) * 2 & 0xffff) >> 8);
+}
+
+// レベルのバイト → 目標
+inline int fenv_target(const u8 *rom, const u8 *elem, int level, int vel)
 {
 	const int x = (level - 64) * 2;
-	return (x - sh8(x * int(elem[49]))) * 64;
+	return (x - sh8(x * fenv_depth(rom, elem, vel))) * 64;
 }
 
 // 速さへの足し込み。鍵のぶん（byte48 が深さ・byte49 が基準鍵）と

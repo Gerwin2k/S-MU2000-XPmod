@@ -87,7 +87,7 @@ public:
 		// 前の鍵の側が正にも負にもなる）。10ms ごとに step ずつ 0 へ寄せる
 		// **フィルタの包絡線**（doc/native-engine.md の 6.63）。
 		// 写し取った録画の代わりに、こちらで式から動かす
-		int facc = 0, ftgt = 0, finc = 0, fstage = 0, fadj = 0;
+		int facc = 0, ftgt = 0, finc = 0, fstage = 0, fadj = 0, fvel = 100;
 		u64 fnext = 0;                  // つぎに 1 段進める時刻
 		s32 glide = 0, glide_step = 0;
 		u64 glide_next = 0;
@@ -279,11 +279,34 @@ public:
 			if (!s.on) {
 				if (!s.rel || clock - s.rel_at > REL_FOLLOW)
 					continue;
+				// **離しの最中も包絡線を式で動かす**
+				if (fenv_on() && s.elem) {
+					bool moved = false;
+					while (clock >= s.fnext) {
+						fenv_step(s);
+						s.fnext += FENV_TICK;
+						moved = true;
+					}
+					if (moved) {
+						s.cut = fenv_cut(s);
+						m_poke(u32(i) * 64 + 0x00,
+						       cutoff_reg(s.cut, *s.cal, s.part, s.elem, s.note));
+					}
+					if (s.finc) {
+						live++;
+						if (s.fnext < next)
+							next = s.fnext;
+					}
+				}
 				const std::vector<nv::fstep> &re = s.cal->filter_env;
 				while (s.rpos < re.size()) {
 					if (!re[s.rpos].rel) { s.rpos++; continue; }
 					if (u64(s64(s.rel_at + re[s.rpos].at) + EG_LAG) > clock)
 						break;
+					if (fenv_on() && re[s.rpos].reg == 0x00) {
+						s.rpos++;         // 式で出すので録画の分は捨てる
+						continue;
+					}
 					u16 v = re[s.rpos].v;
 					if (re[s.rpos].reg == 0x0a) {
 						s.lfo = v;
@@ -792,7 +815,7 @@ private:
 		}
 		if (rate < 0) rate = 0;
 		if (rate > 63) rate = 63;
-		s.ftgt = nv::fenv_target(e, lvl);
+		s.ftgt = nv::fenv_target(m_rom, e, lvl, s.fvel);
 		s.finc = nv::fenv_inc(m_rom, rate);
 		// 下る向きなら増分の符号を反転する（実機の 0x128BA4）
 		if (s.facc > s.ftgt && s.finc != nv::FENV_NEXT)
@@ -804,8 +827,9 @@ private:
 	{
 		if (!s.elem || !m_rom)
 			return;
+		s.fvel = vel;
 		s.fadj = nv::fenv_key_adj(s.elem, s.note) + nv::fenv_vel_adj(s.elem, vel);
-		s.facc = nv::fenv_target(s.elem, s.elem[55]);
+		s.facc = nv::fenv_target(m_rom, s.elem, s.elem[55], s.fvel);
 		s.ftgt = s.facc;
 		s.finc = 0;
 		s.fstage = 0;
@@ -819,6 +843,25 @@ private:
 		// 鍵を押した直後の 1 目は、実機も値を動かさない（張った値を書くだけ）。
 		// だから 1 目ぶん遅らせて進め始める
 		s.fnext = u64(s64(s.tstart + at0 + FENV_TICK) + EG_LAG);
+	}
+
+	// **離しの段**。鍵を離すと、実機はもう 1 段張って 0 へ向かう。
+	// 速さは byte53、行き先は byte58（段 1 が byte51/byte56、
+	// 段 2 が byte52/byte57 と並んでいるので、その次）。
+	// 実測（GrandPno）で増分 -28 ＝ INC_TAB[13]、byte53(13) と一致
+	void fenv_release(slot_use &s)
+	{
+		const u8 *e = s.elem;
+		if (!e || !m_rom || !fenv_on() || !s.cal)
+			return;
+		int rate = int(e[53]) + s.fadj;
+		if (rate < 0) rate = 0;
+		if (rate > 63) rate = 63;
+		s.fstage = 9;                    // もう段を進めない印
+		s.ftgt = nv::fenv_target(m_rom, e, e[58], s.fvel);
+		s.finc = nv::fenv_inc(m_rom, rate);
+		if (s.facc > s.ftgt && s.finc != nv::FENV_NEXT)
+			s.finc = -s.finc;
 	}
 
 	// 10ms ぶん進める
@@ -839,7 +882,7 @@ private:
 	u16 fenv_cut(const slot_use &s) const
 	{
 		const u16 base = s.cal->reg[0x00];
-		const int init = nv::fenv_target(s.elem, s.elem[55]) >> 2;
+		const int init = nv::fenv_target(m_rom, s.elem, s.elem[55], s.fvel) >> 2;
 		int v = int(base & 0xfff) - init + (s.facc >> 2);
 		v = v < 0 ? 0 : (v > 0xfff ? 0xfff : v);
 		return u16((base & 0xf000) | u16(v));
@@ -1140,10 +1183,7 @@ public:
 			s.rel_at = m_clock;
 			s.rel_att = s.att;
 			s.rpos = 0;
-			// **離しは録画に任せる**。離しの段も式にしてみたが、実機は
-			// もう何段か持っているらしく、押している間より合わなかった
-			// （13-14 秒で 94.0% → 88.3%）。そこが解けるまでは録画が近い
-			s.finc = 0;
+			fenv_release(s);
 			if (s.cal && !s.cal->filter_env.empty()) {
 				m_traj = true;
 				m_traj_next = 0;
