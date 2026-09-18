@@ -299,7 +299,12 @@ private:
 			early_ref::params p;
 			p.room     = clampf(par("Room Size", 5.0f) / 10.0f, 0.1f, 1.0f);
 			p.liveness = clampf(par("Liveness", 5.0f) / 10.0f, 0.0f, 1.0f);
-			p.time_ms  = par("Gate Time", par("InitDelay", 200.0f));
+			// 切るまでの長さ。GATE REVERB には Gate Time が無く、InitDelay は
+			// 頭の隙間なので、そこを使うと 10ms になって尾が 12dB 足りなかった。
+			// 部屋の大きさから決める
+			p.time_ms  = has("Gate Time") ? par("Gate Time", 200.0f)
+			             : has("Room Size") ? clampf(80.0f + raw_of("Room Size", 10) * 22.0f, 60.0f, 400.0f)
+			             : par("InitDelay", 200.0f);
 			p.diffuse  = clampf(par("Diffusion", 7.0f) / 10.0f, 0.0f, 1.0f);
 			p.gate     = (m_type >> 7) == 0x0a;
 			p.reverse  = (m_type >> 7) == 0x0b;

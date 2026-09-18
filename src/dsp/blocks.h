@@ -56,8 +56,12 @@ public:
 			const float t = span * std::pow(u, 0.8f) * (0.6f + 0.8f * m_p.room);
 			m_tap[i] = t * m_rate;
 			float g = std::pow(0.15f + 0.85f * m_p.liveness, u * 4.0f);
-			if (m_p.gate)
-				g = u < 0.85f ? 1.0f : 0.0f;      // 切るまでは減らさない
+			if (m_p.gate) {
+				// 切るまでは減らさず、切り際は 2 つぶんかけて落とす。
+				// 真っ二つに切ると、実機より尾が 12dB 小さくなっていた
+				g = u < 0.85f ? 1.0f : clampf((1.0f - u) / 0.15f, 0.0f, 1.0f);
+				g = g * g;
+			}
 			if (m_p.reverse)
 				g = u * u;                      // だんだん大きく
 			m_gain[i] = g * (i % 2 ? -1.0f : 1.0f) * (0.5f + 0.5f * m_p.diffuse);
@@ -586,8 +590,11 @@ public:
 			const float over = e / m_thresh;
 			g = std::pow(over, 1.0f / std::max(1.0f, m_p.ratio)) / over;
 		}
-		ol = l * g * m_p.out_level * m_makeup;
-		orr = r * g * m_p.out_level * m_makeup;
+		// 持ち上げは「入っている音の大きさ」に応じて掛ける。いつでも掛けると、
+		// 音を離したあとの尾まで持ち上がって実機より 12dB 大きくなっていた
+		const float boost = 1.0f + (m_makeup - 1.0f) * clampf(e / std::max(1e-6f, m_thresh), 0.0f, 1.0f);
+		ol = l * g * m_p.out_level * boost;
+		orr = r * g * m_p.out_level * boost;
 	}
 
 private:
