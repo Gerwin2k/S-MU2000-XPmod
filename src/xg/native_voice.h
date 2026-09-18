@@ -301,6 +301,71 @@ inline int velocity_att(const u8 *rom, int vel, int curve = 0)
 	return rom[LEVEL_TAB + u32(i & 0x7f)];
 }
 
+// ---- **フィルタの包絡線**（doc/native-engine.md の 6.63）
+//
+// 実機は firmware のソフトでこれを動かしていて、10ms ごとに
+// 切る高さへ足す値を作り直す。折れ線で、状態は 3 つ:
+//
+//   累算  段の中でいまどこまで来たか（`[音+66]`）
+//   目標  その段の行き先（`[音+68]`）
+//   増分  1 段あたりの足し引き（`[音+70]`。0x8000 なら「すぐ次の段」）
+//
+// 10ms ごとに 累算 += 増分 して、向きに応じて目標を越えたら次の段へ。
+// 切る高さに足す値は **累算 >> 2**。
+//
+// 段は要素のバイトで決まる（要素 + 2 を基準に読んでいるので、ここでは
+// 要素そのものの番号で書く）:
+//
+//   はじめの累算 = 目標(byte55)
+//   段 1: 目標 = 目標(byte56)、速さ = byte51
+//   段 2: 目標 = 目標(byte57)、速さ = byte52
+//
+// Kitayama（0,72,5）鍵 60・強さ 100 の実機の値で全部合わせた（6.63）
+constexpr u32 FENV_INC_TAB = 0x1E5C58;   // 速さ → 増分（16bit 符号つき × 64）
+
+inline int rd16s(const u8 *rom, u32 a)
+{
+	const int v = int(rd16(rom, a));
+	return v >= 0x8000 ? v - 0x10000 : v;
+}
+
+// 0 の側へ丸める >>8（実機は符号で分けている）
+inline int sh8(int v) { return v >= 0 ? (v >> 8) : -((-v) >> 8); }
+
+// レベルのバイト → 目標
+inline int fenv_target(const u8 *elem, int level)
+{
+	const int x = (level - 64) * 2;
+	return (x - sh8(x * int(elem[49]))) * 64;
+}
+
+// 速さへの足し込み。鍵のぶん（byte48 が深さ・byte49 が基準鍵）と
+// 強さのぶん（byte47 が深さ）
+inline int fenv_key_adj(const u8 *elem, int note)
+{
+	const int d = int(elem[48]) - 64;
+	return d ? sh8((note - int(elem[49])) * (d * 16)) : 0;
+}
+inline int fenv_vel_adj(const u8 *elem, int vel)
+{
+	const int d = int(elem[47]) - 64;
+	if (!d)
+		return 0;
+	const int a = d * 16;
+	return sh8(a >= 0 ? a * vel : -((-a) * (0x80 - vel)));
+}
+
+// 速さ → 増分。63 以上は「すぐ次の段」の印
+constexpr int FENV_NEXT = 0x8000;
+inline int fenv_inc(const u8 *rom, int rate)
+{
+	if (rate >= 63)
+		return FENV_NEXT;
+	if (rate < 0)
+		rate = 0;
+	return rd16s(rom, FENV_INC_TAB + u32(rate) * 2);
+}
+
 // 音色ごとの下駄。firmware は「音色の音量 → 表」と、鍵ごとの足し込みで作る。
 // 式そのものはまだ解けていないので、**1 回だけ実機に鳴らしてもらって校正する**（下）。
 // 校正しないときの当て値（実測の中央値。5〜19 の幅がある）

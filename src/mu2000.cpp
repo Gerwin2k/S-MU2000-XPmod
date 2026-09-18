@@ -1078,6 +1078,10 @@ void mu2000::midi_step(u64 now)
 // 報告があり、LCD を描いているのも firmware なので筋が合う
 void mu2000::note_fw_swp(bool master, u32 reg, u16 value)
 {
+	// **包絡線の格子の位相を拾う**。native の口が始まる前は firmware が
+	// 普通に走っているので、そのときの 0x00 の書き込みが格子の目にあたる
+	if (master && !m_native_engine && reg < 0x1000 && (reg % 64) == 0)
+		m_ndrv.set_eg_phase(u32(trace_sample()));
 	if (!m_native_engine || !master)
 		return;
 	// **firmware が鍵を押した瞬間のマスク**を拾う。これが firmware の
