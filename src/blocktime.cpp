@@ -121,6 +121,8 @@ int main(int argc, char **argv)
 			if (!m->load_state(booted.data(), booted.size(), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
 		mu.clear_profile();
 
+		// 音源として挿されたときと同じ状態で測る（compat/platform.h）
+		const smu2000::denormals_off no_denormals;
 		std::vector<double> ms;
 		size_t next = 0;
 		u64 done = 0;

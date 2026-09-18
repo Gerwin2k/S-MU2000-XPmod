@@ -988,12 +988,10 @@ void mu2000::set_native_fx(int mode)
 	// 大きさは 44100Hz ぶんで固定なので、1 度用意すれば足りる。
 	// **台ごとに持つ**。前は関数の static で、DAW に 2 枚目を挿すと
 	// 2 台目の遅延の線が空のままになって落ちていた
-	// 軽量モードは float で計算する。非正規化数（0 に近すぎる値）が出ると命令が何十倍も遅くなるので、
-	// この糸では 0 に丸める（FTZ/DAZ）
-#if defined(__SSE2__) || defined(_M_X64) || defined(__x86_64__)
-	if (mode)
-		_mm_setcsr(_mm_getcsr() | 0x8040);
-#endif
+	// 非正規化数（0 に近すぎる値）を 0 に丸める設定は、**ここでは触らない**。
+	// 糸ごとの設定なので、音声の糸が入れ替わると消えてしまうし、
+	// 音源として挿されている側が host の糸の設定を変えたままにするのも行儀が悪い。
+	// 1 ブロックごとに smu2000::denormals_off を置く（compat/platform.h）
 	if (!m_nfx_ready) {
 		m_nfx.set_rate(44100.0f);
 		m_nfx_ready = true;

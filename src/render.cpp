@@ -11,6 +11,7 @@
 // 実機と同じく、MIDI は 31250bps の直列で MIDI IN A に流し込む。
 // 出来た WAV は MAME の録音と突き合わせるためのもの。
 
+#include "compat/platform.h"
 #include "mu2000.h"
 #include "bootcache.h"
 #include "smf.h"
@@ -375,6 +376,9 @@ int main(int argc, char **argv)
 	size_t scheduled_events = 0, scheduled_bytes = 0;
 	size_t tail_start = size_t(-1);
 	const size_t hard_stop = duration_given ? size_t((boot + seconds) * rate) : size_t(-1);
+	// 軽量モードの float 計算で、非正規化数に落ち込まないようにする。
+	// 音源として挿されたときと同じ状態で鳴らすため（compat/platform.h）
+	const smu2000::denormals_off no_denormals;
 	for (size_t i = pcm.size() / 2; ; i++) {
 		if (duration_given && i >= hard_stop)
 			break;
