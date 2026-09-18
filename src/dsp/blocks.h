@@ -103,6 +103,8 @@ public:
 		float hpf_hz = 60.0f, lpf_hz = 8000.0f;
 		bool  cross = false;       // 左右を入れ替えて戻す
 		float level = 1.0f;
+		// 2 本目の組（ECHO の LchDelay2/RchDelay2）。level2 が 0 なら使わない
+		float l2_ms = 0.0f, r2_ms = 0.0f, level2 = 0.0f;
 	};
 
 	void set_rate(float rate)
@@ -142,17 +144,24 @@ public:
 
 		// 戻すのは、出ている音（左右と真ん中）をまとめたもの。実機の LCR ディレイは
 		// 尾がはっきり残るので、1 本だけ戻すと足りない
-		const float mix = (fl + fr) * 0.5f + dc * 0.5f;
-		float bl = m_lp[0].lp(m_hp[0].hp(m_p.cross ? mix : mix)) * m_p.feedback;
-		float br = m_lp[1].lp(m_hp[1].hp(m_p.cross ? mix : mix)) * m_p.feedback;
+		// クロスディレイは左右を入れ替えて戻す。ほかは左右をまとめて戻す
+		// （まとめないと、片側だけに音がある曲で尾が細くなる）
+		const float mix = (fl + fr) * 0.5f + dc * 0.5f * (m_p.c_level > 0.0f ? 1.0f : 0.0f);
+		float bl = m_lp[0].lp(m_hp[0].hp(m_p.cross ? fr : mix)) * m_p.feedback;
+		float br = m_lp[1].lp(m_hp[1].hp(m_p.cross ? fl : mix)) * m_p.feedback;
 		bl = clampf(bl, -4.0f, 4.0f);
 		br = clampf(br, -4.0f, 4.0f);
 
 		m_l.push(l + bl);
 		m_r.push(r + br);
 
-		ol = (dl + dc) * m_p.level;
-		orr = (dr + dc) * m_p.level;
+		float el = 0.0f, er = 0.0f;
+		if (m_p.level2 > 0.0f) {
+			el = m_l.tapf(ms(m_p.l2_ms)) * m_p.level2;
+			er = m_r.tapf(ms(m_p.r2_ms)) * m_p.level2;
+		}
+		ol = (dl + dc + el) * m_p.level;
+		orr = (dr + dc + er) * m_p.level;
 	}
 
 private:
