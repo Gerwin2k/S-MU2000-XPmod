@@ -762,7 +762,7 @@ int main(int argc, char **argv)
 			case 0x20e: keyed |= mask; if (!t0) t0 = t; break;
 			default: {
 				const u32 rr = r2 % 64;
-				if (r2 < 0x1000 && rr >= 0x06 && rr <= 0x09)
+				if (r2 < 0x1000 && ((rr >= 0x06 && rr <= 0x09) || rr == 0x00 || rr == 0x04))
 					log.push_back({ t, u8(r2 / 64), u8(rr), v2 });
 				break;
 			}

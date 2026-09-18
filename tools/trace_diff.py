@@ -74,13 +74,29 @@ def main():
     tally = collections.Counter()
     shown = 0
     for k, (fs, fslots, ns, nslots) in enumerate(pairs):
-        # スロット番号は違って当たり前なので、並べた順で比べる
+        # スロット番号は違って当たり前。**波形の番地（0x16/0x17）で要素を
+        # 対応づける**。こちらはスロットを上から、firmware は下から取るので、
+        # 番号順に並べると要素の順が逆になってしまう
+        def key(d):
+            return (d.get(0x16), d.get(0x17))
         fl = [fslots[i] for i in sorted(fslots)]
         nl = [nslots[i] for i in sorted(nslots)]
         if len(fl) != len(nl):
             tally['要素の数が違う'] += 1
             continue
-        for a, b in zip(fl, nl):
+        rest = list(nl)
+        paired = []
+        for a in fl:
+            hit = None
+            for b in rest:
+                if key(a) is not None and key(a) == key(b):
+                    hit = b
+                    break
+            if hit is None:
+                hit = rest[0]
+            rest.remove(hit)
+            paired.append((a, hit))
+        for a, b in paired:
             for rr in sorted(set(a) | set(b)):
                 av, bv = a.get(rr), b.get(rr)
                 if av != bv:
