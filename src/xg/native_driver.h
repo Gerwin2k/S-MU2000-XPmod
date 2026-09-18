@@ -771,6 +771,10 @@ private:
 			return;
 		}
 		s.facc = s.ftgt;
+		if (s.fstage >= 9) {             // 離しの段は進めない
+			s.finc = 0;
+			return;
+		}
 		s.fstage++;
 		const int adj = s.fadj;
 		int rate = -1, lvl = -1;
@@ -1136,6 +1140,10 @@ public:
 			s.rel_at = m_clock;
 			s.rel_att = s.att;
 			s.rpos = 0;
+			// **離しは録画に任せる**。離しの段も式にしてみたが、実機は
+			// もう何段か持っているらしく、押している間より合わなかった
+			// （13-14 秒で 94.0% → 88.3%）。そこが解けるまでは録画が近い
+			s.finc = 0;
 			if (s.cal && !s.cal->filter_env.empty()) {
 				m_traj = true;
 				m_traj_next = 0;

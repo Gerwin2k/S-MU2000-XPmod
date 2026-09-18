@@ -475,7 +475,8 @@ void mu2000::build_bus()
 		const u32 wa = wp ? u32(std::strtoul(wp, nullptr, 16)) : 0xffffffffu;
 		auto notew = [this, wa](offs_t a, u32 v, int size) {
 			if (a <= wa && wa < a + u32(size))
-				std::fprintf(stderr, "ramwrite pc=%06x 番地=%06x = %x (%d bit)\n",
+				std::fprintf(stderr, "ramwrite s=%llu pc=%06x 番地=%06x = %x (%d bit)\n",
+				             (unsigned long long)trace_sample(),
 				             m_cpu ? m_cpu->pc() : 0, u32(a), v, size * 8);
 		};
 		d.w8  = [this, notew](offs_t a, u8 v)  { notew(a, v, 1); m_ram[a - 0x400000] = v; };
