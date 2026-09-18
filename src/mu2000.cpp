@@ -1084,7 +1084,7 @@ bool mu2000::native_midi(u8 byte, int port)
 	if (byte & 0x80) {
 		if (byte >= 0xf0) {              // SysEx など。以後は firmware に任せる
 			n.status = 0;
-			m_fw_hold = 44100 / 4;
+			m_fw_hold = 44100 / 20;
 			return false;
 		}
 		n.status = byte;
@@ -1092,7 +1092,7 @@ bool mu2000::native_midi(u8 byte, int port)
 		// 鍵の上げ下げ以外は、この場で firmware に渡す
 		const u8 kind = byte & 0xf0;
 		if (kind != 0x80 && kind != 0x90) {
-			m_fw_hold = 44100 / 8;
+			m_fw_hold = 44100 / 50;
 			return false;
 		}
 		return true;                     // 状態のバイトは飲み込む
@@ -1139,8 +1139,8 @@ void mu2000::replay_note(u8 status, u8 d0, u8 d1, int port)
 	midi_in(d0, port);
 	midi_in(d1, port);
 	m_native_engine = save;
-	if (m_fw_hold < 44100 / 10)
-		m_fw_hold = 44100 / 10;
+	if (m_fw_hold < 44100 / 50)
+		m_fw_hold = 44100 / 50;
 }
 
 // S-MU2000: 軽量モードの入り切り（doc/native-dsp.md）
@@ -1314,10 +1314,15 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	if (m_profile)
 		pt0 = smu2000::perf_ticks();
 
-	// native の口が動いているときは、firmware を回すのは「回せ」と言われた間だけ
+	// native の口が動いているときは、firmware を回すのは
+	//   * 渡した MIDI がまだ溜まっている間（受け取って処理させる）
+	//   * そのあと少しの間（処理が終わるまで）
+	// だけ。ふだんは止めておく
 	bool run_cpu = m_cpu_enabled;
 	if (m_native_engine) {
 		m_ne_samples.fetch_add(1, std::memory_order_relaxed);
+		if (midi_pending())
+			m_fw_hold = std::max(m_fw_hold, u32(44100 / 100));   // 溜まっている間は回す
 		if (m_fw_hold)
 			m_fw_hold--;
 		else
