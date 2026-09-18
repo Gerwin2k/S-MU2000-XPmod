@@ -49,6 +49,31 @@ def parse(path):
     return out
 
 
+def as_function(rows, field, nbytes):
+    """レジスタの値が「84 バイトのどれか 1 つだけで決まる」かどうかを見る。
+
+    そのまま入っていなくても、表を引いていれば「同じバイトの値には必ず同じ結果」に
+    なる。これで減衰の目標（= (0x7f - byte) * 2）やアタックの速さが見つかった。
+    """
+    vals = [field(rg) for _, rg in rows]
+    if len(set(vals)) == 1:
+        return ('定数 %d' % vals[0], [])
+    hits = []
+    for i in range(nbytes):
+        col = [e[i] for e, _ in rows]
+        if len(set(col)) == 1:
+            continue
+        m = {}
+        ok = True
+        for c, v in zip(col, vals):
+            if m.setdefault(c, v) != v:
+                ok = False
+                break
+        if ok:
+            hits.append((i, sorted(m.items())))
+    return (None, hits)
+
+
 def main():
     args = sys.argv[1:]
     path = args[0]
@@ -109,6 +134,41 @@ def main():
         varies = sum(1 for s in by_voice.values() if len(s) > 1)
         tag = '（鍵/強さで変わる音色 %d/%d）' % (varies, len(by_voice)) if varies else ''
         print('  %02x %-26s %s %s' % (reg, name, ' / '.join(found) if found else '-', tag))
+
+    # 「表を引いているだけ」のものを探す（鍵と強さを 1 つに絞って見る）
+    one = [(r[0]['elem'][0], r[3]) for r in rows
+           if (note_pick is None or r[1] == note_pick)]
+    if not one:
+        return
+    print()
+    print('1 つのバイトだけで決まるもの:')
+    FIELDS = [
+        ('06 上位（アタックの速さ）', lambda rg: rg[0x06] >> 8),
+        ('07 上位（減衰 1 の速さ）', lambda rg: rg[0x07] >> 8),
+        ('07 下位（減衰 1 の目標）', lambda rg: rg[0x07] & 0xff),
+        ('08 上位（減衰 2 の速さ）', lambda rg: rg[0x08] >> 8),
+        ('08 下位（減衰 2 の目標）', lambda rg: rg[0x08] & 0xff),
+        ('09 下位（全体の音量）', lambda rg: rg[0x09] & 0xff),
+        ('00 下位 11bit（フィルタ）', lambda rg: rg[0x00] & 0x7ff),
+        ('0a（LFO）', lambda rg: rg[0x0a]),
+    ]
+    for label, f in FIELDS:
+        rs = [(e, rg) for e, rg in one if all(k in rg for k in (0x00, 0x06, 0x07, 0x08, 0x09, 0x0a))]
+        if not rs:
+            continue
+        const, hits = as_function(rs, f, nbytes)
+        if const:
+            print('  %-24s %s' % (label, const))
+        elif hits:
+            for i, m in hits[:2]:
+                # (0x7f - byte) * 2 のような簡単な形かどうかも見る
+                rule = ''
+                if all(v == (0x7f - k) * 2 for k, v in m):
+                    rule = '  ＝ (0x7f - byte) * 2'
+                print('  %-24s byte %d%s' % (label, i, rule))
+                print('      ' + ' '.join('%02x->%02x' % kv for kv in m[:16]))
+        else:
+            print('  %-24s どの 1 バイトでも決まらない' % label)
 
 
 main()
