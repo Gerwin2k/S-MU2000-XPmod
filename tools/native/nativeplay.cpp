@@ -175,6 +175,8 @@ int main(int argc, char **argv)
 	bool bench = false, ccwatch = false, ccsweep = false, ccram = false, attsweep = false, cutsweep = false, listvoices = false, ccfilter = false;
 	int ccreg = -1;
 	int ccbyte = -1;
+	int porta = -1;
+	int portasweep = 0;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -197,6 +199,8 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--ccfilter")) ccfilter = true;
 		else if (!std::strcmp(argv[i], "--ccreg") && i + 1 < argc) ccreg = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--ccbyte") && i + 1 < argc) ccbyte = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--porta") && i + 1 < argc) porta = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--portasweep") && i + 1 < argc) portasweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -665,6 +669,118 @@ int main(int argc, char **argv)
 			if (o.vel == 100 && o.cut >= 0)
 				std::printf("CUT 鍵 %3d 強さ %3d  0x00=%04x 切る高さ %4d（表との差 %+d） 0x04=%04x%c",
 				            o.note, o.vel, o.cut, o.cut & 0x7ff, (o.cut & 0x7ff) - tab, o.res, 10);
+		return 0;
+	}
+
+	// --portasweep S: CC5 を S 刻みで振って、**滑る速さ**（10ms の刻みあたり
+	// いくつ音程のレジスタが動くか）を出す。ROM の表を探す材料
+	if (portasweep > 0) {
+		std::printf("== ポルタメントの速さ（鍵 24 → %d、CC5 %d 刻み）%c", note, portasweep, 10);
+		for (int cc5 = 0; cc5 <= 127; cc5 += portasweep) {
+			u64 mask = 0, keyed = 0, t = 0;
+			struct plog { u64 t; u16 v; u8 ch; };
+			std::vector<plog> log;
+			mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+				if (!master) return;
+				switch (r2) {
+				case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+				case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+				case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+				case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+				case 0x20e: keyed |= mask; break;
+				default:
+					if ((r2 % 64) == 0x11 && r2 < 0x1000 && (keyed & (u64(1) << (r2 / 64))))
+						log.push_back({ t, v2, u8(r2 / 64) });
+					break;
+				}
+			});
+			for (u8 bb : { u8(0xb0), u8(0x41), u8(127), u8(0xb0), u8(0x05), u8(cc5 & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 10; i++) { mu.run_sample(l, r); t++; }
+			for (u8 bb : { u8(0x90), u8(24), u8(vel & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 4; i++) { mu.run_sample(l, r); t++; }
+			const size_t before = log.size();
+			for (u8 bb : { u8(0x80), u8(24), u8(64), u8(0x90), u8(note & 0x7f), u8(vel & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE * 4; i++) { mu.run_sample(l, r); t++; }
+			mu.set_swp_watch(nullptr);
+			// いちばん後に鳴り始めたスロットの、上がっていく所だけを見る
+			const u8 want = log.empty() ? 0 : log.back().ch;
+			u64 t0 = 0, t1 = 0;
+			int v0 = -1, v1 = -1;
+			for (size_t i = before ? before - 1 : 0; i < log.size(); i++) {
+				if (log[i].ch != want)
+					continue;
+				if (v0 < 0) { v0 = log[i].v; t0 = log[i].t; }
+				if (int(log[i].v) != v1) { v1 = log[i].v; t1 = log[i].t; }
+			}
+			const double ms = double(t1 - t0) * 1000.0 / RATE;
+			std::printf("  CC5=%3d  %5d → %5d（%+5d）を %8.1f ms  刻みあたり %8.3f%c",
+			            cc5, v0, v1, v1 - v0, ms,
+			            ms > 0 ? double(v1 - v0) * 10.0 / ms : 0.0, 10);
+			for (u8 bb : { u8(0x80), u8(note & 0x7f), u8(64), u8(0xb0), u8(0x78), u8(0),
+			               u8(0xb0), u8(0x41), u8(0) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 4; i++) { mu.run_sample(l, r); t++; }
+		}
+		return 0;
+	}
+
+	// --porta N: ポルタメント（CC65 入・CC5 が速さ）で、firmware が音程の
+	// レジスタ 0x11 をどう動かすかを時刻つきで出す。N は CC5 の値。
+	// 低い音を鳴らしたまま高い音を鳴らし、滑っていく間の 0x11 を全部並べる
+	if (porta >= 0) {
+		u64 mask = 0, keyed = 0;
+		u64 t = 0, t0 = 0;
+		struct plog { u64 t; u16 v; u8 ch; };
+		std::vector<plog> log;
+		mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+			if (!master) return;
+			switch (r2) {
+			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+			case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+			case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+			case 0x20e: keyed |= mask; if (!t0) t0 = t; break;
+			default:
+				if ((r2 % 64) == 0x11 && r2 < 0x1000 && (keyed & (u64(1) << (r2 / 64))))
+					log.push_back({ t, v2, u8(r2 / 64) });
+				break;
+			}
+		});
+		for (u8 bb : { u8(0xb0), u8(0x41), u8(127), u8(0xb0), u8(0x05), u8(porta & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 4; i++) { mu.run_sample(l, r); t++; }
+		// 1 音目（低い方）。ここは滑らない
+		for (u8 bb : { u8(0x90), u8(48), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 2; i++) { mu.run_sample(l, r); t++; }
+		const size_t before = log.size();
+		const u64 mark = t;
+		// 2 音目（12 半音上）。ここから滑る
+		for (u8 bb : { u8(0x80), u8(48), u8(64), u8(0x90), u8(60), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE * 3; i++) { mu.run_sample(l, r); t++; }
+		mu.set_swp_watch(nullptr);
+		std::printf("== ポルタメント CC5=%d（鍵 48 → 60）%c", porta, 10);
+		// **いちばん最後に鳴り始めたスロット**だけを見る（前の音の尾が混ざるので）
+		u8 want = log.empty() ? 0 : log.back().ch;
+		int last = -1, prev = -1, n = 0;
+		for (size_t i = before ? before - 1 : 0; i < log.size(); i++) {
+			if (log[i].ch != want || int(log[i].v) == last)
+				continue;
+			prev = last;
+			last = int(log[i].v);
+			std::printf("  %+8.2f ms  スロット%2d  0x11=%04x (%5d)  差 %+d%c",
+			            double(s64(log[i].t) - s64(mark)) * 1000.0 / RATE,
+			            int(want), unsigned(last), last, prev < 0 ? 0 : last - prev, 10);
+			if (++n > 400)
+				break;
+		}
+		std::printf("  段の数 %d%c", n, 10);
+		for (u8 bb : { u8(0x80), u8(60), u8(64), u8(0xb0), u8(0x41), u8(0), u8(0xb0), u8(0x78), u8(0) })
+			mu.midi_in(bb, 0);
 		return 0;
 	}
 
