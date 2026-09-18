@@ -1463,7 +1463,10 @@ bool mu2000::native_midi(u8 byte, int port)
 			const u8 hh = m_sx[3];
 			const bool heavy = !yamaha_param || hh == 0x00 || hh == 0x02 || hh == 0x03;
 			if (heavy) {
-				m_fw_hold = std::max(m_fw_hold, u32(44100 / 2));
+				// 実測（nativeplay --ccwatch）で SWP30 を触り終わるまで
+				// XG On が 224ms、リバーブの種類が 168ms、インサーションが 176ms。
+				// 余裕を見て 300ms（前は 500ms だった）
+				m_fw_hold = std::max(m_fw_hold, u32(44100 * 3 / 10));
 				m_fw_why = 1;
 			}
 			m_sx_pos = -1;
