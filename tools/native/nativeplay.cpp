@@ -183,6 +183,7 @@ int main(int argc, char **argv)
 	const char *sxsettle = nullptr;
 	bool egwatch = false;
 	bool slotalloc = false;
+	bool levelcheck = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -212,6 +213,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--sxsettle") && i + 1 < argc) sxsettle = argv[++i];
 		else if (!std::strcmp(argv[i], "--egwatch")) egwatch = true;
 		else if (!std::strcmp(argv[i], "--slotalloc")) slotalloc = true;
+		else if (!std::strcmp(argv[i], "--levelcheck")) levelcheck = true;
 		else if (!std::strcmp(argv[i], "--catoff") && i + 1 < argc) catoff = int(std::strtol(argv[++i], nullptr, 0));
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
@@ -684,6 +686,70 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	// --levelcheck: **音量の式を実機と並べる**。
+	// まず鍵 60・強さ 100 で 1 音鳴らして校正し（写し取りと同じ）、
+	// そのあと鍵と強さを振って、実機が 0x09 に入れる値とこちらの式を比べる
+	if (levelcheck) {
+		auto play_att = [&](int nn, int vv) -> int {
+			u64 mask = 0, keyed = 0;
+			int got = -1;
+			std::map<u32, u16> last;
+			mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+				if (!master) return;
+				switch (r2) {
+				case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+				case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+				case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+				case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+				case 0x20e: keyed |= mask; break;
+				default:
+					if (r2 < 0x1000 && (r2 % 64) == 9)
+						last[r2] = v2;
+					break;
+				}
+			});
+			for (u8 bb : { u8(0x90), u8(nn & 0x7f), u8(vv & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 20; i++)
+				mu.run_sample(l, r);
+			for (int ch = 0; ch < 64; ch++)
+				if ((keyed & (u64(1) << ch)) && last.count(u32(ch) * 64 + 9)) {
+					got = int(last[u32(ch) * 64 + 9] & 0xff);
+					break;
+				}
+			for (u8 bb : { u8(0x80), u8(nn & 0x7f), u8(64) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 20; i++)
+				mu.run_sample(l, r);
+			mu.set_swp_watch(nullptr);
+			return got;
+		};
+		const u8 *el = xg::nv::element(rom, rec, 0);
+		const int ref = play_att(60, 100);
+		if (ref < 0) {
+			std::fprintf(stderr, "校正の音が鳴らなかった%c", 10);
+			return 1;
+		}
+		const int base = xg::nv::calibrate_level(rom, el, ref, 60, 100);
+		std::printf("== 音量の式くらべ（鍵 60・強さ 100 で校正。素の音量 %d）%c", base, 10);
+		std::printf("   鍵  強さ   実機   こちら   ずれ%c", 10);
+		int bad = 0, n = 0;
+		for (int nn : { 36, 48, 60, 72, 84, 96 })
+			for (int vv : { 20, 60, 100, 127 }) {
+				const int got = play_att(nn, vv);
+				if (got < 0)
+					continue;
+				const int mine = xg::nv::volume_att(rom, el, base, nn, vv);
+				n++;
+				if (got != mine)
+					bad++;
+				std::printf("  %3d  %3d   %4d   %4d   %+4d %s%c", nn, vv, got, mine,
+				            mine - got, got == mine ? "" : "← 違う", 10);
+			}
+		std::printf("ずれた点: %d / %d%c", bad, n, 10);
+		return 0;
+	}
+
 	// --slotalloc: firmware が「どのスロットを使っているか」を持っている場所を
 	// ワーク RAM から探す。音を 1 つずつ足していき、そのたびに
 	// **鳴っているスロットの 64bit のマスク**と同じ並びが RAM に無いかを見る。
@@ -1151,7 +1217,7 @@ int main(int argc, char **argv)
 		int shown = 0;
 		// **パートの塊を先に出す**（ほかの所は毎サンプル動く雑音が多く、
 		// 上限をそれで使い切ってしまう）
-		for (u32 q = 0; q < 0x100; q++) {
+		for (u32 q = 0; q < 0x200; q++) {
 			bool same = true;
 			for (size_t k = 1; k < snap.size(); k++)
 				if (snap[k][part0 + q] != snap[0][part0 + q])
@@ -1165,7 +1231,7 @@ int main(int argc, char **argv)
 			shown++;
 		}
 		for (size_t o = 0; o < wr.size() && shown < 40; o++) {
-			if (o >= part0 && o < part0 + 0x100)
+			if (o >= part0 && o < part0 + 0x200)
 				continue;
 			bool same = true;
 			for (size_t k = 1; k < snap.size(); k++)

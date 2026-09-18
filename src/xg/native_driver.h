@@ -644,11 +644,13 @@ private:
 		const part_cc &p = m_cc[part];
 		const nv::voice_cal *c = s.cal;
 		int a = s.att;
-		if (c) {
-			if (p.vol >= 0)
-				a += nv::cc_vol_att(m_rom, p.vol) - nv::cc_vol_att(m_rom, c->cal_vol);
-			if (p.expr >= 0)
-				a += nv::cc_vol_att(m_rom, p.expr) - nv::cc_vol_att(m_rom, c->cal_expr);
+		if (c && (p.vol >= 0 || p.expr >= 0)) {
+			// **掛けてから一度だけ減衰に直す**（nv::vol_gain を見よ）。
+			// 触られていない側は写し取ったときの値のまま
+			const int now = nv::vol_gain(p.vol >= 0 ? p.vol : c->cal_vol,
+			                             p.expr >= 0 ? p.expr : c->cal_expr);
+			const int was = nv::vol_gain(c->cal_vol, c->cal_expr);
+			a += nv::gain_att(m_rom, now) - nv::gain_att(m_rom, was);
 		}
 		return nv::clamp_att(a);
 	}

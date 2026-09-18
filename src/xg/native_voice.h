@@ -177,6 +177,27 @@ inline u16 pitch_reg(const wave_info &w, int note, int follow = 100, int cents_e
 
 // 音量（CC7）・表現（CC11）の減衰。level→減衰の表（0.375dB 目盛り）を 2 倍すると
 // レジスタ 0x09 の目盛り（0.1875dB）になる。cc>=8 で実測との差は 0.375dB 以内
+// **音量と表現は掛けてから一度だけ減衰に直す**（実機の 0x12A404 がそうしている）。
+// firmware はパートの塊の +0x12E-0x130 に `((CC7+1) * (CC11+1)) >> 7` を
+// 線形のまま持っていて（`nativeplay --ccbyte 7` と `--ccbyte 11` で確かめた。
+// CC7 だけ振ると cc+1、CC11 だけ振ると 101*(cc+1)/128 でぴったり）、
+// それを音の level に掛けてから減衰に直す。
+// 前は CC7 と CC11 を別々に減衰へ直して足していたので、実機とずれていた
+inline int vol_gain(int vol, int expr)
+{
+	const int v = vol < 0 ? 100 : (vol > 127 ? 127 : vol);
+	const int e = expr < 0 ? 127 : (expr > 127 ? 127 : expr);
+	return ((v + 1) * (e + 1)) >> 7;        // 0-128
+}
+
+// その線形の値（0-128）を減衰に直す
+inline int gain_att(const u8 *rom, int gain)
+{
+	if (gain <= 0)
+		return 255;
+	return 2 * int(rom[LEVEL_TAB + u32(std::min(128, gain) - 1)]);
+}
+
 inline int cc_vol_att(const u8 *rom, int cc)
 {
 	if (cc <= 0)
@@ -321,7 +342,7 @@ inline int wave_level(const u8 *rom, const u8 *elem, int note)
 }
 
 // 鍵の曲線が音量の目盛りに効く倍率。実測（GrandPno の鍵 12-75）では 1 倍
-constexpr int LEVEL_CURVE_MUL = 2;
+constexpr int LEVEL_CURVE_MUL = 1;
 
 inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref, int vel_ref)
 {
