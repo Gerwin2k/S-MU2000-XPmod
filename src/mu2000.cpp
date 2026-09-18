@@ -1207,12 +1207,16 @@ void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
 		const int ch = int(reg / 64), r = int(reg % 64);
 		if (ch >= 64 || m_traj_chan[ch] < 0)
 			return;
-		// 離しに入ったらそこで打ち切る（離しの動きは鳴らすときには要らない）
+		// 離しに入ったらそこで打ち切る（離しの動きは鳴らすときには要らない）。
+		// ただし鳴らし始めてすぐは見ない。前の音の離しが同じスロットに来る
 		if (r == 0x09 && (value & 0x8000)) {
-			m_traj_left = 1;
+			if (m_ne_clock - m_traj_start > 44100 / 10)
+				m_traj_left = 1;
 			return;
 		}
-		if (r != 0x00 && r != 0x01 && r != 0x04)
+		// フィルタ（0x00・0x01・0x04）と LFO（0x05・0x0a）。
+		// LFO は「かけ始めるまでの間」や深さの増やし方を firmware がソフトでやっている
+		if (r != 0x00 && r != 0x01 && r != 0x04 && r != 0x05 && r != 0x0a)
 			return;
 		if (m_traj_n >= 2048 || size_t(m_traj_chan[ch]) >= m_traj_cals->size())
 			return;

@@ -138,9 +138,12 @@ public:
 		int live = 0;
 		for (int i = 0; i < SLOTS; i++) {
 			slot_use &s = m_slot[i];
-			if (!s.on || !s.cal || s.tpos >= s.cal->filter_env.size())
+			// 写し取りの途中で段が増えることがあるので、まだ段が無くても数える
+			if (!s.on || !s.cal)
 				continue;
 			live++;
+			if (s.tpos >= s.cal->filter_env.size())
+				continue;
 			const std::vector<nv::fstep> &fe = s.cal->filter_env;
 			while (s.tpos < fe.size() && s.tstart + fe[s.tpos].at <= clock) {
 				m_poke(u32(i) * 64 + fe[s.tpos].reg, fe[s.tpos].v);
@@ -376,7 +379,7 @@ public:
 			su.cal = c;
 			su.tpos = 0;
 			su.tstart = m_clock;
-			if (c && !c->filter_env.empty())
+			if (c)
 				m_traj = true;
 			su.att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
 			const part_cc &pc = m_cc[part];
@@ -452,8 +455,7 @@ public:
 			su.cal = &c;
 			su.tpos = 0;
 			su.tstart = m_clock;
-			if (!c.filter_env.empty())
-				m_traj = true;
+			m_traj = true;
 			su.att = att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel));
 			const int att = note_att(su, part);
 			for (int i = 0; i < 0x40; i++)
