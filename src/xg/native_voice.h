@@ -341,19 +341,28 @@ inline int wave_level(const u8 *rom, const u8 *elem, int note)
 	return we ? int(we[0]) : 0;
 }
 
-// 鍵の曲線が音量の目盛りに効く倍率。実測（GrandPno の鍵 12-75）では 1 倍
-constexpr int LEVEL_CURVE_MUL = 1;
+// 鍵の曲線が音量の目盛りに効く倍率。**分数で持つ**（1 倍でも 2 倍でもない）。
+// `nativeplay --levelcheck` で音色ごとに総当たりすると、外れがいちばん少なく
+// なるのはどれも 6/4 = 1.5 倍のあたりに集まった（16 音色で確かめた）。
+// 1 倍や 2 倍にすると、鍵 60 から離れたところでずれる
+constexpr int LEVEL_CURVE_NUM = 6;
+constexpr int LEVEL_CURVE_DEN = 4;
+
+inline int level_curve_scaled(const u8 *rom, const u8 *elem, int note)
+{
+	return level_key_curve(rom, elem, note) * LEVEL_CURVE_NUM / LEVEL_CURVE_DEN;
+}
 
 inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref, int vel_ref)
 {
 	const int rest = att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref);
-	return level_from_att(rom, rest) - LEVEL_CURVE_MUL * level_key_curve(rom, elem, note_ref);
+	return level_from_att(rom, rest) - level_curve_scaled(rom, elem, note_ref);
 }
 
 // 校正した素の音量から、その鍵・強さの減衰（0x09 に入れる値）
 inline int volume_att(const u8 *rom, const u8 *elem, int base_level, int note, int vel)
 {
-	int l = base_level + LEVEL_CURVE_MUL * level_key_curve(rom, elem, note);
+	int l = base_level + level_curve_scaled(rom, elem, note);
 	if (l < 0) l = 0;
 	if (l > 127) l = 127;
 	// 波形の記録の先頭のバイトが、その段ぶんの減衰。多段サンプルの音色では
