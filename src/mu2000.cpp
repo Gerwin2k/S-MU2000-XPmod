@@ -978,13 +978,19 @@ void mu2000::midi_step(u64 now)
 void mu2000::set_native_fx(int mode)
 {
 	m_nfx_on = mode;
+	// 遅延の線は作り直さない（音声の糸が読んでいる最中に切り替えても危なくないように）。
+	// 大きさは 44100Hz ぶんで固定なので、1 度用意すれば足りる
+	static bool ready = false;
 	// 軽量モードは float で計算する。非正規化数（0 に近すぎる値）が出ると命令が何十倍も遅くなるので、
 	// この糸では 0 に丸める（FTZ/DAZ）
 #if defined(__SSE2__) || defined(_M_X64) || defined(__x86_64__)
 	if (mode)
 		_mm_setcsr(_mm_getcsr() | 0x8040);
 #endif
-	m_nfx.set_rate(44100.0f);
+	if (!ready) {
+		m_nfx.set_rate(44100.0f);
+		ready = true;
+	}
 	m_nfx.reset();
 	int mask = 15;
 	if (const char *e = std::getenv("SMU2000_NATIVE_SLOTS"))

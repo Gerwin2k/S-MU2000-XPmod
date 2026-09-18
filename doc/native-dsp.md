@@ -10,6 +10,9 @@ build/gui.exe    <rom> --native-fx-full                     # 窓でも同じ
 build/live.exe   <rom> --native-fx-full
 ```
 
+`gui.exe` は**動かしたまま切り替えられる**（窓を右クリック →「エフェクトを C++ で鳴らす」）。
+聴き比べはこれが早い。
+
 プラグイン（VST3・CLAP・AU）は `%LOCALAPPDATA%\S-MU2000\plugin.ini` に書く。
 
 ```
