@@ -353,6 +353,7 @@ private:
 	std::map<u32, u16> m_learn_first, m_learn_last;
 	u64  m_learn_mask = 0, m_learn_keyed = 0;
 	int  m_learn_left = 0;         // 残りサンプル数
+	int  m_learn_want = 1;         // 鳴るはずの要素の数（そろうまで待つ）
 	// **実機と同じだけ遅らせる**（doc/native-engine.md の 6.16）。
 	// firmware は MIDI を受けてから 74 サンプル（1.68ms）後に鳴らす。native も同じ
 	// だけ待たないと、同じ曲の中で native の音だけ 1.7ms 早く出てしまう

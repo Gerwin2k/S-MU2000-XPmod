@@ -172,7 +172,7 @@ int main(int argc, char **argv)
 	double seconds = 2.0;
 	bool firmware = false, compare = false, song = false, dump_voice = false, copyall = false;
 	int sweep = 0, volsweep = 0, levels = 0;
-	bool bench = false, ccwatch = false, ccsweep = false, ccram = false, attsweep = false, cutsweep = false;
+	bool bench = false, ccwatch = false, ccsweep = false, ccram = false, attsweep = false, cutsweep = false, listvoices = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -191,6 +191,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--ccram")) ccram = true;
 		else if (!std::strcmp(argv[i], "--attsweep")) attsweep = true;
 		else if (!std::strcmp(argv[i], "--cutsweep")) cutsweep = true;
+		else if (!std::strcmp(argv[i], "--list")) listvoices = true;
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -299,6 +300,28 @@ int main(int argc, char **argv)
 		mu.set_swp_watch(nullptr);
 		mu.set_swp_trace(nullptr);
 		if (tf) std::fclose(tf);
+		return 0;
+	}
+
+	// --list: 音色ごとに、要素の遅らせ（byte72）を並べる
+	if (listvoices) {
+		for (int pg = 0; pg < 128; pg++) {
+			for (u8 bb : { u8(0xb0), u8(0x00), u8(msb & 0x7f), u8(0xb0), u8(0x20), u8(lsb & 0x7f),
+			               u8(0xc0), u8(pg & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 8; i++)
+				mu.run_sample(l, r);
+			const u8 *pr2 = mu.nvram().data() + part0;
+			const u32 rec2 = u32(pr2[xg::ram::PART_VOICE]) << 24 | u32(pr2[xg::ram::PART_VOICE + 1]) << 16 |
+			                 u32(pr2[xg::ram::PART_VOICE + 2]) << 8 | pr2[xg::ram::PART_VOICE + 3];
+			if (!rec2)
+				continue;
+			const int n2 = xg::nv::element_count(rom, rec2);
+			std::printf("V %3d %06x %d", pg, rec2, n2);
+			for (int k = 0; k < n2; k++)
+				std::printf(" %d", xg::nv::element(rom, rec2, k)[72]);
+			std::putchar(10);
+		}
 		return 0;
 	}
 

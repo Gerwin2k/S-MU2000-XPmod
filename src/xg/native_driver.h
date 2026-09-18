@@ -76,6 +76,7 @@ public:
 			c = part_cc();
 		m_clock = 0;
 		m_traj = false;
+		m_pend.clear();
 		m_age = 0;
 	}
 
@@ -118,10 +119,20 @@ public:
 		return it == m_drum.end() ? nullptr : &it->second;
 	}
 
-	// フィルタの包絡線を、鳴っているスロットに流す。1 サンプルに 1 回呼ぶ
+	// フィルタの包絡線を流し、遅らせた要素を鳴らす。1 サンプルに 1 回呼ぶ
 	void tick(u64 clock)
 	{
 		m_clock = clock;
+		if (!m_pend.empty()) {
+			size_t w = 0;
+			for (size_t i = 0; i < m_pend.size(); i++) {
+				if (m_pend[i].at <= clock)
+					key_on(m_pend[i].mask);
+				else
+					m_pend[w++] = m_pend[i];
+			}
+			m_pend.resize(w);
+		}
 		if (!m_traj)
 			return;
 		int live = 0;
@@ -340,6 +351,7 @@ public:
 
 		const int nelem = nv::element_count(m_rom, rec);
 		u64 keymask = 0;
+		bool any = false;
 		u32 taken = 0;                   // もう使った写し取りの印
 		int used = 0;
 		for (int k = 0; k < nelem; k++) {
@@ -377,10 +389,16 @@ public:
 				std::fprintf(stderr, "note part=%d note=%d vel=%d vol=%d/%d expr=%d/%d pan=%d/%d att=%d->%d\n",
 				             part, note, vel, pc.vol, c ? c->cal_vol : -9, pc.expr, c ? c->cal_expr : -9,
 				             pc.pan, c ? c->cal_pan : -9, su.att, note_att(su, part));
-			keymask |= u64(1) << slot;
+			// byte72 が 0 でなければ、その要素は遅れて鳴る
+			const u32 dly = nv::elem_delay(el);
+			if (dly)
+				m_pend.push_back({ u64(1) << slot, m_clock + dly });
+			else
+				keymask |= u64(1) << slot;
+			any = true;
 		}
 		if (!keymask)
-			return false;
+			return any;                  // 遅らせた要素だけの音もある
 		key_on(keymask);
 		return true;
 	}
@@ -517,6 +535,9 @@ private:
 	std::array<part_cc, PARTS> m_cc;
 	u64 m_clock = 0;
 	bool m_traj = false;
+	// 遅らせて鳴らす要素（byte72）。時が来たら key_on する
+	struct pending_key { u64 mask; u64 at; };
+	std::vector<pending_key> m_pend;
 	u64 m_age = 0;
 };
 

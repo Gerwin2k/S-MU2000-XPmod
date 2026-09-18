@@ -1020,6 +1020,18 @@ void mu2000::native_learn_start(u32 rec)
 {
 	m_learning = true;
 	m_learn_rec = rec;
+	// その鍵・強さで鳴るはずの要素の数
+	m_learn_want = 1;
+	if (rec && m_prog) {
+		const u8 *rom0 = m_prog->data();
+		int n = 0;
+		const int nel = xg::nv::element_count(rom0, rec);
+		for (int k = 0; k < nel; k++)
+			if (xg::nv::element_active(xg::nv::element(rom0, rec, k), m_learn_note, m_learn_vel))
+				n++;
+		if (n > 0)
+			m_learn_want = n;
+	}
 	m_learn_first.clear();
 	m_learn_last.clear();
 	m_learn_mask = m_learn_keyed = 0;
@@ -1041,9 +1053,12 @@ void mu2000::native_learn_start(u32 rec)
 			if (m_learn_first.empty())
 				m_learn_first = m_learn_last;
 			// 鳴り始めたら、あと少しだけ見て終える（0x01 が落ち着くぶん）。
-			// 長く占有すると、その間ほかの音色が写し取りを始められない
-			if (m_learn_left > 44100 / 200)
-				m_learn_left = 44100 / 200;
+			// ただし**要素がそろうまでは待つ**。MusicBox のように 2 つ目の要素を
+			// 37ms 遅れて鳴らす音色があり、打ち切ると片方しか写し取れない。
+			// 長く占有すると、その間ほかの音色が写し取りを始められないので、
+			// そろったら 5ms で切り上げる
+			m_learn_left = __builtin_popcountll(m_learn_keyed) >= m_learn_want
+			             ? 44100 / 200 : 44100 / 16;
 			break;
 		default: break;
 		}

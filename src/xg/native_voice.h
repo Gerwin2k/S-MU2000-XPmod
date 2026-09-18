@@ -110,6 +110,16 @@ inline int key_follow(const u8 *elem)
 	return F[elem[19] & 3];
 }
 
+// 要素を**遅らせて鳴らす**段（byte72）。実測（段 0,1,2,3 → 0,311,752,1634 サンプル）は
+// 441 * 2^(n-1) - 130 でぴったり。MusicBox は 2 つ目の要素を 37ms 遅らせている
+inline u32 elem_delay(const u8 *elem)
+{
+	const int n = elem[72] & 0x7f;
+	if (n <= 0)
+		return 0;
+	return u32(441 * (1 << (n < 8 ? n - 1 : 7)) - 130);
+}
+
 // 要素ぶんの音程のずらし（セント）。byte17 が半音、byte18 がセント
 inline int elem_tune(const u8 *elem)
 {
