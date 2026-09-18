@@ -1086,7 +1086,12 @@ void mu2000::native_fx_update()
 				const char *e = std::getenv("SMU2000_NATIVE_RETURN");
 				return e ? float(std::atof(e)) : 0.8f;
 			}();
-			m_nfx.set_return(s.id, ret < 0 ? base : base * float(ret) / 64.0f);
+			float g = ret < 0 ? base : base * float(ret) / 64.0f;
+			// バリエーションを INSERTION でパートに掛けているときは、送りの目盛りが
+			// インサーションと同じになる（戻り量は使われない）
+			if (s.id == nfx::VARIATION && xg_read(ram, 0x02, 0x01, 0x5a, 1) == 0)
+				g = 0.31f;
+			m_nfx.set_return(s.id, g);
 		}
 	}
 

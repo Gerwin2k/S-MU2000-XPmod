@@ -67,7 +67,9 @@ public:
 		// 各遅延の 1 周ぶんの減衰。-60dB / time 秒
 		for (int i = 0; i < TAPS; i++) {
 			const float len_s = float(m_line[i].size()) / m_rate;
-			const float t = std::max(0.05f, m_p.time);
+			// 網の中のフィルタ（高い音を減らす・低い音を抜く）でも減るので、
+			// 狙いの長さを少し伸ばしておく（実機の RT60 に合わせた）
+			const float t = std::max(0.05f, m_p.time) * 1.35f;
 			m_gain[i] = std::pow(10.0f, -3.0f * len_s / t);   // 10^(-60dB/20 * len/time)
 		}
 		m_damp = coef_lp(std::clamp(m_p.damp_hz, 500.0f, m_rate * 0.45f));
