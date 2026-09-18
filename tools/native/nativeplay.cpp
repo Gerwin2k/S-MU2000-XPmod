@@ -182,6 +182,7 @@ int main(int argc, char **argv)
 	bool xgmap = false;
 	const char *sxsettle = nullptr;
 	bool egwatch = false;
+	bool slotalloc = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -210,6 +211,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--xgmap")) xgmap = true;
 		else if (!std::strcmp(argv[i], "--sxsettle") && i + 1 < argc) sxsettle = argv[++i];
 		else if (!std::strcmp(argv[i], "--egwatch")) egwatch = true;
+		else if (!std::strcmp(argv[i], "--slotalloc")) slotalloc = true;
 		else if (!std::strcmp(argv[i], "--catoff") && i + 1 < argc) catoff = int(std::strtol(argv[++i], nullptr, 0));
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
@@ -472,7 +474,7 @@ int main(int argc, char **argv)
 			for (int ch = 0; ch < 64; ch++)
 				if (keyed & (u64(1) << ch)) {
 					std::printf("%3d", v);
-					for (int rr = 0; rr < 0x20; rr++) {
+					for (int rr = 0; rr < 0x40; rr++) {
 						const auto it = seen.find(u32(ch) * 64 + u32(rr));
 						std::printf(" %04x", it == seen.end() ? 0xffff : it->second);
 					}
@@ -679,6 +681,67 @@ int main(int argc, char **argv)
 			if (o.vel == 100 && o.cut >= 0)
 				std::printf("CUT 鍵 %3d 強さ %3d  0x00=%04x 切る高さ %4d（表との差 %+d） 0x04=%04x%c",
 				            o.note, o.vel, o.cut, o.cut & 0x7ff, (o.cut & 0x7ff) - tab, o.res, 10);
+		return 0;
+	}
+
+	// --slotalloc: firmware が「どのスロットを使っているか」を持っている場所を
+	// ワーク RAM から探す。音を 1 つずつ足していき、そのたびに
+	// **鳴っているスロットの 64bit のマスク**と同じ並びが RAM に無いかを見る。
+	// 見つかれば、native が使うスロットもそこに立てておけば firmware が避ける
+	if (slotalloc) {
+		const std::vector<u8> &wr = mu.nvram();
+		u64 mask = 0, live = 0;
+		mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+			if (!master) return;
+			switch (r2) {
+			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+			case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+			case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+			case 0x20e: live |= mask; break;
+			default: break;
+			}
+		});
+		// 候補を全部の位置で持ち、合わなくなったら落としていく
+		std::vector<size_t> cand;
+		const int STEPS = 10;
+		for (int step = 0; step < STEPS; step++) {
+			for (u8 bb : { u8(0x90), u8((40 + step * 3) & 0x7f), u8(vel & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 5; i++)
+				mu.run_sample(l, r);
+			// いま鳴っているスロットの並びを、8 バイトの窓として作る
+			u8 want[8];
+			for (int b = 0; b < 8; b++)
+				want[b] = u8(live >> (b * 8));
+			u8 wantr[8];                      // バイトの順が逆のもの
+			for (int b = 0; b < 8; b++)
+				wantr[b] = want[7 - b];
+			if (step == 0) {
+				for (size_t o = 0; o + 8 <= wr.size(); o++)
+					if (!std::memcmp(&wr[o], want, 8) || !std::memcmp(&wr[o], wantr, 8))
+						cand.push_back(o);
+			} else {
+				std::vector<size_t> keep;
+				for (size_t o : cand)
+					if (!std::memcmp(&wr[o], want, 8) || !std::memcmp(&wr[o], wantr, 8))
+						keep.push_back(o);
+				cand.swap(keep);
+			}
+			std::printf("  %2d 音目: 鳴っているスロット %d 個（%016llx）候補 %zu%c",
+			            step + 1, __builtin_popcountll(live),
+			            (unsigned long long)live, cand.size(), 10);
+			if (cand.empty())
+				break;
+		}
+		mu.set_swp_watch(nullptr);
+		std::printf("== 64bit のマスクとして持っていそうな場所%c", 10);
+		for (size_t o : cand)
+			std::printf("  RAM %08x%c", unsigned(0x400000 + o), 10);
+		if (cand.empty())
+			std::printf("  見つからなかった（64bit のまとまりでは持っていないらしい）%c", 10);
+		for (u8 bb : { u8(0xb0), u8(0x78), u8(0) })
+			mu.midi_in(bb, 0);
 		return 0;
 	}
 
@@ -1081,7 +1144,24 @@ int main(int argc, char **argv)
 		}
 		std::printf("== CC%d で動くワーク RAM のバイト%c", ccbyte, 10);
 		int shown = 0;
+		// **パートの塊を先に出す**（ほかの所は毎サンプル動く雑音が多く、
+		// 上限をそれで使い切ってしまう）
+		for (u32 q = 0; q < 0x100; q++) {
+			bool same = true;
+			for (size_t k = 1; k < snap.size(); k++)
+				if (snap[k][part0 + q] != snap[0][part0 + q])
+					same = false;
+			if (same)
+				continue;
+			std::printf("  パート+0x%02x :", q);
+			for (size_t k = 0; k < snap.size(); k++)
+				std::printf(" cc%d=%d", ccs[k], snap[k][part0 + q]);
+			std::printf("%c", 10);
+			shown++;
+		}
 		for (size_t o = 0; o < wr.size() && shown < 40; o++) {
+			if (o >= part0 && o < part0 + 0x100)
+				continue;
 			bool same = true;
 			for (size_t k = 1; k < snap.size(); k++)
 				if (snap[k][o] != snap[0][o])

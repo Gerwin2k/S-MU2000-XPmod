@@ -490,8 +490,18 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 		r.set(0x32 + i, d.mix[i]);
 
 	// --- 写し取った値で上書き。式が分かっていない所だけ
+	//
+	// **0x06（立ち上がり）もここに入れる。** 入れていなかったので、
+	// パート側の EG の設定（CC73 など）が native の音に一切効いていなかった。
+	// CC73 を全パートに送る曲では全部の音の立ち上がりが狂う（実測で
+	// firmware 417e に対しこちらは 387e ＝ ずっと遅い）。
+	// 立ち上がりは鍵でも強さでも変わらないと測ってあるので（nativeplay
+	// --egwatch を鍵 36-96・強さ 1-127 で確認）、写し取った値をそのまま使える。
+	// 0x07・0x08（減衰）は鍵で変わるので、ここには入れられない（宿題）
 	if (cal && cal->have) {
-		static const int COPY[] = { 0x00, 0x01, 0x02, 0x04, 0x05, 0x0a, 0x0b, 0x10,
+		// 0x20-0x2b は**偶数番だけ**でよい（奇数番と 0x30・0x31 は実機の
+		// firmware も一度も書かない。記録を追って確かめた）
+		static const int COPY[] = { 0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x0a, 0x0b, 0x10,
 		                            0x20, 0x22, 0x24, 0x26, 0x28, 0x2a,
 		                            0x32, 0x33, 0x34, 0x35, 0x36, 0x37 };
 		for (int i : COPY)

@@ -323,6 +323,7 @@ public:
 	std::atomic<u64> m_ne_by_other{0};   // 音色の指定・CC など
 	std::atomic<u64> m_ne_by_learn{0};   // 写し取り（その音色の 1 音目）
 	std::atomic<u64> m_ne_by_midi{0};    // 渡した MIDI を受け取らせている
+	std::atomic<u64> m_ne_by_keep{0};    // 止めきらないために細く回している
 	u8   m_fw_why = 0;                   // いまの hold の理由（1 SysEx / 2 そのほか）
 	// SysEx の頭を少し覚えて、長く回す必要があるかを見分ける
 	int  m_sx_pos = -1;
@@ -338,7 +339,7 @@ public:
 	size_t native_cal_count() const { return m_ndrv.cal_count(); }
 	int native_peak_slots() const { return m_ndrv.peak_slots(); }
 
-	struct native_why { u64 total, by_note, by_sysex, by_other, by_learn, by_midi; };
+	struct native_why { u64 total, by_note, by_sysex, by_other, by_learn, by_midi, by_keep; };
 	native_why native_why_counts() const
 	{
 		return { m_ne_samples.load(std::memory_order_relaxed),
@@ -346,7 +347,8 @@ public:
 		         m_ne_by_sysex.load(std::memory_order_relaxed),
 		         m_ne_by_other.load(std::memory_order_relaxed),
 		         m_ne_by_learn.load(std::memory_order_relaxed),
-		         m_ne_by_midi.load(std::memory_order_relaxed) };
+		         m_ne_by_midi.load(std::memory_order_relaxed),
+		         m_ne_by_keep.load(std::memory_order_relaxed) };
 	}
 
 	// native の口が、いま firmware を回している割合（0-1。小さいほど軽い）
@@ -456,10 +458,19 @@ private:
 	u32  m_ne_learn_dirty = 0;
 	// 写し取りで、その音色のものでないスロットを掴んで捨てた回数
 	u32  m_ne_learn_wrong = 0;
+	// firmware が、こちらが鳴らしているスロットに書いた回数
+	u32  m_ne_fw_stomp = 0;
+	void note_fw_swp(bool master, u32 reg, u16 value);
+	u64  m_fw_keymask = 0;     // firmware がつぎに鳴らすスロットのマスク
+	// firmware を細く回し続ける刻み（100ms ごとに 5ms）。止めきると液晶・
+	// ボタン・firmware 自身の後始末が全部止まる
+	static constexpr u32 KEEPALIVE_EVERY = 4410;
+	static constexpr u32 KEEPALIVE_RUN = 220;
 public:
 	u32  native_slot_clash() const { return m_ne_slot_clash; }
 	u32  native_learn_dirty() const { return m_ne_learn_dirty; }
 	u32  native_learn_wrong() const { return m_ne_learn_wrong; }
+	u32  native_fw_stomp() const { return m_ne_fw_stomp; }
 private:
 	native_stats m_ne_stats;
 

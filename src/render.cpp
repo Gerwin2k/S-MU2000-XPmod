@@ -570,15 +570,18 @@ int main(int argc, char **argv)
 		const mu2000::native_why w = mu.native_why_counts();
 		if (w.total)
 			std::printf("  内訳: firmware の音 %.1f%% / SysEx %.1f%% / 写し取り %.1f%% / "
-			            "MIDI の受け取り %.1f%% / そのほか %.1f%%\n",
+			            "MIDI の受け取り %.1f%% / 細く回す %.1f%% / そのほか %.1f%%\n",
 			            100.0 * double(w.by_note) / double(w.total),
 			            100.0 * double(w.by_sysex) / double(w.total),
 			            100.0 * double(w.by_learn) / double(w.total),
 			            100.0 * double(w.by_midi) / double(w.total),
+			            100.0 * double(w.by_keep) / double(w.total),
 			            100.0 * double(w.by_other) / double(w.total));
 	}
 	if (native_engine) {
 		std::printf("  いちばん多いときのスロット: %d / 64\n", mu.native_peak_slots());
+		if (const u32 stomp = mu.native_fw_stomp())
+			std::printf("  **firmware がこちらの鳴っているスロットに書いた %u 回**\n", stomp);
 		if (const u32 wrong = mu.native_learn_wrong())
 			std::printf("  **写し取りで別の音のスロットを掴んで捨てた %u 回**\n", wrong);
 		if (const u32 dirty = mu.native_learn_dirty())
