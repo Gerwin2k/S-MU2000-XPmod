@@ -159,6 +159,10 @@ public:
 	int part_expr(int part) const { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_EXP]) : 127; }
 	int part_pan(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0e]) : 64; }
 
+	// その CC を native でさばけるか（実際にさばく前に決める）
+	static bool handles_cc(int cc)
+	{ return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40; }
+
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
 	bool control(int part, int cc, int value)
 	{
@@ -271,6 +275,18 @@ private:
 	}
 
 public:
+	// その音を native で鳴らせるか（実際に鳴らす前に決める必要がある。
+	// 鳴らせないなら firmware に回すので、遅らせてはいけない）
+	bool can_play(int part, int note) const
+	{
+		if (!m_rom || part < 0 || part >= PARTS)
+			return false;
+		if (is_drum(part))
+			return m_drum.find(drum_key(part, note)) != m_drum.end();
+		const u32 rec = record_of(part);
+		return rec && m_cal.find(rec) != m_cal.end();
+	}
+
 	// 鍵を押す。写し取りが無ければ false（呼んだ側が firmware に回す）
 	bool note_on(int part, int note, int vel)
 	{

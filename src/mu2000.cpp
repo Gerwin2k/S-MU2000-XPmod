@@ -991,6 +991,11 @@ void mu2000::set_native_engine(int mode)
 	m_learn_left = 0;
 	for (u8 &c : m_fw_notes)
 		c = 0;
+	m_nq.clear();
+	m_ne_clock = 0;
+	for (u64 &t : m_rx_at)
+		t = 0;
+	std::memset(m_nown, 0, sizeof(m_nown));
 	for (nmidi &n : m_nmidi)
 		n = nmidi();
 	m_ne_samples.store(0, std::memory_order_relaxed);
@@ -1125,12 +1130,34 @@ void mu2000::native_learn_finish()
 	m_ndrv.learn(m_learn_rec, std::move(cals));
 }
 
+// 待っている native の出来事を、時が来たものから実行する
+void mu2000::native_pump()
+{
+	while (!m_nq.empty() && m_nq.front().at <= m_ne_clock) {
+		const nev e = m_nq.front();
+		m_nq.pop_front();
+		switch (e.kind) {
+		case 0: m_ndrv.note_off(e.part, e.d0); break;
+		case 1:
+			if (m_ndrv.note_on(e.part, e.d0, e.d1))
+				m_ne_stats.note_native++;
+			break;
+		case 2: m_ndrv.control(e.part, e.d0, e.d1); break;
+		case 3: m_ndrv.bend(e.part, int(e.d1) << 7 | e.d0); break;
+		default: break;
+		}
+	}
+}
+
 // MIDI を 1 バイト受けて、native でさばけたら true。
 // さばけなかったもの（音色の指定・コントローラ・SysEx）は firmware へ回す
 bool mu2000::native_midi(u8 byte, int port)
 {
 	if (byte >= 0xf8)
 		return false;                    // リアルタイムはそのまま
+	// 実機は 1 バイトずつ線で受ける。和音のように何音も一度に来ると、
+	// あとの音ほど遅れて鳴る。そのぶんをここで数える
+	const u64 fire = rx_advance(port);
 	nmidi &n = m_nmidi[port];
 	if (byte & 0x80) {
 		if (byte >= 0xf0) {              // SysEx など。以後は firmware に任せる
@@ -1165,7 +1192,7 @@ bool mu2000::native_midi(u8 byte, int port)
 	// ピッチベンドは、音程のレジスタを自分で作れるので firmware には渡さない。
 	// ただし、そのパートで firmware が鳴らしている音がある間は渡す
 	if (kind == 0xe0) {
-		m_ndrv.bend(part, (int(byte & 0x7f) << 7) | (n.d0 & 0x7f));
+		m_nq.push_back({ fire, 3, u8(part), u8(n.d0 & 0x7f), u8(byte & 0x7f) });
 		if (m_fw_notes[part]) {
 			m_fw_hold = std::max(m_fw_hold, u32(44100 / 500));
 			replay_note(n.status, n.d0, byte, port);
@@ -1177,23 +1204,31 @@ bool mu2000::native_midi(u8 byte, int port)
 	// 回す時間は短くてよい
 	if (kind == 0xb0) {
 		m_ne_stats.other++;
-		const bool mine = m_ndrv.control(part, n.d0 & 0x7f, byte & 0x7f);
+		const bool mine = m_ndrv.handles_cc(n.d0 & 0x7f);
+		if (mine)
+			m_nq.push_back({ fire, 2, u8(part), u8(n.d0 & 0x7f), u8(byte & 0x7f) });
+		else
+			m_ndrv.control(part, n.d0 & 0x7f, byte & 0x7f);   // 音を全部切るなどは待たない
 		m_fw_hold = std::max(m_fw_hold, u32(mine ? 44100 / 500 : 44100 / 50));
 		replay_note(n.status, n.d0, byte, port);
 		return true;
 	}
 	const int note = n.d0 & 0x7f, vel = byte & 0x7f;
 	if (kind == 0x80 || vel == 0) {
-		if (m_ndrv.note_off(part, note))
+		if (nown(part, note)) {
+			nown_set(part, note, false);
+			m_nq.push_back({ fire, 0, u8(part), u8(note), u8(vel) });
 			return true;
+		}
 		// native で鳴っていない音は firmware に任せる
 		if (m_fw_notes[part])
 			m_fw_notes[part]--;
 		replay_note(n.status, u8(note), u8(vel), port);
 		return true;
 	}
-	if (m_ndrv.note_on(part, note, vel)) {
-		m_ne_stats.note_native++;
+	if (m_ndrv.can_play(part, note)) {
+		nown_set(part, note, true);
+		m_nq.push_back({ fire, 1, u8(part), u8(note), u8(vel) });
 		return true;
 	}
 	m_ne_stats.note_fw++;
@@ -1419,6 +1454,9 @@ void mu2000::run_sample(s32 &left, s32 &right)
 			m_ne_fw_samples.fetch_add(1, std::memory_order_relaxed);
 		if (m_learning && m_learn_left && --m_learn_left == 0)
 			native_learn_finish();
+		m_ne_clock++;
+		if (!m_nq.empty())
+			native_pump();
 	}
 	if (run_cpu)
 		run_cycles(cycles);

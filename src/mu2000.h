@@ -27,6 +27,7 @@
 #include <atomic>
 #include <array>
 #include <deque>
+#include <deque>
 #include <map>
 #include <memory>
 #include <thread>
@@ -352,6 +353,38 @@ private:
 	std::map<u32, u16> m_learn_first, m_learn_last;
 	u64  m_learn_mask = 0, m_learn_keyed = 0;
 	int  m_learn_left = 0;         // 残りサンプル数
+	// **実機と同じだけ遅らせる**（doc/native-engine.md の 6.16）。
+	// firmware は MIDI を受けてから 74 サンプル（1.68ms）後に鳴らす。native も同じ
+	// だけ待たないと、同じ曲の中で native の音だけ 1.7ms 早く出てしまう
+	// 内訳: MIDI は 1 バイト 10 ビット・31250 baud なので 14.1 サンプルかかる。
+	// 3 バイトの鍵で 42 サンプル、残り 32 サンプルが firmware の中の手間
+	static constexpr u32 NATIVE_DELAY = 74;
+	static constexpr u32 NATIVE_PROC  = 32;          // バイトを受け終えてから鳴るまで
+	static constexpr u64 RX_BYTE_TICK = 903;         // 1 バイト（1/64 サンプル単位）
+	u64  m_rx_at[MIDI_PORTS] = {};                   // その口が次のバイトを受け終える時刻
+	struct nev { u64 at; u8 kind, part, d0, d1; };   // kind 0=離し 1=押し 2=CC 3=ベンド
+	std::deque<nev> m_nq;
+	u64  m_ne_clock = 0;
+	u32  m_nown[64][4] = {};       // native で鳴らしている鍵（パートごとに 128 ビット）
+
+	void native_pump();
+	// そのバイトを受け終える時刻を進めて、鳴らすべき時刻（サンプル）を返す
+	u64 rx_advance(int port)
+	{
+		const u64 now = m_ne_clock * 64;
+		if (m_rx_at[port] < now)
+			m_rx_at[port] = now;
+		m_rx_at[port] += RX_BYTE_TICK;
+		return m_rx_at[port] / 64 + NATIVE_PROC;
+	}
+	bool nown(int part, int note) const
+	{ return (m_nown[part][(note >> 5) & 3] & (u32(1) << (note & 31))) != 0; }
+	void nown_set(int part, int note, bool on)
+	{
+		if (on) m_nown[part][(note >> 5) & 3] |= u32(1) << (note & 31);
+		else    m_nown[part][(note >> 5) & 3] &= ~(u32(1) << (note & 31));
+	}
+
 	// 口ごとの MIDI の読み取り
 	struct nmidi { u8 status = 0; u8 d0 = 0; int have = 0; };
 	nmidi m_nmidi[MIDI_PORTS];
