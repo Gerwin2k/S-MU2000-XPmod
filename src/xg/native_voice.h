@@ -143,14 +143,16 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 倍率 1 として表を引くだけでも、開き切りよりはずっと実機に近い
 	r.set(0x00, u16(0x1000 | (rd16(rom, CUTOFF_TAB + u32(elem[37]) * 2) & 0x7ff)));
 	r.set(0x01, d.bypass);
-	r.set(0x02, d.filter2);
+	r.set(0x02, u16(0x8000 | elem[82]));       // 402 組の 97%
 	r.set(0x03, d.post);
-	r.set(0x04, d.filter2p);
+	// フィルタの第 2 パラメータ（共振）。firmware は byte35 を 1 ビット落として
+	// 5bit にし、レジスタの上 5bit に置く（0x1280FC）。402 組の 90% が一致
+	r.set(0x04, u16((((elem[35] >> 1) & 31) << 11)));
 	r.set(0x05, d.lfo_amp);
 	// LFO の型と刻み。上位は 0x40 | byte11（402 組で例外なし）、下位（音程の深さ）は 0
 	r.set(0x0a, u16((0x40 | (elem[11] & 0x3f)) << 8));
 	r.set(0x0b, d.r0b);
-	r.set(0x10, d.r10);
+	r.set(0x10, u16(elem[83] << 8));           // 402 組の 96%
 
 	// --- 包絡線（doc/native-engine.md の 6.3・6.4）
 	//
