@@ -76,6 +76,10 @@ public:
 			s = slot_use();
 		for (auto &c : m_cc)
 			c = part_cc();
+		for (auto &r : m_recsel)
+			r = 0;
+		for (auto &d : m_recsel_drum)
+			d = -1;
 		m_clock = 0;
 		m_traj = false;
 		m_rec = false;
@@ -106,6 +110,8 @@ public:
 	// 「記録が引けない＝ドラム」では、音色を選び終える前の旋律パートまで拾ってしまう
 	bool is_drum(int part) const
 	{
+		if (part >= 0 && part < PARTS && m_recsel_drum[part] >= 0)
+			return m_recsel_drum[part] != 0;
 		if (!m_ram || part < 0 || part >= PARTS)
 			return false;
 		return m_ram[ram::part_base(part) + 0x07] != 0;
@@ -197,9 +203,21 @@ public:
 		return m_drum.find(drum_key(part, note)) != m_drum.end();
 	}
 
-	// パートの音色の記録を、ワーク RAM から読む（firmware が入れた値）
+	// **音色を自分で決める**（xg::voice_rom::lookup。旋律系のバンク 640 音色で
+	// firmware と食い違い 0 だった）。0 を渡すと、またワーク RAM を見る
+	void set_record(int part, u32 rec, int drum)
+	{
+		if (part < 0 || part >= PARTS)
+			return;
+		m_recsel[part] = rec;
+		m_recsel_drum[part] = s8(drum);
+	}
+
+	// パートの音色の記録。自分で引けていればそれを、そうでなければワーク RAM を読む
 	u32 record_of(int part) const
 	{
+		if (part >= 0 && part < PARTS && m_recsel[part])
+			return m_recsel[part];
 		if (!m_ram || part < 0 || part >= PARTS)
 			return 0;
 		const u8 *p = m_ram + ram::part_base(part);
@@ -741,6 +759,9 @@ private:
 	std::unordered_map<u64, std::vector<nv::voice_cal>> m_drum;
 	std::array<slot_use, SLOTS> m_slot;
 	std::array<part_cc, PARTS> m_cc;
+	// 自分で引いた音色（0 なら引けていない）と、ドラムかどうか（-1 なら分からない）
+	std::array<u32, PARTS> m_recsel{};
+	std::array<s8, PARTS> m_recsel_drum{};
 	u64 m_clock = 0;
 	bool m_traj = false;
 	bool m_rec = false;            // 写し取りの最中（段が後から増える）

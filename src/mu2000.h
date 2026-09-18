@@ -429,6 +429,12 @@ private:
 		else    m_nown[part][(note >> 5) & 3] &= ~(u32(1) << (note & 31));
 	}
 
+	// **音色を自分で引く**（firmware の RAM を待たずに済む）。
+	// バンクとプログラムをパートごとに覚えて、xg::voice_rom::lookup に渡す
+	struct part_prog { u8 msb = 0, lsb = 0, prog = 0; };
+	part_prog m_prog_sel[64];
+	void native_select_voice(int part);
+
 	// 口ごとの MIDI の読み取り
 	struct nmidi { u8 status = 0; u8 d0 = 0; int have = 0; };
 	nmidi m_nmidi[MIDI_PORTS];
