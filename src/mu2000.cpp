@@ -989,6 +989,8 @@ void mu2000::set_native_engine(int mode)
 	m_fw_hold = 0;
 	m_learning = false;
 	m_learn_left = 0;
+	for (u8 &c : m_fw_notes)
+		c = 0;
 	for (nmidi &n : m_nmidi)
 		n = nmidi();
 	m_ne_samples.store(0, std::memory_order_relaxed);
@@ -1061,7 +1063,10 @@ void mu2000::native_learn_finish()
 			}
 			if (!cal.has(0x16) || !cal.has(0x17))
 				continue;
-			cal.cal_vel = m_learn_vel;
+			cal.cal_vel  = m_learn_vel;
+			cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
+			cal.cal_expr = m_ndrv.part_expr(m_learn_part);
+			cal.cal_pan  = m_ndrv.part_pan(m_learn_part);
 			cal.have = true;
 			cals.push_back(cal);
 		}
@@ -1110,7 +1115,10 @@ void mu2000::native_learn_finish()
 		cal.base_level = xg::nv::calibrate_level(rom, xg::nv::element(rom, m_learn_rec, idx),
 		                                         cal.has(9) ? (cal.reg[9] & 0xff) : 64,
 		                                         m_learn_note, m_learn_vel);
-		cal.cal_vel = m_learn_vel;
+		cal.cal_vel  = m_learn_vel;
+		cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
+		cal.cal_expr = m_ndrv.part_expr(m_learn_part);
+		cal.cal_pan  = m_ndrv.part_pan(m_learn_part);
 		cal.have = true;
 		cals.push_back(cal);
 	}
@@ -1134,9 +1142,9 @@ bool mu2000::native_midi(u8 byte, int port)
 		}
 		n.status = byte;
 		n.have = 0;
-		// 鍵の上げ下げ以外は、この場で firmware に渡す
+		// 鍵の上げ下げ・CC・ベンドはこちらで見る。残り（音色の指定など）は firmware へ
 		const u8 kind = byte & 0xf0;
-		if (kind != 0x80 && kind != 0x90) {
+		if (kind != 0x80 && kind != 0x90 && kind != 0xb0 && kind != 0xe0) {
 			m_ne_stats.other++;
 			m_fw_hold = 44100 / 50;
 			return false;
@@ -1144,7 +1152,7 @@ bool mu2000::native_midi(u8 byte, int port)
 		return true;                     // 状態のバイトは飲み込む
 	}
 	const u8 kind = n.status & 0xf0;
-	if (kind != 0x80 && kind != 0x90)
+	if (kind != 0x80 && kind != 0x90 && kind != 0xb0 && kind != 0xe0)
 		return false;
 	if (n.have == 0) {
 		n.d0 = byte;
@@ -1153,11 +1161,34 @@ bool mu2000::native_midi(u8 byte, int port)
 	}
 	n.have = 0;
 	const int part = (n.status & 0x0f) + port * 16;
+
+	// ピッチベンドは、音程のレジスタを自分で作れるので firmware には渡さない。
+	// ただし、そのパートで firmware が鳴らしている音がある間は渡す
+	if (kind == 0xe0) {
+		m_ndrv.bend(part, (int(byte & 0x7f) << 7) | (n.d0 & 0x7f));
+		if (m_fw_notes[part]) {
+			m_fw_hold = std::max(m_fw_hold, u32(44100 / 500));
+			replay_note(n.status, n.d0, byte, port);
+		}
+		return true;
+	}
+	// コントローラ。音量・表現・パン・ダンパーは自分でさばく。
+	// それでも firmware には渡す（写し取りのとき同じ位置で鳴らしてほしい）が、
+	// 回す時間は短くてよい
+	if (kind == 0xb0) {
+		m_ne_stats.other++;
+		const bool mine = m_ndrv.control(part, n.d0 & 0x7f, byte & 0x7f);
+		m_fw_hold = std::max(m_fw_hold, u32(mine ? 44100 / 500 : 44100 / 50));
+		replay_note(n.status, n.d0, byte, port);
+		return true;
+	}
 	const int note = n.d0 & 0x7f, vel = byte & 0x7f;
 	if (kind == 0x80 || vel == 0) {
 		if (m_ndrv.note_off(part, note))
 			return true;
 		// native で鳴っていない音は firmware に任せる
+		if (m_fw_notes[part])
+			m_fw_notes[part]--;
 		replay_note(n.status, u8(note), u8(vel), port);
 		return true;
 	}
@@ -1173,10 +1204,13 @@ bool mu2000::native_midi(u8 byte, int port)
 		m_learn_note = note;
 		m_learn_vel = vel;
 		m_learn_drum = drum ? m_ndrv.drum_key(part, note) : 0;
+		m_learn_part = part;
 		m_ne_stats.learn++;
 		native_learn_start(rec);
 	}
 	m_fw_hold = std::max(m_fw_hold, u32(44100 / 20));
+	if (m_fw_notes[part] < 255)
+		m_fw_notes[part]++;
 	replay_note(n.status, u8(note), u8(vel), port);
 	return true;
 }
@@ -1374,11 +1408,13 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	if (m_native_engine) {
 		m_ne_samples.fetch_add(1, std::memory_order_relaxed);
 		if (midi_pending())
-			m_fw_hold = std::max(m_fw_hold, u32(44100 / 100));   // 溜まっている間は回す
-		if (m_fw_hold)
-			m_fw_hold--;
-		else
+			m_fw_hold = std::max(m_fw_hold, u32(44100 / 500));   // 溜まっている間は回す
+		if (m_fw_hold) {
+			if (--m_fw_hold == 0)
+				m_ndrv.sync_cc();       // 止める前に、つまみの位置を取り直す
+		} else {
 			run_cpu = false;
+		}
 		if (run_cpu)
 			m_ne_fw_samples.fetch_add(1, std::memory_order_relaxed);
 		if (m_learning && m_learn_left && --m_learn_left == 0)

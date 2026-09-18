@@ -356,7 +356,9 @@ private:
 	struct nmidi { u8 status = 0; u8 d0 = 0; int have = 0; };
 	nmidi m_nmidi[MIDI_PORTS];
 
-	int  m_learn_note = 60, m_learn_vel = 100;
+	int  m_learn_note = 60, m_learn_vel = 100, m_learn_part = 0;
+	// firmware が鳴らしている音の数（パートごと）。0 でなければベンドも firmware へ回す
+	u8   m_fw_notes[64] = {};
 	u64  m_learn_drum = 0;         // ドラムのとき、覚える鍵
 	native_stats m_ne_stats;
 

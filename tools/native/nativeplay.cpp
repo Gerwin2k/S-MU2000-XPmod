@@ -172,7 +172,7 @@ int main(int argc, char **argv)
 	double seconds = 2.0;
 	bool firmware = false, compare = false, song = false, dump_voice = false, copyall = false;
 	int sweep = 0, volsweep = 0, levels = 0;
-	bool bench = false;
+	bool bench = false, ccwatch = false, ccsweep = false, ccram = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -186,6 +186,9 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--dump-voice")) dump_voice = true;
 		else if (!std::strcmp(argv[i], "--copyall")) copyall = true;
 		else if (!std::strcmp(argv[i], "--bench")) bench = true;
+		else if (!std::strcmp(argv[i], "--ccwatch")) ccwatch = true;
+		else if (!std::strcmp(argv[i], "--ccsweep")) ccsweep = true;
+		else if (!std::strcmp(argv[i], "--ccram")) ccram = true;
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -227,6 +230,153 @@ int main(int argc, char **argv)
 	xg::voice_rom vr(mu.program_rom());
 	std::printf("音色 %d,%d,%d = %s（記録 %06x、要素 %d）%c", msb, lsb, prog,
 	            vr.record_name(rec).c_str(), rec, xg::nv::element_count(rom, rec), 10);
+
+	// --ccwatch: 1 音鳴らしたまま、コントローラを振って
+	// 「firmware がどのスロットのどのレジスタを書き替えるか」を見る。
+	// 音量・パン・ベンドを native 側で作るための下調べ
+	if (ccwatch) {
+		std::map<u32, u16> before, now;
+		mu.set_swp_watch([&](bool master, u32 reg, u16 value) {
+			if (master) now[reg] = value;
+		});
+		for (u8 bb : { u8(0x90), u8(note & 0x7f), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 10; i++)
+			mu.run_sample(l, r);
+		before = now;
+		std::FILE *tf = std::fopen("cctrace.txt", "w");
+		mu.set_swp_trace(tf);
+
+		struct step { const char *name; u8 a, b1, b2; };
+		const step steps[] = {
+			{ "CC7=64",   0xb0, 0x07, 64 },  { "CC7=127",  0xb0, 0x07, 127 },
+			{ "CC11=64",  0xb0, 0x0b, 64 },  { "CC11=127", 0xb0, 0x0b, 127 },
+			{ "CC10=0",   0xb0, 0x0a, 0 },   { "CC10=127", 0xb0, 0x0a, 127 },
+			{ "CC10=64",  0xb0, 0x0a, 64 },
+			{ "bend+",    0xe0, 0x00, 0x7f },{ "bend0",    0xe0, 0x00, 0x40 },
+			{ "CC1=64",   0xb0, 0x01, 64 },  { "CC1=0",    0xb0, 0x01, 0 },
+			{ "CC91=0",   0xb0, 0x5b, 0 },   { "CC93=0",   0xb0, 0x5d, 0 },
+		};
+		for (const step &st : steps) {
+			std::map<u32, u16> prev = now;
+			for (u8 bb : { st.a, st.b1, st.b2 })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 20; i++)
+				mu.run_sample(l, r);
+			std::printf("%s:", st.name);
+			int shown = 0;
+			for (const auto &kv : now) {
+				const auto it = prev.find(kv.first);
+				if (it != prev.end() && it->second == kv.second)
+					continue;
+				if (kv.first >= 0x400)
+					continue;
+				std::printf(" [%d.%02x]=%04x", int(kv.first / 64), int(kv.first % 64), kv.second);
+				if (++shown >= 14) { std::printf(" ..."); break; }
+			}
+			std::putchar(10);
+		}
+		mu.set_swp_watch(nullptr);
+		mu.set_swp_trace(nullptr);
+		if (tf) std::fclose(tf);
+		return 0;
+	}
+
+	// --ccram: CC7 を振って、ワーク RAM のどのバイトが「その音量の減衰」を
+	// 持っているかを探す。見つかれば、native 側はそれを読むだけで済む
+	if (ccram) {
+		const std::vector<u8> &wr = mu.nvram();
+		const size_t N = wr.size();
+		std::vector<std::vector<u8>> snap;
+		const int ccs[] = { 127, 100, 64, 32, 16 };
+		for (int cc : ccs) {
+			for (u8 bb : { u8(0xb0), u8(0x07), u8(cc) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 20; i++)
+				mu.run_sample(l, r);
+			snap.push_back(wr);
+		}
+		// 期待する差（0x09 の下位バイトの実測から）
+		const int want[] = { 0, 12, 32, 66, 94 };   // cc=127 を 0 とした差（2 倍の単位）
+		int found = 0;
+		for (size_t a = 0; a < N && found < 40; a++) {
+			bool ok8 = true, ok8h = true;
+			for (int k = 1; k < 5; k++) {
+				const int d = int(snap[k][a]) - int(snap[0][a]);
+				if (d != want[k]) ok8 = false;
+				if (d != want[k] / 2) ok8h = false;
+			}
+			if (ok8 || ok8h) {
+				std::printf("RAM %08x  %s  値 %d %d %d %d %d%c",
+				            unsigned(0x400000 + a), ok8 ? "2倍単位" : "そのまま",
+				            snap[0][a], snap[1][a], snap[2][a], snap[3][a], snap[4][a], 10);
+				found++;
+			}
+		}
+		// 16bit でも
+		for (size_t a = 0; a + 1 < N && found < 80; a += 2) {
+			auto g = [&](int k) { return int(snap[k][a]) << 8 | snap[k][a + 1]; };
+			bool ok = true;
+			for (int k = 1; k < 5; k++)
+				if (g(k) - g(0) != want[k]) ok = false;
+			if (ok) {
+				std::printf("RAM %08x 16bit  値 %d %d %d %d %d%c", unsigned(0x400000 + a),
+				            g(0), g(1), g(2), g(3), g(4), 10);
+				found++;
+			}
+		}
+		std::printf("見つかった数 %d%c", found, 10);
+		for (size_t k = 0; k < snap.size(); k++)
+			std::printf("CC7=%3d  +0b=%3d +0e=%3d +7e=%3d%c", ccs[k],
+			            snap[k][part0 + 0x0b], snap[k][part0 + 0x0e],
+			            snap[k][part0 + 0x7e], 10);
+		return 0;
+	}
+
+	// --ccsweep: コントローラを 0..127 まで振って、対応するレジスタの値を並べる。
+	// 音量・パン・ベンド・モジュレーションの式を起こすため
+	if (ccsweep) {
+		std::map<u32, u16> now;
+		mu.set_swp_watch([&](bool master, u32 reg, u16 value) {
+			if (master) now[reg] = value;
+		});
+		for (u8 bb : { u8(0x90), u8(note & 0x7f), u8(vel & 0x7f) })
+			mu.midi_in(bb, 0);
+		for (u32 i = 0; i < RATE / 10; i++)
+			mu.run_sample(l, r);
+
+		struct item { const char *name; u8 cc; u32 reg; };
+		const item items[] = {
+			{ "CC7",  0x07, 0x09 }, { "CC11", 0x0b, 0x09 }, { "CC10", 0x0a, 0x32 },
+			{ "CC1",  0x01, 0x0a }, { "CC91", 0x5b, 0x33 }, { "CC93", 0x5d, 0x34 },
+			{ "CC94", 0x5e, 0x35 },
+		};
+		for (const item &it : items) {
+			std::printf("== %s -> [%02x]%c", it.name, int(it.reg), 10);
+			for (int v = 0; v < 128; v++) {
+				for (u8 bb : { u8(0xb0), it.cc, u8(v) })
+					mu.midi_in(bb, 0);
+				for (u32 i = 0; i < RATE / 50; i++)
+					mu.run_sample(l, r);
+				std::printf("%d %04x%c", v, now[it.reg], 10);
+			}
+			for (u8 bb : { u8(0xb0), it.cc, u8(it.cc == 0x0a ? 64 : (it.cc == 0x07 ? 100 : (it.cc == 0x0b ? 127 : 0))) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 20; i++)
+				mu.run_sample(l, r);
+		}
+		// ベンドは 14bit なので別に
+		std::printf("== BEND -> [11]%c", 10);
+		for (int v = 0; v <= 127; v++) {
+			for (u8 bb : { u8(0xe0), u8(0), u8(v) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 50; i++)
+				mu.run_sample(l, r);
+			std::printf("%d %04x%c", v, now[0x11], 10);
+		}
+		mu.set_swp_watch(nullptr);
+		return 0;
+	}
 
 	// --dump-voice: firmware に 1 音鳴らさせて、声の構造体をワーク RAM から探す。
 	// 音量の式の残り（+119・+120・level）を目で見るため

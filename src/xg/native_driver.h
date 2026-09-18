@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +36,25 @@ class native_driver
 public:
 	static constexpr int PARTS = 64;
 	static constexpr int SLOTS = 64;
+
+	// SMU2000_NATIVE_DEBUG が立っていれば、鳴らすたびに値を出す（調べもの用）
+	static bool debug_on()
+	{
+		static const bool on = std::getenv("SMU2000_NATIVE_DEBUG") != nullptr;
+		return on;
+	}
+
+	// スロット 1 つの使われ方
+	struct slot_use {
+		bool on = false;
+		bool held = false;              // ダンパーで離しを待たせている
+		int part = -1, note = -1, att = 0;
+		const u8 *elem = nullptr;
+		const u8 *wave = nullptr;       // ベンドで音程を作り直すのに要る
+		const nv::voice_cal *cal = nullptr;
+		u16 drum_rel = 0;
+		u64 age = 0;
+	};
 
 	// SWP30 のマスタへ 1 レジスタ書く口
 	using poke_fn = std::function<void(u32 reg, u16 value)>;
@@ -49,6 +70,8 @@ public:
 		m_drum.clear();
 		for (auto &s : m_slot)
 			s = slot_use();
+		for (auto &c : m_cc)
+			c = part_cc();
 		m_age = 0;
 	}
 
@@ -58,7 +81,7 @@ public:
 	// firmware に鳴らさせた 1 音から写し取る
 	void learn(u32 rec, std::vector<nv::voice_cal> cals)
 	{
-		if (!cals.empty())
+		if (!cals.empty() && m_cal.find(rec) == m_cal.end())
 			m_cal[rec] = std::move(cals);
 	}
 
@@ -66,7 +89,7 @@ public:
 	// 同じ音を何度も叩くので、これだけで打楽器のほとんどが native になる
 	void learn_drum(u64 key, std::vector<nv::voice_cal> cals)
 	{
-		if (!cals.empty())
+		if (!cals.empty() && m_drum.find(key) == m_drum.end())
 			m_drum[key] = std::move(cals);
 	}
 
@@ -103,6 +126,151 @@ public:
 		return (r >= 0x200ee0 && r + 16 <= 0x23cece) ? r : 0;
 	}
 
+
+	// ---- コントローラ（doc/native-engine.md の 6.14）
+	//
+	// これを native 側で持つと、DAW の自動演奏でつまみが動いても SH-2 が起きない。
+	// 実機と同じレジスタを、実機と同じ式で書く
+
+	// パートごとの、いまのつまみの位置
+	struct part_cc {
+		// -1 は「まだ動かされていない＝写し取ったときのまま」
+		int vol = -1, expr = -1, pan = -1;     // CC7 / CC11 / CC10
+		int bend = 8192, range = 2;            // ピッチベンドと、その幅（半音）
+		bool damper = false;                   // CC64
+	};
+
+	// firmware を回したあとに、パートの音量・表現・パンをワーク RAM から取り直す。
+	// SysEx やパネルで変えられた場合も、これで追い付く
+	void sync_cc()
+	{
+		if (!m_ram)
+			return;
+		for (int p = 0; p < PARTS; p++) {
+			const u8 *b = m_ram + ram::part_base(p);
+			m_cc[p].vol  = b[0x0b];
+			m_cc[p].expr = b[ram::PART_EXP];
+			m_cc[p].pan  = b[0x0e];
+		}
+	}
+
+	// 写し取ったときのつまみの位置（ワーク RAM から）
+	int part_vol(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0b]) : 100; }
+	int part_expr(int part) const { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_EXP]) : 127; }
+	int part_pan(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0e]) : 64; }
+
+	// CC を受ける。native でさばけたら true（firmware にも短く回す）
+	bool control(int part, int cc, int value)
+	{
+		if (part < 0 || part >= PARTS)
+			return false;
+		part_cc &p = m_cc[part];
+		switch (cc) {
+		case 0x07: p.vol = value; break;
+		case 0x0b: p.expr = value; break;
+		case 0x0a: p.pan = value; break;
+		case 0x40:                             // ダンパー
+			p.damper = value >= 64;
+			if (!p.damper)
+				release_held(part);
+			return true;
+		case 0x78: case 0x7b:                  // 音を全部切る
+			all_off(part);
+			return false;
+		default:
+			return false;                      // 知らない CC は firmware に任せる
+		}
+		apply_cc(part);
+		return true;
+	}
+
+	void bend(int part, int value14)
+	{
+		if (part < 0 || part >= PARTS)
+			return;
+		m_cc[part].bend = value14;
+		apply_bend(part);
+	}
+
+	void set_bend_range(int part, int semitones)
+	{
+		if (part >= 0 && part < PARTS)
+			m_cc[part].range = semitones;
+	}
+
+	void reset_cc(int part)
+	{
+		if (part >= 0 && part < PARTS)
+			m_cc[part] = part_cc();
+	}
+
+	const part_cc &cc_of(int part) const { return m_cc[part]; }
+
+private:
+	// いま鳴っているスロットに、つまみの動きを反映する
+	void apply_cc(int part)
+	{
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (!s.on || s.part != part || !s.cal)
+				continue;
+			m_poke(u32(i) * 64 + 9, u16(note_att(s, part)));
+			if (s.cal->has(0x32))
+				m_poke(u32(i) * 64 + 0x32, pan_reg(*s.cal, part));
+		}
+	}
+
+	void apply_bend(int part)
+	{
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (!s.on || s.part != part || !s.elem || !s.wave)
+				continue;
+			m_poke(u32(i) * 64 + 0x11,
+			       nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(s.elem),
+			                     nv::bend_cents(m_cc[part].bend, m_cc[part].range)));
+		}
+	}
+
+	// ダンパーを離したとき、待たせていた音を切る
+	void release_held(int part)
+	{
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (s.on && s.held && s.part == part) {
+				s.held = false;
+				note_off(part, s.note);
+			}
+		}
+	}
+
+	// つまみのぶんを足した減衰
+	int note_att(const slot_use &s, int part) const
+	{
+		const part_cc &p = m_cc[part];
+		const nv::voice_cal *c = s.cal;
+		int a = s.att;
+		if (c) {
+			if (p.vol >= 0)
+				a += nv::cc_vol_att(m_rom, p.vol) - nv::cc_vol_att(m_rom, c->cal_vol);
+			if (p.expr >= 0)
+				a += nv::cc_vol_att(m_rom, p.expr) - nv::cc_vol_att(m_rom, c->cal_expr);
+		}
+		return nv::clamp_att(a);
+	}
+
+	// パンのレジスタ（写し取った値からの差ぶんで動かす）
+	u16 pan_reg(const nv::voice_cal &c, int part) const
+	{
+		const int now = m_cc[part].pan, was = c.cal_pan;
+		if (now < 0 || now == was)
+			return c.reg[0x32];
+		const int l = nv::clamp_att((c.reg[0x32] >> 8) + nv::pan_att(now) - nv::pan_att(was));
+		const int r = nv::clamp_att((c.reg[0x32] & 0xff) + nv::pan_att(128 - now) - nv::pan_att(128 - was));
+		return u16(l << 8 | r);
+	}
+
+public:
 	// 鍵を押す。写し取りが無ければ false（呼んだ側が firmware に回す）
 	bool note_on(int part, int note, int vel)
 	{
@@ -132,10 +300,21 @@ public:
 			const int slot = take_slot(part, note);
 			if (slot < 0)
 				break;
-			const int att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
-			write_slot(slot, nv::build_note(m_rom, el, note, att, c));
-			m_slot[slot].elem = el;
-			m_slot[slot].att = att;
+			slot_use &su = m_slot[slot];
+			su.elem = el;
+			su.wave = we;
+			su.cal = c;
+			su.att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
+			const part_cc &pc = m_cc[part];
+			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,
+			                                  nv::defaults(), nv::bend_cents(pc.bend, pc.range));
+			if (c && c->has(0x32))
+				sr.set(0x32, pan_reg(*c, part));
+			write_slot(slot, sr);
+			if (debug_on())
+				std::fprintf(stderr, "note part=%d note=%d vel=%d vol=%d/%d expr=%d/%d pan=%d/%d att=%d->%d\n",
+				             part, note, vel, pc.vol, c ? c->cal_vol : -9, pc.expr, c ? c->cal_expr : -9,
+				             pc.pan, c ? c->cal_pan : -9, su.att, note_att(su, part));
 			keymask |= u64(1) << slot;
 		}
 		if (!keymask)
@@ -152,6 +331,11 @@ public:
 			slot_use &s = m_slot[i];
 			if (!s.on || s.part != part || s.note != note)
 				continue;
+			if (m_cc[part].damper) {       // ダンパーを踏んでいる間は切らない
+				s.held = true;
+				any = true;
+				continue;
+			}
 			if (s.elem)
 				m_poke(u32(i) * 64 + 9, nv::release_reg(m_rom, s.elem, note, s.att));
 			// ドラムは離しでも音を切らない（実機も打ったら鳴りきる）
@@ -182,14 +366,18 @@ public:
 				break;
 			// 減衰は足し算なので、強さのぶんだけずらせばよい（6.5）
 			const int att0 = c.has(9) ? (c.reg[9] & 0xff) : 0x40;
-			const int att = std::max(0, std::min(0xff,
-			    att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel))));
+			slot_use &su = m_slot[slot];
+			su.elem = nullptr;               // ドラムは離しの速さを写しの値で済ませる
+			su.wave = nullptr;
+			su.cal = &c;
+			su.att = att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel));
+			const int att = note_att(su, part);
 			for (int i = 0; i < 0x40; i++)
 				if (c.has(i))
-					m_poke(u32(slot) * 64 + u32(i), i == 9 ? u16(att) : c.reg[i]);
-			m_slot[slot].elem = nullptr;     // ドラムは離しの速さを写しの値で済ませる
-			m_slot[slot].att = att;
-			m_slot[slot].drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
+					m_poke(u32(slot) * 64 + u32(i),
+					       i == 9 ? u16(att) : (i == 0x32 ? pan_reg(c, part) : c.reg[i]));
+
+			su.drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
 			keymask |= u64(1) << slot;
 		}
 		if (!keymask)
@@ -199,13 +387,6 @@ public:
 	}
 
 private:
-	struct slot_use {
-		bool on = false;
-		int part = -1, note = -1, att = 0;
-		const u8 *elem = nullptr;
-		u16 drum_rel = 0;
-		u64 age = 0;
-	};
 
 	// 空きスロットを取る。無ければ一番古い声を止めて使う。
 	// **上から**取る。firmware は下から使うので、写し取りのために firmware が
@@ -217,7 +398,7 @@ private:
 		for (int n2 = 0; n2 < SLOTS; n2++) {
 			const int i = SLOTS - 1 - n2;
 			if (!m_slot[i].on) {
-				m_slot[i] = slot_use{ true, part, note, 0, nullptr, 0, ++m_age };
+				m_slot[i] = slot_use{ true, false, part, note, 0, nullptr, nullptr, nullptr, 0, ++m_age };
 				return i;
 			}
 			if (m_slot[i].age < oldest_age) {
@@ -227,7 +408,7 @@ private:
 		}
 		if (oldest < 0)
 			return -1;
-		m_slot[oldest] = slot_use{ true, part, note, 0, nullptr, 0, ++m_age };
+		m_slot[oldest] = slot_use{ true, false, part, note, 0, nullptr, nullptr, nullptr, 0, ++m_age };
 		return oldest;
 	}
 
@@ -252,6 +433,7 @@ private:
 	std::unordered_map<u32, std::vector<nv::voice_cal>> m_cal;
 	std::unordered_map<u64, std::vector<nv::voice_cal>> m_drum;
 	std::array<slot_use, SLOTS> m_slot;
+	std::array<part_cc, PARTS> m_cc;
 	u64 m_age = 0;
 };
 

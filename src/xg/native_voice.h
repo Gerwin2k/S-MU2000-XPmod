@@ -15,6 +15,7 @@
 #include "compat/mamecompat.h"
 
 #include <cmath>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -117,6 +118,47 @@ inline u16 pitch_reg(const wave_info &w, int note, int follow = 100, int cents_e
 	const u16 flag = ((w.format_addr >> 30) & 3) == 3 ? 0x4000 : 0;
 	return u16((v & 0x3fff) | flag);
 }
+
+
+// ---- コントローラ（doc/native-engine.md の 6.14）
+//
+// 実機が何を書くかは `nativeplay --ccwatch` で見た:
+//   CC7・CC11 → レジスタ 0x09 の下位バイト（減衰）
+//   CC10      → レジスタ 0x32（上が左・下が右の減衰）
+//   ベンド    → レジスタ 0x11（音程）
+//   CC1       → レジスタ 0x0a の下位バイト（LFO の深さ）
+
+// 音量（CC7）・表現（CC11）の減衰。level→減衰の表（0.375dB 目盛り）を 2 倍すると
+// レジスタ 0x09 の目盛り（0.1875dB）になる。cc>=8 で実測との差は 0.375dB 以内
+inline int cc_vol_att(const u8 *rom, int cc)
+{
+	if (cc <= 0)
+		return 255;
+	return 2 * int(rom[LEVEL_TAB + u32(std::min(127, cc) - 1)]);
+}
+
+// パン（CC10）の減衰。中央で左右とも -3dB になる cos 則。
+// 右側は pan_att(128 - cc10)。128 点すべて実測と 0.1875dB 以内で合う
+inline int pan_att(int x)
+{
+	if (x <= 0)
+		return 0;
+	if (x >= 127)
+		return 255;
+	const double c = std::cos(double(x) / 127.0 * 1.5707963267948966);
+	const int v = int(std::lround(-20.0 * std::log10(c) / 0.375));
+	return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+// ピッチベンド → セント。firmware は 2 回とも 0 の側へ切り捨てる
+// （ベンド幅 2 半音・目一杯で 167 目盛り。実測と一致）
+inline int bend_cents(int bend14, int range_semitones)
+{
+	return (bend14 - 8192) * range_semitones * 100 / 8192;
+}
+
+// 0..255 に収める
+inline int clamp_att(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
 // 組み立てたスロットのレジスタ。write が立っている所だけ書く
 struct slot_regs {
@@ -244,6 +286,8 @@ struct voice_cal {
 	bool have = false;
 	int  base_level = 64;      // 校正した素の音量
 	int  cal_vel = 100;        // 写し取ったときの強さ（強さを変えるときの基準）
+	// 写し取ったときのコントローラの位置。ここからの差ぶんだけ動かす
+	int  cal_vol = 100, cal_expr = 127, cal_pan = 64;
 	u16  reg[0x40] = {};       // 基準の鍵・強さでの値
 	u64  mask = 0;             // 覚えているレジスタ
 
@@ -267,7 +311,7 @@ inline const voice_cal *match_cal(const std::vector<voice_cal> &cals, u32 want)
 // 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
 inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
                             const voice_cal *cal = nullptr,
-                            const defaults &d = defaults())
+                            const defaults &d = defaults(), int cents_extra = 0)
 {
 	slot_regs r;
 	const u8 *we = wave_entry(rom, wave_set(elem), note);
@@ -309,7 +353,7 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	r.set(0x09, u16(att & 0xff));
 
 	// --- 音程と波形（6.2）
-	r.set(0x11, pitch_reg(w, note, key_follow(elem)));
+	r.set(0x11, pitch_reg(w, note, key_follow(elem), cents_extra));
 	r.set(0x12, u16(w.pre_loop >> 16));
 	r.set(0x13, u16(w.pre_loop));
 	r.set(0x14, u16(w.loop_len >> 16));
