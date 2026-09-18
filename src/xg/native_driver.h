@@ -109,6 +109,11 @@ public:
 		return m_ram[ram::part_base(part) + 0x07] != 0;
 	}
 
+	// 写し取ったものを取っておく・戻す（voicecache.h）
+	const std::unordered_map<u32, std::vector<nv::voice_cal>> &cal_map() const { return m_cal; }
+	const std::unordered_map<u64, std::vector<nv::voice_cal>> &drum_map() const { return m_drum; }
+	size_t cal_count() const { return m_cal.size() + m_drum.size(); }
+
 	// 写し取りの最中は、段が後から増えるので毎サンプル見る
 	void set_recording(bool on) { m_rec = on; m_traj_next = 0; }
 
@@ -213,9 +218,14 @@ public:
 			return;
 		for (int p = 0; p < PARTS; p++) {
 			const u8 *b = m_ram + ram::part_base(p);
-			m_cc[p].vol  = b[0x0b];
-			m_cc[p].expr = b[ram::PART_EXP];
-			m_cc[p].pan  = b[0x0e];
+			// **こちらが動かした値は上書きしない**（firmware がまだ処理して
+			// いない古い値で潰してしまう）。触っていない（-1）ものだけ拾う
+			if (m_cc[p].vol < 0)
+				m_cc[p].vol = b[0x0b];
+			if (m_cc[p].expr < 0)
+				m_cc[p].expr = b[ram::PART_EXP];
+			if (m_cc[p].pan < 0)
+				m_cc[p].pan = b[0x0e];
 			// ベンド幅（08 pp 23。64 が 0 半音）。RPN でも SysEx でもここに入る
 			const int r2 = int(b[0x23]) - 64;
 			m_cc[p].range = r2 < 0 ? 0 : (r2 > 24 ? 24 : r2);

@@ -331,6 +331,12 @@ public:
 	struct native_stats { u64 note_native = 0, note_fw = 0, learn = 0, other = 0; };
 	native_stats native_counts() const { return m_ne_stats; }
 
+	// **写し取りをファイルに残す・戻す**（voicecache.h）。
+	// これがあれば、2 回目からは 1 音目も native で鳴らせる
+	std::vector<u8> native_cal_save() const;
+	bool native_cal_load(const u8 *data, size_t n);
+	size_t native_cal_count() const { return m_ndrv.cal_count(); }
+
 	struct native_why { u64 total, by_note, by_sysex, by_other, by_learn, by_midi; };
 	native_why native_why_counts() const
 	{
@@ -427,6 +433,11 @@ private:
 	// firmware が鳴らしている音の数（パートごと）。0 でなければベンドも firmware へ回す
 	u8   m_fw_notes[64] = {};
 	u32  m_fw_note_total = 0;
+	// firmware の音のために回すのは、いちばん新しい音から この長さだけ。
+	// フィルタ・LFO の包絡線はそのころには落ち着いている。
+	// 3 秒でも試験の 7 曲は 1 つも変わらなかったが、長い音のために余裕を見る
+	static constexpr u64 FW_NOTE_RUN = 44100 * 5;   // 1.2 秒
+	u64  m_fw_note_until = 0;
 	u64  m_learn_drum = 0;         // ドラムのとき、覚える鍵
 	native_stats m_ne_stats;
 
