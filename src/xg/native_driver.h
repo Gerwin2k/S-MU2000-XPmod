@@ -76,6 +76,8 @@ public:
 			c = part_cc();
 		m_clock = 0;
 		m_traj = false;
+		m_rec = false;
+		m_traj_next = 0;
 		m_pend.clear();
 		m_age = 0;
 	}
@@ -107,6 +109,9 @@ public:
 		return m_ram[ram::part_base(part) + 0x07] != 0;
 	}
 
+	// 写し取りの最中は、段が後から増えるので毎サンプル見る
+	void set_recording(bool on) { m_rec = on; m_traj_next = 0; }
+
 	// 写し取ったものを、あとから直せるように渡す（フィルタの包絡線の追記用）
 	std::vector<nv::voice_cal> *cals_of(u32 rec)
 	{
@@ -135,6 +140,12 @@ public:
 		}
 		if (!m_traj)
 			return;
+		// **つぎの段の時刻まで何もしない**。ここを毎サンプル 64 スロット見ていると、
+		// SH-2 を止めた意味が薄れるくらい重かった。
+		// 写し取りの最中だけは、段が後から増えるので毎回見る
+		if (!m_rec && clock < m_traj_next)
+			return;
+		u64 next = ~u64(0);
 		int live = 0;
 		for (int i = 0; i < SLOTS; i++) {
 			slot_use &s = m_slot[i];
@@ -149,8 +160,11 @@ public:
 				m_poke(u32(i) * 64 + fe[s.tpos].reg, fe[s.tpos].v);
 				s.tpos++;
 			}
+			if (s.tpos < fe.size() && s.tstart + fe[s.tpos].at < next)
+				next = s.tstart + fe[s.tpos].at;
 		}
 		m_traj = live > 0;
+		m_traj_next = next;
 	}
 
 	// ドラムの覚え先の鍵（バンクとプログラムと音の高さ）
@@ -202,6 +216,9 @@ public:
 			m_cc[p].vol  = b[0x0b];
 			m_cc[p].expr = b[ram::PART_EXP];
 			m_cc[p].pan  = b[0x0e];
+			// ベンド幅（08 pp 23。64 が 0 半音）。RPN でも SysEx でもここに入る
+			const int r2 = int(b[0x23]) - 64;
+			m_cc[p].range = r2 < 0 ? 0 : (r2 > 24 ? 24 : r2);
 		}
 	}
 
@@ -379,8 +396,10 @@ public:
 			su.cal = c;
 			su.tpos = 0;
 			su.tstart = m_clock;
-			if (c)
+			if (c) {
 				m_traj = true;
+				m_traj_next = 0;       // つぎの tick で見直す
+			}
 			su.att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
 			const part_cc &pc = m_cc[part];
 			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,
@@ -456,6 +475,7 @@ public:
 			su.tpos = 0;
 			su.tstart = m_clock;
 			m_traj = true;
+			m_traj_next = 0;
 			su.att = att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel));
 			const int att = note_att(su, part);
 			for (int i = 0; i < 0x40; i++)
@@ -537,6 +557,8 @@ private:
 	std::array<part_cc, PARTS> m_cc;
 	u64 m_clock = 0;
 	bool m_traj = false;
+	bool m_rec = false;            // 写し取りの最中（段が後から増える）
+	u64 m_traj_next = 0;           // つぎに段を書く時刻
 	// 遅らせて鳴らす要素（byte72）。時が来たら key_on する
 	struct pending_key { u64 mask; u64 at; };
 	std::vector<pending_key> m_pend;

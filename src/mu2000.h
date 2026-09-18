@@ -317,8 +317,30 @@ public:
 	void set_native_engine(int mode);
 	int native_engine() const { return m_native_engine; }
 	// native の口の内訳（調べ用）
+	// SH-2 を回したのはなぜか（サンプル数）。doc/native-engine.md の 6.21
+	std::atomic<u64> m_ne_by_note{0};    // firmware が鳴らしている音がある
+	std::atomic<u64> m_ne_by_sysex{0};   // SysEx のあと
+	std::atomic<u64> m_ne_by_other{0};   // 音色の指定・CC など
+	std::atomic<u64> m_ne_by_learn{0};   // 写し取り（その音色の 1 音目）
+	std::atomic<u64> m_ne_by_midi{0};    // 渡した MIDI を受け取らせている
+	u8   m_fw_why = 0;                   // いまの hold の理由（1 SysEx / 2 そのほか）
+	// SysEx の頭を少し覚えて、長く回す必要があるかを見分ける
+	int  m_sx_pos = -1;
+	u8   m_sx[5] = {};
+
 	struct native_stats { u64 note_native = 0, note_fw = 0, learn = 0, other = 0; };
 	native_stats native_counts() const { return m_ne_stats; }
+
+	struct native_why { u64 total, by_note, by_sysex, by_other, by_learn, by_midi; };
+	native_why native_why_counts() const
+	{
+		return { m_ne_samples.load(std::memory_order_relaxed),
+		         m_ne_by_note.load(std::memory_order_relaxed),
+		         m_ne_by_sysex.load(std::memory_order_relaxed),
+		         m_ne_by_other.load(std::memory_order_relaxed),
+		         m_ne_by_learn.load(std::memory_order_relaxed),
+		         m_ne_by_midi.load(std::memory_order_relaxed) };
+	}
 
 	// native の口が、いま firmware を回している割合（0-1。小さいほど軽い）
 	double native_firmware_share() const

@@ -523,9 +523,19 @@ int main(int argc, char **argv)
 	}
 
 	write_wav(wav, pcm, rate);
-	if (native_engine)
+	if (native_engine) {
 		std::printf("native の口: 演奏中に firmware を回したのは %.1f%%\n",
 		            100.0 * mu.native_firmware_share());
+		const mu2000::native_why w = mu.native_why_counts();
+		if (w.total)
+			std::printf("  内訳: firmware の音 %.1f%% / SysEx %.1f%% / 写し取り %.1f%% / "
+			            "MIDI の受け取り %.1f%% / そのほか %.1f%%\n",
+			            100.0 * double(w.by_note) / double(w.total),
+			            100.0 * double(w.by_sysex) / double(w.total),
+			            100.0 * double(w.by_learn) / double(w.total),
+			            100.0 * double(w.by_midi) / double(w.total),
+			            100.0 * double(w.by_other) / double(w.total));
+	}
 	if (native_engine) {
 		const mu2000::native_stats st = mu.native_counts();
 		std::printf("  鍵: native %llu / firmware %llu（うち写し取り %llu）、そのほかの MIDI %llu\n",

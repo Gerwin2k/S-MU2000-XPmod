@@ -993,6 +993,7 @@ void mu2000::set_native_engine(int mode)
 		c = 0;
 	m_fw_note_total = 0;
 	m_nq.clear();
+	m_sx_pos = -1;
 	m_traj_rec = false;
 	m_traj_left = 0;
 	m_traj_cals = nullptr;
@@ -1004,6 +1005,12 @@ void mu2000::set_native_engine(int mode)
 		n = nmidi();
 	m_ne_samples.store(0, std::memory_order_relaxed);
 	m_ne_fw_samples.store(0, std::memory_order_relaxed);
+	m_ne_by_note.store(0, std::memory_order_relaxed);
+	m_ne_by_sysex.store(0, std::memory_order_relaxed);
+	m_ne_by_other.store(0, std::memory_order_relaxed);
+	m_ne_by_learn.store(0, std::memory_order_relaxed);
+	m_ne_by_midi.store(0, std::memory_order_relaxed);
+	m_fw_why = 0;
 	m_ne_stats = native_stats();
 	if (!mode) {
 		set_swp_watch(nullptr);
@@ -1197,6 +1204,7 @@ void mu2000::traj_start(u32 rec, u64 drum_key, int ncal)
 		m_traj_chan[ch] = (m_learn_keyed & (u64(1) << ch)) ? n++ : -1;
 	m_traj_n = 0;
 	m_traj_rec = true;
+	m_ndrv.set_recording(true);
 	m_traj_rec_key = rec;
 	m_traj_drum_key = drum_key;
 	m_traj_start = m_ne_clock;
@@ -1232,6 +1240,7 @@ void mu2000::traj_finish()
 {
 	set_swp_watch(nullptr);
 	m_traj_rec = false;
+	m_ndrv.set_recording(false);
 	if (std::getenv("SMU2000_NATIVE_DEBUG"))
 		std::fprintf(stderr, "traj rec=%06x drum=%llx 段 %u%c", m_traj_rec_key,
 		             (unsigned long long)m_traj_drum_key, m_traj_n, 10);
@@ -1270,9 +1279,16 @@ bool mu2000::native_midi(u8 byte, int port)
 	if (byte & 0x80) {
 		if (byte >= 0xf0) {              // SysEx など。以後は firmware に任せる
 			n.status = 0;
-			// **長めに回す**。エフェクトの種類を変える SysEx は、MEG のプログラムを
-			// 1 万件以上書き直す。その途中で止めると音が出なくなる
-			m_fw_hold = 44100 / 2;
+			if (byte == 0xf0) {
+				// 頭を見て決めるので、まずは短く。0x0b 番目までに分かる
+				m_sx_pos = 0;
+				m_fw_hold = std::max(m_fw_hold, u32(44100 / 30));
+			} else {
+				m_sx_pos = -1;
+				m_fw_hold = std::max(m_fw_hold, u32(44100 / 30));
+			}
+			if (m_fw_why != 1)
+				m_fw_why = 2;
 			return false;
 		}
 		n.status = byte;
@@ -1281,11 +1297,38 @@ bool mu2000::native_midi(u8 byte, int port)
 		const u8 kind = byte & 0xf0;
 		if (kind != 0x80 && kind != 0x90 && kind != 0xb0 && kind != 0xe0) {
 			m_ne_stats.other++;
-			m_fw_hold = 44100 / 50;
+			// 音色の指定。ワーク RAM に入るのは 30 サンプル（0.68ms）で済むが、
+			// firmware の中の下ごしらえはもっとかかる。5ms では piano の残差が
+			// -59dB から -53dB に落ちたので、10ms 見る
+			m_fw_hold = std::max(m_fw_hold, u32(44100 / 100));
+			if (m_fw_why != 1)
+				m_fw_why = 2;
 			return false;
 		}
 		return true;                     // 状態のバイトは飲み込む
 	}
+	// SysEx の中身。エフェクトの種類を変えるものだけ長く回す（MEG のプログラムを
+	// 1 万件以上書き直すので、途中で止めると音が出なくなる）。
+	// パートの設定（08 pp xx）やドラムの設定は短くてよい
+	if (m_sx_pos >= 0) {
+		// 長い SysEx（MEG のプログラムなど）の間は待ちを切らさない
+		m_fw_hold = std::max(m_fw_hold, u32(44100 / 200));
+		if (m_sx_pos < 5)
+			m_sx[m_sx_pos] = byte;
+		if (++m_sx_pos == 5) {
+			const bool yamaha_param = m_sx[0] == 0x43 && (m_sx[1] & 0xf0) == 0x10;
+			// 43 1n 4C hh … の hh。00 システム / 02 エフェクト / 03 インサーション
+			const u8 hh = m_sx[3];
+			const bool heavy = !yamaha_param || hh == 0x00 || hh == 0x02 || hh == 0x03;
+			if (heavy) {
+				m_fw_hold = std::max(m_fw_hold, u32(44100 / 2));
+				m_fw_why = 1;
+			}
+			m_sx_pos = -1;
+		}
+		return false;
+	}
+
 	const u8 kind = n.status & 0xf0;
 	if (kind != 0x80 && kind != 0x90 && kind != 0xb0 && kind != 0xe0)
 		return false;
@@ -1317,7 +1360,7 @@ bool mu2000::native_midi(u8 byte, int port)
 			m_nq.push_back({ fire, 2, u8(part), u8(n.d0 & 0x7f), u8(byte & 0x7f) });
 		else
 			m_ndrv.control(part, n.d0 & 0x7f, byte & 0x7f);   // 音を全部切るなどは待たない
-		m_fw_hold = std::max(m_fw_hold, u32(mine ? 44100 / 500 : 44100 / 50));
+		m_fw_hold = std::max(m_fw_hold, u32(mine ? 44100 / 500 : 44100 / 200));
 		replay_note(n.status, n.d0, byte, port);
 		return true;
 	}
@@ -1373,8 +1416,11 @@ void mu2000::replay_note(u8 status, u8 d0, u8 d1, int port)
 	midi_in(d0, port);
 	midi_in(d1, port);
 	m_native_engine = save;
-	if (m_fw_hold < 44100 / 50)
+	if (m_fw_hold < 44100 / 50) {
 		m_fw_hold = 44100 / 50;
+		if (m_fw_why != 1)
+			m_fw_why = 3;
+	}
 }
 
 // S-MU2000: 軽量モードの入り切り（doc/native-dsp.md）
@@ -1555,20 +1601,35 @@ void mu2000::run_sample(s32 &left, s32 &right)
 	bool run_cpu = m_cpu_enabled;
 	if (m_native_engine) {
 		m_ne_samples.fetch_add(1, std::memory_order_relaxed);
-		if (midi_pending())
-			m_fw_hold = std::max(m_fw_hold, u32(44100 / 500));   // 溜まっている間は回す
 		// firmware が鳴らしている音がある間は止めない。LFO・包絡線・ベンドの
-		// 追従をやっているのは firmware なので、止めるとその音だけ変わってしまう
+		// 追従をやっているのは firmware なので、止めるとその音だけ変わってしまう。
+		// MIDI の溜まり具合は、止まっているときだけ見る（毎サンプル数えると重い）
 		if (m_fw_note_total)
 			m_fw_hold = std::max(m_fw_hold, u32(2));
+		// 「溜まっている間は回す」はやめた。渡した MIDI は 1 バイト 14 サンプルかけて
+		// 線を流れるので、それを待つだけで実時間の 2 割を SH-2 に持っていかれていた。
+		// メッセージごとに置く待ち（下の native_midi）で足りる
 		if (m_fw_hold) {
-			if (--m_fw_hold == 0)
+			if (--m_fw_hold == 0) {
 				m_ndrv.sync_cc();       // 止める前に、つまみの位置を取り直す
+				m_fw_why = 0;
+			}
 		} else {
 			run_cpu = false;
 		}
-		if (run_cpu)
+		if (run_cpu) {
 			m_ne_fw_samples.fetch_add(1, std::memory_order_relaxed);
+			if (m_fw_note_total)
+				m_ne_by_note.fetch_add(1, std::memory_order_relaxed);
+			else if (m_fw_why == 1)
+				m_ne_by_sysex.fetch_add(1, std::memory_order_relaxed);
+			else if (m_fw_why == 3)
+				m_ne_by_learn.fetch_add(1, std::memory_order_relaxed);
+			else if (m_fw_why == 4)
+				m_ne_by_midi.fetch_add(1, std::memory_order_relaxed);
+			else
+				m_ne_by_other.fetch_add(1, std::memory_order_relaxed);
+		}
 		if (m_learning && m_learn_left && --m_learn_left == 0)
 			native_learn_finish();
 		m_ne_clock++;

@@ -256,6 +256,44 @@ int main(int argc, char **argv)
 				mu.run_sample(l, r);
 			mu.set_swp_watch(nullptr);
 		}
+		// 音色を選び直すのに firmware が何サンプル要るか
+		{
+			const std::vector<u8> &wr = mu.nvram();
+			auto rec_of = [&]() {
+				const u8 *q = wr.data() + part0;
+				return u32(q[xg::ram::PART_VOICE]) << 24 | u32(q[xg::ram::PART_VOICE + 1]) << 16 |
+				       u32(q[xg::ram::PART_VOICE + 2]) << 8 | q[xg::ram::PART_VOICE + 3];
+			};
+			for (int pg : { 48, 0 }) {
+				const u32 was = rec_of();
+				for (u8 bb : { u8(0xc0), u8(pg) })
+					mu.midi_in(bb, 0);
+				u32 n2 = 0;
+				while (rec_of() == was && n2 < RATE) { mu.run_sample(l, r); n2++; }
+				std::printf("音色を %d に変えるのに %u サンプル（%.2f ms）%c",
+				            pg, n2, double(n2) * 1000.0 / RATE, 10);
+				for (u32 i = 0; i < RATE / 10; i++)
+					mu.run_sample(l, r);
+			}
+		}
+		// ベンド幅（RPN 0,0）がワーク RAM のどこに入るか
+		{
+			const std::vector<u8> &wr = mu.nvram();
+			std::vector<u8> a0 = wr;
+			for (u8 bb : { u8(0xb0), u8(101), u8(0), u8(0xb0), u8(100), u8(0),
+			               u8(0xb0), u8(6), u8(12) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 10; i++)
+				mu.run_sample(l, r);
+			for (size_t a = part0; a < part0 + 0x134 && a < wr.size(); a++)
+				if (wr[a] != a0[a])
+					std::printf("ベンド幅 12: パートの塊 +%02x  %d -> %d%c",
+					            unsigned(a - part0), a0[a], wr[a], 10);
+			for (u8 bb : { u8(0xb0), u8(6), u8(2) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 10; i++)
+				mu.run_sample(l, r);
+		}
 		std::map<u32, u16> before, now;
 		mu.set_swp_watch([&](bool master, u32 reg, u16 value) {
 			if (master) now[reg] = value;
