@@ -985,17 +985,18 @@ void mu2000::set_native_fx(int mode)
 {
 	m_nfx_on = mode;
 	// 遅延の線は作り直さない（音声の糸が読んでいる最中に切り替えても危なくないように）。
-	// 大きさは 44100Hz ぶんで固定なので、1 度用意すれば足りる
-	static bool ready = false;
+	// 大きさは 44100Hz ぶんで固定なので、1 度用意すれば足りる。
+	// **台ごとに持つ**。前は関数の static で、DAW に 2 枚目を挿すと
+	// 2 台目の遅延の線が空のままになって落ちていた
 	// 軽量モードは float で計算する。非正規化数（0 に近すぎる値）が出ると命令が何十倍も遅くなるので、
 	// この糸では 0 に丸める（FTZ/DAZ）
 #if defined(__SSE2__) || defined(_M_X64) || defined(__x86_64__)
 	if (mode)
 		_mm_setcsr(_mm_getcsr() | 0x8040);
 #endif
-	if (!ready) {
+	if (!m_nfx_ready) {
 		m_nfx.set_rate(44100.0f);
-		ready = true;
+		m_nfx_ready = true;
 	}
 	m_nfx.reset();
 	int mask = 15;

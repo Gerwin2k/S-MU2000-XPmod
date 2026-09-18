@@ -418,6 +418,7 @@ private:
 
 	smu2000::dsp::native_fx m_nfx;
 	int  m_nfx_on = 0;
+	bool m_nfx_ready = false;      // 遅延の線を用意したか（台ごと）
 	u32  m_nfx_tick = 0;
 
 	// MIDI IN A / B。バイトを 31250bps の直列に崩して RX 線に流す。
