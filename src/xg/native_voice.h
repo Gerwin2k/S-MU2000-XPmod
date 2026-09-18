@@ -15,7 +15,6 @@
 #include "compat/mamecompat.h"
 
 #include <cmath>
-#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -79,6 +78,7 @@ inline const u8 *wave_entry(const u8 *rom, int setno, int note)
 
 // 波形の記録の中身
 struct wave_info {
+	int level;         // この波形ぶんの減衰（0.375dB 目盛り。多段サンプルで段ごとに違う）
 	int base_key;      // もとの音程（半音）
 	int fine_cents;    // その細かい調整（セント。引く）
 	int key_max;       // この記録を使う鍵の上限
@@ -90,6 +90,7 @@ struct wave_info {
 inline wave_info read_wave(const u8 *e)
 {
 	wave_info w{};
+	w.level      = e[0];
 	w.base_key   = e[1];
 	w.fine_cents = e[2] >= 128 ? int(e[2]) - 256 : int(e[2]);
 	w.key_max    = e[3];
@@ -235,19 +236,31 @@ inline int level_from_att(const u8 *rom, int att)
 
 // **校正**: 1 回だけ実機（firmware）に鳴らしてもらった減衰から、その音色の
 // 「素の音量」を出す。これがあれば、ほかの鍵・強さの減衰は式で出せる
+inline int wave_level(const u8 *rom, const u8 *elem, int note)
+{
+	const u8 *we = wave_entry(rom, wave_set(elem), note);
+	return we ? int(we[0]) : 0;
+}
+
+// 鍵の曲線が音量の目盛りに効く倍率。実測（GrandPno の鍵 12-75）では 1 倍
+constexpr int LEVEL_CURVE_MUL = 2;
+
 inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref, int vel_ref)
 {
-	const int rest = att_ref / 2 - velocity_att(rom, vel_ref);
-	return level_from_att(rom, rest) - 2 * level_key_curve(rom, elem, note_ref);
+	const int rest = att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref);
+	return level_from_att(rom, rest) - LEVEL_CURVE_MUL * level_key_curve(rom, elem, note_ref);
 }
 
 // 校正した素の音量から、その鍵・強さの減衰（0x09 に入れる値）
 inline int volume_att(const u8 *rom, const u8 *elem, int base_level, int note, int vel)
 {
-	int l = base_level + 2 * level_key_curve(rom, elem, note);
+	int l = base_level + LEVEL_CURVE_MUL * level_key_curve(rom, elem, note);
 	if (l < 0) l = 0;
 	if (l > 127) l = 127;
-	const int a = rom[LEVEL_TAB + 0x80 + u32(l)] + velocity_att(rom, vel);
+	// 波形の記録の先頭のバイトが、その段ぶんの減衰。多段サンプルの音色では
+	// 段の変わり目で 1.5dB ほど動くので、これを入れないと段ごとにずれる
+	const int a = rom[LEVEL_TAB + 0x80 + u32(l)] + velocity_att(rom, vel)
+	            + wave_level(rom, elem, note);
 	return std::min(0xff, a * 2);
 }
 

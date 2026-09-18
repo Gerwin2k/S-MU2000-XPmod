@@ -172,7 +172,7 @@ int main(int argc, char **argv)
 	double seconds = 2.0;
 	bool firmware = false, compare = false, song = false, dump_voice = false, copyall = false;
 	int sweep = 0, volsweep = 0, levels = 0;
-	bool bench = false, ccwatch = false, ccsweep = false, ccram = false;
+	bool bench = false, ccwatch = false, ccsweep = false, ccram = false, attsweep = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -189,6 +189,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--ccwatch")) ccwatch = true;
 		else if (!std::strcmp(argv[i], "--ccsweep")) ccsweep = true;
 		else if (!std::strcmp(argv[i], "--ccram")) ccram = true;
+		else if (!std::strcmp(argv[i], "--attsweep")) attsweep = true;
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -279,6 +280,70 @@ int main(int argc, char **argv)
 		mu.set_swp_watch(nullptr);
 		mu.set_swp_trace(nullptr);
 		if (tf) std::fclose(tf);
+		return 0;
+	}
+
+	// --attsweep: 鍵と強さを振って、firmware が 0x09 に入れる減衰を並べ、
+	// こちらの式（calibrate_level + volume_att）と突き合わせる
+	if (attsweep) {
+		std::map<u32, u16> now;
+		u64 mask = 0, keyed = 0;
+		mu.set_swp_watch([&](bool master, u32 r2, u16 v2) {
+			if (!master) return;
+			now[r2] = v2;
+			switch (r2) {
+			case 0x18e: mask = (mask & ~(u64(0xffff) << 48)) | (u64(v2) << 48); break;
+			case 0x18f: mask = (mask & ~(u64(0xffff) << 32)) | (u64(v2) << 32); break;
+			case 0x1ce: mask = (mask & ~(u64(0xffff) << 16)) | (u64(v2) << 16); break;
+			case 0x1cf: mask = (mask & ~u64(0xffff)) | v2; break;
+			case 0x20e: keyed |= mask; break;
+			default: break;
+			}
+		});
+		std::vector<std::pair<int, int>> got;      // 鍵, 減衰
+		for (int nn = 12; nn <= 108; nn++) {
+			keyed = 0;
+			now.clear();
+			for (u8 bb : { u8(0x90), u8(nn), u8(vel & 0x7f) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 50; i++)
+				mu.run_sample(l, r);
+			for (int ch = 0; ch < 64; ch++)
+				if (keyed & (u64(1) << ch)) {
+					const auto it = now.find(u32(ch) * 64 + 9);
+					if (it != now.end()) {
+						got.push_back({ nn, int(it->second & 0xff) });
+						break;
+					}
+				}
+			for (u8 bb : { u8(0x80), u8(nn), u8(64) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 25; i++)
+				mu.run_sample(l, r);
+		}
+		mu.set_swp_watch(nullptr);
+		const u8 *el0 = xg::nv::element(rom, rec, 0);
+		int ref = -1;
+		for (const auto &g : got)
+			if (g.first == 60)
+				ref = g.second;
+		if (ref < 0 && !got.empty())
+			ref = got[got.size() / 2].second;
+		const int base_lv = xg::nv::calibrate_level(rom, el0, ref, 60, vel);
+		std::printf("# 素の音量 = %d（鍵 60・強さ %d の減衰 %d から）%c", base_lv, vel, ref, 10);
+		int bad = 0, worst = 0;
+		for (const auto &g : got) {
+			const int mine = xg::nv::volume_att(rom, el0, base_lv, g.first, vel);
+			const int d = mine - g.second;
+			if (d) bad++;
+			if (std::abs(d) > worst) worst = std::abs(d);
+			const u8 *we2 = xg::nv::wave_entry(rom, xg::nv::wave_set(el0), g.first);
+			std::printf("ATT %3d  実機 %3d  式 %3d  差 %+d  波形 [0]=%d [1]=%d [3]=%d 曲線=%d%c",
+			            g.first, g.second, mine, d, we2 ? we2[0] : -1, we2 ? we2[1] : -1,
+			            we2 ? we2[3] : -1, xg::nv::level_key_curve(rom, el0, g.first), 10);
+		}
+		std::printf("# 合わない鍵 %d / %d、最大の差 %d（%.2f dB）%c",
+		            bad, int(got.size()), worst, worst * 0.1875, 10);
 		return 0;
 	}
 
