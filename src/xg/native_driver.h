@@ -55,6 +55,7 @@ public:
 		const u8 *wave = nullptr;       // ベンドで音程を作り直すのに要る
 		const nv::voice_cal *cal = nullptr;
 		u16 lfo = 0;                    // いま鳴らしている 0x0a（モジュレーションを足す前）
+		u16 cut = 0;                    // いま鳴らしている 0x00（明るさを足す前）
 		u16 drum_rel = 0;
 		u64 age = 0;
 	};
@@ -167,6 +168,11 @@ public:
 				if (fe[s.tpos].reg == 0x0a) {      // 深さにモジュレーションを足す
 					s.lfo = v;
 					v = lfo_reg(v, *s.cal, s.part);
+				} else if (fe[s.tpos].reg == 0x00) {   // 切る高さに明るさを足す
+					s.cut = v;
+					v = cutoff_reg(v, *s.cal, s.part);
+				} else if (fe[s.tpos].reg == 0x04) {
+					v = reso_reg(v, *s.cal, s.part);
 				}
 				m_poke(u32(i) * 64 + fe[s.tpos].reg, v);
 				s.tpos++;
@@ -214,6 +220,7 @@ public:
 		int vol = -1, expr = -1, pan = -1;     // CC7 / CC11 / CC10
 		int mod = -1;                          // CC1（モジュレーション）
 		int rev = -1, cho = -1;                // CC91 / CC93（送り）
+		int bri = -1, res = -1;                // CC74 / CC71（明るさ・共振）
 		int bend = 8192, range = 2;            // ピッチベンドと、その幅（半音）
 		bool damper = false;                   // CC64
 	};
@@ -240,6 +247,10 @@ public:
 				m_cc[p].rev = b[0x13];
 			if (m_cc[p].cho < 0)
 				m_cc[p].cho = b[0x12];
+			if (m_cc[p].bri < 0)
+				m_cc[p].bri = b[0x18];
+			if (m_cc[p].res < 0)
+				m_cc[p].res = b[0x19];
 			// ベンド幅（08 pp 23。64 が 0 半音）。RPN でも SysEx でもここに入る
 			const int r2 = int(b[0x23]) - 64;
 			m_cc[p].range = r2 < 0 ? 0 : (r2 > 24 ? 24 : r2);
@@ -253,12 +264,14 @@ public:
 	int part_mod(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_MOD]) : 0; }
 	int part_rev(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x13]) : 40; }
 	int part_cho(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x12]) : 0; }
+	int part_bri(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x18]) : 64; }
+	int part_res(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x19]) : 64; }
 
 	// その CC を native でさばけるか（実際にさばく前に決める）
 	static bool handles_cc(int cc)
 	{
 		return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01 ||
-		       cc == 0x5b || cc == 0x5d;
+		       cc == 0x5b || cc == 0x5d || cc == 0x4a || cc == 0x47;
 	}
 
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
@@ -274,6 +287,8 @@ public:
 		case 0x01: p.mod = value; break;
 		case 0x5b: p.rev = value; break;
 		case 0x5d: p.cho = value; break;
+		case 0x4a: p.bri = value; break;
+		case 0x47: p.res = value; break;
 		case 0x40:                             // ダンパー
 			p.damper = value >= 64;
 			if (!p.damper)
@@ -330,6 +345,10 @@ private:
 			if (s.cal->has(0x34))
 				m_poke(u32(i) * 64 + 0x34,
 				       send_reg(*s.cal, 0x34, true, m_cc[part].cho, s.cal->cal_cho));
+			if (s.cut)
+				m_poke(u32(i) * 64 + 0x00, cutoff_reg(s.cut, *s.cal, part));
+			if (s.cal->has(0x04))
+				m_poke(u32(i) * 64 + 0x04, reso_reg(s.cal->reg[0x04], *s.cal, part));
 		}
 	}
 
@@ -371,6 +390,28 @@ private:
 				a += nv::cc_vol_att(m_rom, p.expr) - nv::cc_vol_att(m_rom, c->cal_expr);
 		}
 		return nv::clamp_att(a);
+	}
+
+	// フィルタのレジスタ。下 12bit が切る高さで、明るさ（CC74）のぶんをずらす
+	u16 cutoff_reg(u16 base, const nv::voice_cal &c, int part) const
+	{
+		const int now = m_cc[part].bri;
+		if (now < 0 || now == c.cal_bri)
+			return base;
+		int v = int(base & 0xfff) + nv::bright_shift(now) - nv::bright_shift(c.cal_bri);
+		v = v < 0 ? 0 : (v > nv::CUTOFF_MAX ? nv::CUTOFF_MAX : v);
+		return u16((base & 0xf000) | u16(v));
+	}
+
+	// 共振のレジスタ。上 5bit が共振で、CC71 のぶんをずらす
+	u16 reso_reg(u16 base, const nv::voice_cal &c, int part) const
+	{
+		const int now = m_cc[part].res;
+		if (now < 0 || now == c.cal_res)
+			return base;
+		int v = int(base >> 11) + nv::reso_shift(now) - nv::reso_shift(c.cal_res);
+		v = v < 0 ? 0 : (v > 31 ? 31 : v);
+		return u16((base & 0x07ff) | u16(v << 11));
 	}
 
 	// 送りのレジスタ。下位が減衰で、写し取ったときからの差ぶんだけ動かす。
@@ -478,8 +519,12 @@ public:
 			if (c && c->has(0x32))
 				sr.set(0x32, pan_reg(*c, part));
 			su.lfo = sr.v[0x0a];
+			su.cut = sr.v[0x00];
 			if (c) {
 				sr.set(0x0a, lfo_reg(su.lfo, *c, part));
+				sr.set(0x00, cutoff_reg(su.cut, *c, part));
+				if (c->has(0x04))
+					sr.set(0x04, reso_reg(c->reg[0x04], *c, part));
 				if (c->has(0x33))
 					sr.set(0x33, send_reg(*c, 0x33, false, pc.rev, c->cal_rev));
 				if (c->has(0x34))

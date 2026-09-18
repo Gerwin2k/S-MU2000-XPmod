@@ -167,6 +167,15 @@ inline int pan_att(int x)
 	return v < 0 ? 0 : (v > 255 ? 255 : v);
 }
 
+// 明るさ（CC74）→ レジスタ 0x00 の下 12bit（切る高さ）。
+// 実測（`nativeplay --ccfilter`）は **16 × (値 - 64)** でまっすぐ動き、1984 で頭打ち
+constexpr int CUTOFF_MAX = 1984;
+inline int bright_shift(int cc) { return 16 * (cc - 64); }
+
+// 共振（CC71）→ レジスタ 0x04 の上 5bit。実測は **2 きざみで 1 段**
+// （64 まで 0、67 で 1、127 で 31）
+inline int reso_shift(int cc) { return (cc - 64) / 2; }
+
 // 送り（CC91 リバーブ・CC93 コーラス）→ レジスタ 0x33・0x34 の下位（減衰）。
 // 実測は **16 + level→減衰の表** で、音色によらない（GrandPno・Strings・Flute で同じ）。
 // 使うのは差ぶんだけなので、下駄の 16 は要らない
@@ -349,6 +358,7 @@ struct voice_cal {
 	// 写し取ったときのコントローラの位置。ここからの差ぶんだけ動かす
 	int  cal_vol = 100, cal_expr = 127, cal_pan = 64, cal_mod = 0;
 	int  cal_rev = 40, cal_cho = 0;      // 写し取ったときの送り（CC91・CC93）
+	int  cal_bri = 64, cal_res = 64;     // 写し取ったときの明るさ・共振（CC74・CC71）
 	u16  reg[0x40] = {};       // 基準の鍵・強さでの値
 	u64  mask = 0;             // 覚えているレジスタ
 

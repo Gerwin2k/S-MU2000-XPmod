@@ -1102,6 +1102,8 @@ void mu2000::native_learn_finish()
 			cal.cal_mod  = m_ndrv.part_mod(m_learn_part);
 			cal.cal_rev  = m_ndrv.part_rev(m_learn_part);
 			cal.cal_cho  = m_ndrv.part_cho(m_learn_part);
+			cal.cal_bri  = m_ndrv.part_bri(m_learn_part);
+			cal.cal_res  = m_ndrv.part_res(m_learn_part);
 			cal.have = true;
 			cals.push_back(cal);
 		}
@@ -1168,6 +1170,8 @@ void mu2000::native_learn_finish()
 		cal.cal_mod  = m_ndrv.part_mod(m_learn_part);
 		cal.cal_rev  = m_ndrv.part_rev(m_learn_part);
 		cal.cal_cho  = m_ndrv.part_cho(m_learn_part);
+		cal.cal_bri  = m_ndrv.part_bri(m_learn_part);
+		cal.cal_res  = m_ndrv.part_res(m_learn_part);
 		cal.have = true;
 		cals.push_back(cal);
 	}
@@ -1207,7 +1211,7 @@ void mu2000::native_learn_finish()
 namespace {
 
 constexpr u32 CAL_MAGIC = 0x43563253u;   // "S2VC"
-constexpr u32 CAL_VERSION = 3;
+constexpr u32 CAL_VERSION = 4;
 
 void put8(std::vector<u8> &v, u8 x) { v.push_back(x); }
 void put16v(std::vector<u8> &v, u16 x) { v.push_back(u8(x)); v.push_back(u8(x >> 8)); }
@@ -1238,6 +1242,8 @@ void write_cals(std::vector<u8> &out, u8 kind, u64 key, const std::vector<xg::nv
 		put16v(out, u16(c.cal_mod));
 		put16v(out, u16(c.cal_rev));
 		put16v(out, u16(c.cal_cho));
+		put16v(out, u16(c.cal_bri));
+		put16v(out, u16(c.cal_res));
 		for (int i = 0; i < 0x40; i++)
 			if (c.mask & (u64(1) << i))
 				put16v(out, c.reg[i]);
@@ -1296,6 +1302,8 @@ bool mu2000::native_cal_load(const u8 *data, size_t n)
 			c.cal_mod = s16(r.g16());
 			c.cal_rev = s16(r.g16());
 			c.cal_cho = s16(r.g16());
+			c.cal_bri = s16(r.g16());
+			c.cal_res = s16(r.g16());
 			for (int i = 0; i < 0x40; i++)
 				if (c.mask & (u64(1) << i))
 					c.reg[i] = r.g16();
