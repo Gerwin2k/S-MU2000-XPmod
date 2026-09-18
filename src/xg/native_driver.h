@@ -246,7 +246,7 @@ public:
 					v = lfo_reg(v, *s.cal, s.part);
 				} else if (fe[s.tpos].reg == 0x00) {   // 切る高さに明るさを足す
 					s.cut = v;
-					v = cutoff_reg(v, *s.cal, s.part);
+					v = cutoff_reg(v, *s.cal, s.part, s.elem, s.note);
 				} else if (fe[s.tpos].reg == 0x04) {
 					v = reso_reg(v, *s.cal, s.part);
 				}
@@ -648,7 +648,8 @@ private:
 				m_poke(u32(i) * 64 + 0x34,
 				       send_reg(*s.cal, 0x34, true, m_cc[part].cho, s.cal->cal_cho));
 			if (s.cut)
-				m_poke(u32(i) * 64 + 0x00, cutoff_reg(s.cut, *s.cal, part));
+				m_poke(u32(i) * 64 + 0x00,
+				       cutoff_reg(s.cut, *s.cal, part, s.elem, s.note));
 			if (s.cal->has(0x04))
 				m_poke(u32(i) * 64 + 0x04, reso_reg(s.cal->reg[0x04], *s.cal, part));
 		}
@@ -703,12 +704,22 @@ private:
 	}
 
 	// フィルタのレジスタ。下 12bit が切る高さで、明るさ（CC74）のぶんをずらす
-	u16 cutoff_reg(u16 base, const nv::voice_cal &c, int part) const
+	// elem と note を渡すのは、**鍵による切る高さのずれ**を入れるため。
+	// 写し取りは音色あたり 1 音なので、写した鍵と違う鍵ではここがずれる
+	// （利用者の曲で、食い違いの大半がこれだった）
+	u16 cutoff_reg(u16 base, const nv::voice_cal &c, int part,
+	               const u8 *elem = nullptr, int note = -1) const
 	{
 		const int now = m_cc[part].bri;
-		if (now < 0 || now == c.cal_bri)
+		int d = 0;
+		if (elem && note >= 0)
+			d = nv::cutoff_key_curve(m_rom, elem, note)
+			  - nv::cutoff_key_curve(m_rom, elem, c.cal_note);
+		if (d == 0 && (now < 0 || now == c.cal_bri))
 			return base;
-		int v = int(base & 0xfff) + nv::bright_shift(now) - nv::bright_shift(c.cal_bri);
+		int v = int(base & 0xfff) + d;
+		if (now >= 0)
+			v += nv::bright_shift(now) - nv::bright_shift(c.cal_bri);
 		v = v < 0 ? 0 : (v > nv::CUTOFF_MAX ? nv::CUTOFF_MAX : v);
 		return u16((base & 0xf000) | u16(v));
 	}
@@ -869,7 +880,7 @@ public:
 			su.cut = sr.v[0x00];
 			if (c) {
 				sr.set(0x0a, lfo_reg(su.lfo, *c, part));
-				sr.set(0x00, cutoff_reg(su.cut, *c, part));
+				sr.set(0x00, cutoff_reg(su.cut, *c, part, el, note));
 				if (c->has(0x04))
 					sr.set(0x04, reso_reg(c->reg[0x04], *c, part));
 				if (c->has(0x33))
