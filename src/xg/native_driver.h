@@ -89,6 +89,10 @@ public:
 		// 写し取った録画の代わりに、こちらで式から動かす
 		int facc = 0, ftgt = 0, finc = 0, fstage = 0, fadj = 0, fvel = 100;
 		u64 fnext = 0;                  // つぎに 1 段進める時刻
+		// **音程の包絡線の行き先**。実機はキーオンの直後にこれを書いて、
+		// あとはチップに任せる（doc/native-engine.md の 6.68）。
+		// 0xffff は「書くものが無い」の印
+		u16 peg_tgt = 0xffff;
 		s32 glide = 0, glide_step = 0;
 		u64 glide_next = 0;
 		u64 age = 0;
@@ -1111,7 +1115,13 @@ public:
 			}
 			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,
 			                                  nv::defaults(),
-			                                  nv::bend_cents(pc.bend, pc.range) + su.glide / 256);
+			                                  nv::bend_cents(pc.bend, pc.range) + su.glide / 256,
+			                                  vel);
+			// 音程の包絡線の行き先（byte31）。初めの高さと同じなら書かない
+			{
+				const u16 tgt = nv::peg_reg(m_rom, nv::peg_cents(el, el[31], vel));
+				su.peg_tgt = tgt == sr.v[0x10] ? 0xffff : tgt;
+			}
 			if (c && c->has(0x32))
 				sr.set(0x32, pan_reg(*c, part));
 			su.lfo = sr.v[0x0a];
@@ -1365,6 +1375,16 @@ private:
 		for (int i = 0; i < 4; i++)
 			m_poke(MASK_REG[i], u16((mask >> (i * 16)) & 0xffff));
 		m_poke(0x20e, 1);
+		// **音程の包絡線の行き先はキーオンの「あと」に書く**。チップは
+		// キーオンのときの `0x10` を初めの高さとして取り込むので、
+		// 先に書いてしまうと包絡線が無くなる（実機も 15 サンプル後に書く）
+		for (int i = 0; i < SLOTS; i++) {
+			if (!((mask >> i) & 1))
+				continue;
+			if (m_slot[i].peg_tgt != 0xffff)
+				m_poke(u32(i) * 64 + 0x10, m_slot[i].peg_tgt);
+			m_slot[i].peg_tgt = 0xffff;
+		}
 	}
 
 	poke_fn m_poke;
