@@ -777,6 +777,11 @@ int main(int argc, char **argv)
 			mu.midi_in(bb, 0);
 		for (u32 i = 0; i < RATE / 2; i++) { mu.run_sample(l, r); t++; }
 		mu.set_swp_watch(nullptr);
+		{
+			const std::vector<u8> &wr2 = mu.nvram();
+			std::printf("== 全体に効く値: 0x4226A8=%d 0x4226BC=%d 0x4226A9=%d%c",
+			            wr2[0x226A8], wr2[0x226BC], wr2[0x226A9], 10);
+		}
 		std::printf("== 包絡線のレジスタを書いた時刻（鍵を押した時点を 0 とする）%c", 10);
 		std::printf("   写し取りの窓は「鳴り始めから 5ms」= +5.0ms まで%c", 10);
 		int n = 0;
