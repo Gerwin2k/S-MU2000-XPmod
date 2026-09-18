@@ -453,7 +453,8 @@ void mu2000::build_bus()
 		auto note = [this, want](offs_t a, u32 v, int size) {
 			const u32 pc = m_cpu ? m_cpu->pc() : 0;
 			if (pc >= want && pc <= want + 0x100)
-				std::fprintf(stderr, "ramread pc=%06x 番地=%06x = %x (%d bit)\n",
+				std::fprintf(stderr, "ramread s=%llu pc=%06x 番地=%06x = %x (%d bit)\n",
+				             (unsigned long long)trace_sample(),
 				             pc, u32(a), v, size * 8);
 		};
 		d.r8  = [this, note](offs_t a) {
