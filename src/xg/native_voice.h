@@ -1,0 +1,187 @@
+// license:BSD-3-Clause
+//
+// 音色の記録（ROM の 84 バイト）から、SWP30 のスロットのレジスタを組み立てる。
+// **firmware を走らせずに音を出す**ための最初の部品（doc/native-engine.md の段 2）。
+//
+// 番地と式はすべて firmware を読んで決めた（同 6.2-6.6）。分かっていない所は
+// 「まだ分からない」と書いて、実機を鳴らして測った値をそのまま置いてある。
+// ここに入っているのは**式だけ**で、ROM の中身は持たない（実行時に読むだけ）。
+
+#ifndef S_MU2000_XG_NATIVE_VOICE_H
+#define S_MU2000_XG_NATIVE_VOICE_H
+
+#pragma once
+
+#include "compat/mamecompat.h"
+
+#include <cmath>
+#include <cstring>
+
+namespace xg {
+namespace nv {
+
+// ROM の中の番地（MU2000 EX firmware v2.01）
+constexpr u32 SET_TABLE  = 0x200AF0;   // 波形の組 → 波形の並びの中の位置（16bit を 503 個）
+constexpr u32 SET_COUNT  = 0x1F8;
+constexpr u32 WAVE_BASE  = 0x1F55A0;   // 波形の記録（16 バイトずつ）
+constexpr u32 ATTACK_TAB = 0x1F4DB8;   // アタックの速さ（128 バイト）
+constexpr u32 DECAY_TAB  = 0x1F4E38;   // 減衰の速さ（128 バイト）
+constexpr u32 LEVEL_TAB  = 0x1E6818;   // 音量 0-127 → 減衰（128 バイト）
+constexpr u32 SLOT_TABLE = 0x1F4F58;   // スロット番号 → レジスタの先頭（4 バイト × 64）
+
+inline u16 rd16(const u8 *rom, u32 a) { return u16(rom[a] << 8 | rom[a + 1]); }
+inline u32 rd32(const u8 *rom, u32 a)
+{ return u32(rom[a]) << 24 | u32(rom[a + 1]) << 16 | u32(rom[a + 2]) << 8 | rom[a + 3]; }
+
+// 音色の記録の 84 バイト（要素 1 つぶん）。rec は xg::voice_rom::lookup の戻り値
+inline const u8 *element(const u8 *rom, u32 rec, int index = 0)
+{
+	return rom + rec + 12 + u32(index) * 84;
+}
+inline int element_count(const u8 *rom, u32 rec) { return rom[rec]; }
+
+// 波形の組の番号（7bit が 2 つ）
+inline int wave_set(const u8 *elem) { return (elem[2] << 7) | (elem[3] & 0x7f); }
+
+// その鍵で使う波形の記録（16 バイト）。無ければ nullptr
+inline const u8 *wave_entry(const u8 *rom, int setno, int note)
+{
+	if (setno < 0 || setno >= int(SET_COUNT))
+		return nullptr;
+	u32 s = WAVE_BASE + rd16(rom, SET_TABLE + u32(setno) * 2);
+	for (int i = 0; i < 80; i++) {
+		if (rom[s + 3] >= note || rom[s + 3] == 0x7f)
+			return rom + s;
+		s += 16;
+	}
+	return nullptr;
+}
+
+// 波形の記録の中身
+struct wave_info {
+	int base_key;      // もとの音程（半音）
+	int fine_cents;    // その細かい調整（セント。引く）
+	int key_max;       // この記録を使う鍵の上限
+	u32 pre_loop;      // ループ前のサンプル数（レジスタ 0x12/0x13）
+	u32 loop_len;      // ループの長さ（0x14/0x15）
+	u32 format_addr;   // 形式＋波形 ROM の番地（0x16/0x17）
+};
+
+inline wave_info read_wave(const u8 *e)
+{
+	wave_info w{};
+	w.base_key   = e[1];
+	w.fine_cents = e[2] >= 128 ? int(e[2]) - 256 : int(e[2]);
+	w.key_max    = e[3];
+	w.pre_loop   = u32(e[4]) << 24 | u32(e[5]) << 16 | u32(e[6]) << 8 | e[7];
+	w.loop_len   = u32(e[8]) << 24 | u32(e[9]) << 16 | u32(e[10]) << 8 | e[11];
+	w.format_addr = u32(e[12]) << 24 | u32(e[13]) << 16 | u32(e[14]) << 8 | e[15];
+	return w;
+}
+
+// 音程のレジスタ（0x11）。1 オクターブ = 1024、細かい調整はセント（**足す**）。
+// 実測（鍵 0-127・18 区画）と ±0.7 目盛りで合う
+inline u16 pitch_reg(const wave_info &w, int note, int cents_extra = 0)
+{
+	// 整数で計算する（firmware と同じ丸めになる。0 の側へ切り捨て）
+	const int cents = (note - w.base_key) * 100 + w.fine_cents + cents_extra;
+	const int v = cents * 1024 / 1200;
+	return u16(v & 0x3fff);
+}
+
+// 組み立てたスロットのレジスタ。write が立っている所だけ書く
+struct slot_regs {
+	u16 v[0x40];
+	u64 write;         // ビット n が立っていればレジスタ n を書く
+
+	slot_regs() { std::memset(v, 0, sizeof(v)); write = 0; }
+	void set(int reg, u16 value) { v[reg] = value; write |= u64(1) << reg; }
+};
+
+// 分かっていない所に置く値。**実機を鳴らして測った、素直な音色のときの値**で、
+// これは「式が分かっていない」という印でもある（doc/native-engine.md の 6.6）
+struct defaults {
+	u16 filter1 = 0x1000 | 0x7ff;   // 開き切り
+	u16 bypass  = 0xdcff;           // 上位は「前の値からの変わり方」で決まる（0x127F10）
+	u16 filter2 = 0x8000;
+	u16 post    = 0x5010;           // ここは定数だと分かっている
+	u16 filter2p = 0x0000;
+	u16 lfo_amp = 0xfa00;
+	u16 lfo     = 0x5f00;
+	u16 r0b     = 0x7f00;
+	u16 r10     = 0x4000;
+	// ミキサ（パート 1・音量 100・パン中央・リバーブ送り 40 のときの実測）
+	u16 mix[12] = { 0x0808, 0x182b, 0xffff, 0x4d00, 0x4800, 0x4400,
+	                0x0808, 0xffff, 0xffff, 0x000f, 0x000c, 0x000a };
+	// 声ごとの IIR（パートの EQ）。素通しのときの実測
+	u16 iir[6] = { 0xe05d, 0x1fa3, 0x2000, 0x0257, 0xfda9, 0x2000 };
+};
+
+// 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
+inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
+                            const defaults &d = defaults())
+{
+	slot_regs r;
+	const u8 *we = wave_entry(rom, wave_set(elem), note);
+	if (!we)
+		return r;
+	const wave_info w = read_wave(we);
+
+	// --- フィルタと LFO（式はまだ分かっていない。素直な値を置く）
+	r.set(0x00, d.filter1);
+	r.set(0x01, d.bypass);
+	r.set(0x02, d.filter2);
+	r.set(0x03, d.post);
+	r.set(0x04, d.filter2p);
+	r.set(0x05, d.lfo_amp);
+	r.set(0x0a, d.lfo);
+	r.set(0x0b, d.r0b);
+	r.set(0x10, d.r10);
+
+	// --- 包絡線（doc/native-engine.md の 6.3・6.4）
+	//
+	// 減衰の速さは鍵で動く。firmware の 0x12ADD0 と 0x1272F4 がやっているのは
+	//   補正 = ((鍵 - 折れ点) * ((depth - 64) * 16)) >> 8     （負は 0 の側へ）
+	//   目盛り = clamp(記録の値 + 補正, 1, 63) * 2
+	// で、その目盛りで ROM の表を引いたものがレジスタの上位バイトになる。
+	// 深さは byte70、折れ点の鍵は byte71（鍵 36・60・84 で確かめた）。
+	const int depth = int(elem[70]) - 64;
+	int corr = (note - int(elem[71])) * depth * 16;
+	if (corr < 0)
+		corr += 0xff;
+	corr >>= 8;
+	auto rate = [&](int raw) {
+		int v = raw + corr;
+		if (v <= 0) v = 1;
+		if (v > 63) v = 63;
+		return v * 2;
+	};
+	const u8 atk = rom[ATTACK_TAB + std::min(0x7f, int(elem[73]) * 2)];
+	const u8 dc1 = rom[DECAY_TAB  + rate(elem[74])];
+	const u8 dc2 = rom[DECAY_TAB  + rate(elem[75])];
+	r.set(0x06, u16(atk << 8 | 0x7e));
+	r.set(0x07, u16(dc1 << 8 | (((0x7f - elem[77]) * 2) & 0xff)));
+	r.set(0x08, u16(dc2 << 8 | (((0x7f - elem[78]) * 2) & 0xff)));
+	r.set(0x09, u16(att & 0xff));
+
+	// --- 音程と波形（6.2）
+	r.set(0x11, pitch_reg(w, note));
+	r.set(0x12, u16(w.pre_loop >> 16));
+	r.set(0x13, u16(w.pre_loop));
+	r.set(0x14, u16(w.loop_len >> 16));
+	r.set(0x15, u16(w.loop_len));
+	r.set(0x16, u16(w.format_addr >> 16));
+	r.set(0x17, u16(w.format_addr));
+
+	// --- 声の EQ とミキサ
+	for (int i = 0; i < 6; i++)
+		r.set(0x20 + i * 2, d.iir[i]);
+	for (int i = 0; i < 12; i++)
+		r.set(0x32 + i, d.mix[i]);
+	return r;
+}
+
+} // namespace nv
+} // namespace xg
+
+#endif // S_MU2000_XG_NATIVE_VOICE_H
