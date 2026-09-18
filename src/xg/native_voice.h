@@ -332,7 +332,13 @@ inline int rd16s(const u8 *rom, u32 a)
 // 0 の側へ丸める >>8（実機は符号で分けている）
 inline int sh8(int v) { return v >= 0 ? (v >> 8) : -((-v) >> 8); }
 
-// レベルのバイト → 目標
+// レベルのバイト → 目標。
+// **深さ（実機の `[音+93]`）はまだ起こせていない**。実機は `0x128ADC` で
+// 要素の byte46・byte8・強さ・パートの塊 +210 から作っていて、
+// Kitayama では 72（byte49 と同じ）、GrandPno では 111（byte49 は 60）。
+// いまは byte49 で代用している。目標は「段がいつ終わるか」にしか効かず、
+// 坂の速さ（増分）には効かないので、段の終わりまで伸ばさない音では
+// 差が出ない。長い音で段が変わる所だけずれる
 inline int fenv_target(const u8 *elem, int level)
 {
 	const int x = (level - 64) * 2;
