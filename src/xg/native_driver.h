@@ -824,6 +824,25 @@ public:
 	}
 
 	// そのパートの音を全部止める
+	// **こちらで鳴らしている音を全部離す**（native の口を切るときに呼ぶ）。
+	// 切ったあとは firmware がこのスロットを知らないので、離しておかないと
+	// 鳴りっぱなしになる。ぶつ切りではなく離しの速さで鳴り終わらせる
+	void silence()
+	{
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (!s.on)
+				continue;
+			if (s.elem && m_rom && m_poke)
+				m_poke(u32(i) * 64 + 9, nv::release_reg(m_rom, s.elem, s.note, s.att));
+			s.on = false;
+			s.held = false;
+		}
+		m_pend.clear();
+		m_traj = false;
+		m_traj_next = 0;
+	}
+
 	void all_off(int part)
 	{
 		for (int i = 0; i < SLOTS; i++)

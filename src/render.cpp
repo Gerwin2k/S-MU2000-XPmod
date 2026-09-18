@@ -180,6 +180,9 @@ int main(int argc, char **argv)
 	const char *card_path = nullptr;   // 差す SmartMedia
 	const char *replay = nullptr;      // --replay-swp。記録したレジスタ列を SH-2 無しで流す
 	int native_engine = 0;             // --native-engine。firmware を走らせない口
+	// --native-off 秒: その時刻で native の口を切る。窓の F4（聞き比べ）と
+	// 同じ道を通るので、切ったときに音が鳴りっぱなしにならないかを数で確かめられる
+	double native_off = -1.0;
 	// 写し取りをファイルに残す・読む（voicecache.h）。経路の印が付いているので
 	// 別の曲の写しが混ざっても安全。--no-voicecache で切る
 	bool voicecache = false;
@@ -220,6 +223,8 @@ int main(int argc, char **argv)
 			native_fx = 1;
 		else if (!std::strcmp(argv[i], "--native-engine"))
 			native_engine = 1;
+		else if (!std::strcmp(argv[i], "--native-off") && i + 1 < argc)
+			native_off = std::atof(argv[++i]);
 		else if (!std::strcmp(argv[i], "--voicecache"))
 			voicecache = true;
 		else if (!std::strcmp(argv[i], "--no-voicecache"))
@@ -408,6 +413,11 @@ int main(int argc, char **argv)
 				std::fwrite(st.data(), 1, st.size(), sf);
 				std::fclose(sf);
 			}
+		}
+		if (native_engine && native_off >= 0.0 &&
+		    i == size_t(boot * rate) + size_t(native_off * rate)) {
+			mu.set_native_engine(0);
+			std::printf("%.3f 秒で native の口を切った\n", native_off);
 		}
 		// native の口は、起動が終わってから入れる（起動には firmware が要る）
 		if (native_engine && i == boot_samples) {

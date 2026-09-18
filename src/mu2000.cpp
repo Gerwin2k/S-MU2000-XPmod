@@ -986,6 +986,10 @@ void mu2000::midi_step(u64 now)
 
 void mu2000::set_native_engine(int mode)
 {
+	// 切るときは、こちらで鳴らしている音を先に離す。切ったあとは firmware が
+	// そのスロットを知らないので、離さないと鳴りっぱなしになる
+	if (!mode && m_native_engine)
+		m_ndrv.silence();
 	m_native_engine = mode;
 	m_fw_hold = 0;
 	m_learning = false;
