@@ -1626,6 +1626,9 @@ bool mu2000::native_midi(u8 byte, int port)
 		return true;
 	}
 	m_ne_stats.note_fw++;
+	// firmware が鳴らす音でも、最後に押した鍵は覚えておく
+	// （つぎの音のポルタメントの出発点になる）
+	m_ndrv.note_fw(part, note);
 	// まだ写し取っていない音（ドラムは音ごと）。firmware に鳴らさせて覚える
 	const u32 rec = m_ndrv.record_of(part);
 	const bool drum = m_ndrv.is_drum(part);

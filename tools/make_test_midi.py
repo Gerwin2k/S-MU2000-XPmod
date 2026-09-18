@@ -204,6 +204,23 @@ def case_egcc():
     return [track(seq(ev))], 7.5
 
 
+def case_porta():
+    """ポルタメント（CC65 入切・CC5 速さ）。音程を鳴らしている間ずっと動かすので
+    写し取り 1 回では足りない。native の口は ROM の表 0x1E6698 から式で滑らせる
+    （doc/native-engine.md の 6.41）。ここが壊れると、滑らずに飛ぶ音になる"""
+    ev = head()
+    ev += [(1.0, b'\xc0\x50')]                       # Square Lead
+    ev += note(0, 48, 100, 1.2, 0.6)                 # 1 音目。ここで写し取る
+    ev += [(1.9, b'\xb0\x41\x7f'), (1.9, b'\xb0\x05\x40')]   # 入・CC5=64
+    ev += note(0, 60, 100, 2.0, 1.0)                 # 48 から滑る
+    ev += note(0, 55, 100, 3.1, 1.0)                 # 60 から滑る
+    ev += [(4.2, b'\xb0\x05\x20')]                   # もっと速く
+    ev += note(0, 67, 100, 4.3, 1.0)
+    ev += [(5.4, b'\xb0\x41\x00')]                   # 切る
+    ev += note(0, 60, 100, 5.5, 0.8)                 # ここは滑らない
+    return [track(seq(ev))], 7.0
+
+
 CASES = {
     "piano":   case_piano,
     "chord":   case_chord,
@@ -214,6 +231,7 @@ CASES = {
     "bend":    case_bend,
     "lofi":    case_lofi,
     "egcc":    case_egcc,
+    "porta":   case_porta,
 }
 
 

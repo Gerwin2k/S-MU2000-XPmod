@@ -57,6 +57,10 @@ public:
 		u16 lfo = 0;                    // いま鳴らしている 0x0a（モジュレーションを足す前）
 		u16 cut = 0;                    // いま鳴らしている 0x00（明るさを足す前）
 		u16 drum_rel = 0;
+		// **ポルタメント**。glide は「まだ残っている音程のずれ」（セント × 256。
+		// 前の鍵の側が正にも負にもなる）。10ms ごとに step ずつ 0 へ寄せる
+		s32 glide = 0, glide_step = 0;
+		u64 glide_next = 0;
 		u64 age = 0;
 	};
 
@@ -178,6 +182,20 @@ public:
 			if (!s.on || !s.cal)
 				continue;
 			live++;
+			// ポルタメント: 10ms ごとに残りのずれを step だけ 0 へ寄せて、
+			// 音程のレジスタを書き直す（6.41）
+			if (s.glide && s.elem && s.wave) {
+				while (s.glide && s.glide_next <= clock) {
+					if (s.glide > 0)
+						s.glide = s.glide > s.glide_step ? s.glide - s.glide_step : 0;
+					else
+						s.glide = -s.glide > s.glide_step ? s.glide + s.glide_step : 0;
+					s.glide_next += nv::PORTA_TICK;
+				}
+				m_poke(u32(i) * 64 + 0x11, pitch_of(s));
+			}
+			if (s.glide && s.glide_next < next)
+				next = s.glide_next;
 			if (s.tpos >= s.cal->filter_env.size())
 				continue;
 			const std::vector<nv::fstep> &fe = s.cal->filter_env;
@@ -253,6 +271,10 @@ public:
 		int rev = -1, cho = -1;                // CC91 / CC93（送り）
 		int bri = -1, res = -1;                // CC74 / CC71（明るさ・共振）
 		int var = -1;                          // CC94（バリエーション送り）
+		// ポルタメント（CC5 速さ・CC65 入切・CC84 で滑り出す鍵を指定）。
+		// last は最後に押した鍵で、つぎの音はここから滑る
+		int porta_time = 0, porta_src = -1, last = -1;
+		bool porta_on = false;
 		// **こちらでさばけない CC が既定から外れている**印（ビットごとに 1 つ）。
 		// 立っている間、そのパートの音は firmware に鳴らしてもらう。
 		// 黙って無視すると、ポルタメントや EG の設定が効かない音になる
@@ -338,9 +360,6 @@ public:
 	{
 		struct e { u8 cc, def; };
 		static const e LIST[] = {
-			{ 0x05, 0 },     // ポルタメントの速さ
-			{ 0x41, 0 },     // ポルタメント 入切（64 以上で入）
-			{ 0x54, 0 },     // ポルタメント コントロール
 		};
 		for (size_t i = 0; i < sizeof(LIST) / sizeof(LIST[0]); i++)
 			if (LIST[i].cc == cc)
@@ -363,7 +382,8 @@ public:
 	static bool handles_cc(int cc)
 	{
 		return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01 ||
-		       cc == 0x5b || cc == 0x5d || cc == 0x4a || cc == 0x47;
+		       cc == 0x5b || cc == 0x5d || cc == 0x4a || cc == 0x47 ||
+		       cc == 0x05 || cc == 0x41 || cc == 0x54;
 	}
 
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
@@ -381,6 +401,9 @@ public:
 		case 0x5d: p.cho = value; break;
 		case 0x4a: p.bri = value; break;
 		case 0x47: p.res = value; break;
+		case 0x05: p.porta_time = value; return true;     // ポルタメントの速さ
+		case 0x41: p.porta_on = value >= 64; return true; // ポルタメント 入切
+		case 0x54: p.porta_src = value & 0x7f; return true;   // 滑り出す鍵を指定
 		case 0x40:                             // ダンパー
 			p.damper = value >= 64;
 			if (!p.damper)
@@ -459,16 +482,22 @@ private:
 		}
 	}
 
+	// そのスロットの、いまの音程レジスタ（ベンドと滑りの残りを入れて作る）
+	u16 pitch_of(const slot_use &s) const
+	{
+		const part_cc &pc = m_cc[s.part];
+		return nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(s.elem),
+		                     nv::bend_cents(pc.bend, pc.range) + nv::elem_tune(s.elem)
+		                     + s.glide / 256);
+	}
+
 	void apply_bend(int part)
 	{
 		for (int i = 0; i < SLOTS; i++) {
 			slot_use &s = m_slot[i];
 			if (!s.on || s.part != part || !s.elem || !s.wave)
 				continue;
-			m_poke(u32(i) * 64 + 0x11,
-			       nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(s.elem),
-			                     nv::bend_cents(m_cc[part].bend, m_cc[part].range)
-			                     + nv::elem_tune(s.elem)));
+			m_poke(u32(i) * 64 + 0x11, pitch_of(s));
 		}
 	}
 
@@ -642,8 +671,24 @@ public:
 			}
 			su.att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
 			const part_cc &pc = m_cc[part];
+			// **ポルタメント**（6.41）。前の鍵（CC84 があればその鍵）の音程で
+			// 鳴らし始めて、10ms ごとに寄せていく。残りのずれはセント × 256 で持つ。
+			// 追従を掛けるのは、鍵 1 つぶんの音程がその要素の追従で決まるから
+			su.glide = 0;
+			su.glide_step = 0;
+			const int src = pc.porta_src >= 0 ? pc.porta_src : pc.last;
+			if (pc.porta_on && src >= 0 && src != note) {
+				su.glide_step = nv::porta_step(m_rom, pc.porta_time);
+				if (su.glide_step > 0) {
+					su.glide = (src - note) * nv::key_follow(el) * 256;
+					// firmware の 10ms タイマは世界共通なので、鍵を押した時刻からで
+					// なく**格子**に乗せる（同時に鳴る音の滑りがそろう）
+					su.glide_next = (m_clock / nv::PORTA_TICK + 1) * nv::PORTA_TICK;
+				}
+			}
 			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,
-			                                  nv::defaults(), nv::bend_cents(pc.bend, pc.range));
+			                                  nv::defaults(),
+			                                  nv::bend_cents(pc.bend, pc.range) + su.glide / 256);
 			if (c && c->has(0x32))
 				sr.set(0x32, pan_reg(*c, part));
 			su.lfo = sr.v[0x0a];
@@ -671,10 +716,24 @@ public:
 				keymask |= u64(1) << slot;
 			any = true;
 		}
+		if (any) {
+			m_cc[part].last = note;      // つぎの音はここから滑る
+			m_cc[part].porta_src = -1;   // CC84 の指定は 1 度で使い切る
+		}
 		if (!keymask)
 			return any;                  // 遅らせた要素だけの音もある
 		key_on(keymask);
 		return true;
+	}
+
+	// **firmware が鳴らした音**も、最後に押した鍵として覚える。
+	// これが無いと、写し取りの 1 音目のつぎの音が滑らない
+	void note_fw(int part, int note)
+	{
+		if (part < 0 || part >= PARTS)
+			return;
+		m_cc[part].last = note;
+		m_cc[part].porta_src = -1;
 	}
 
 	// 鍵を離す。鳴っていなければ false
