@@ -15,6 +15,7 @@
 #pragma once
 
 #include "blocks.h"
+#include "blocks2.h"
 #include "reverb.h"
 #include "xg/fx_params.h"
 
@@ -56,7 +57,8 @@ inline float fx_value(const xg::fx_param &p, int raw, float def = 0.0f)
 class fx_slot
 {
 public:
-	enum class kind { none, thru, reverb, early, delay, mod, rotary, drive, eq, wah, dyn, lofi };
+	enum class kind { none, thru, reverb, early, delay, mod, rotary, drive, eq, wah, dyn, lofi,
+	                  ring, slice, isolator, reso, cancel, enhancer, pitch, talk, chain };
 
 	void set_rate(float rate)
 	{
@@ -71,6 +73,14 @@ public:
 		m_wah.set_rate(rate);
 		m_dyn.set_rate(rate);
 		m_lofi.set_rate(rate);
+		m_ring.set_rate(rate);
+		m_slice.set_rate(rate);
+		m_iso.set_rate(rate);
+		m_reso.set_rate(rate);
+		m_cancel.set_rate(rate);
+		m_enh.set_rate(rate);
+		m_pitch.set_rate(rate);
+		m_talk.set_rate(rate);
 	}
 
 	kind current() const { return m_kind; }
@@ -99,6 +109,14 @@ public:
 		m_wah.reset();
 		m_dyn.reset();
 		m_lofi.reset();
+		m_ring.reset();
+		m_slice.reset();
+		m_iso.reset();
+		m_reso.reset();
+		m_cancel.reset();
+		m_enh.reset();
+		m_pitch.reset();
+		m_talk.reset();
 	}
 
 	void process(float l, float r, float &ol, float &orr)
@@ -126,6 +144,31 @@ public:
 		case kind::wah:    m_wah.process(l, r, ol, orr); break;
 		case kind::dyn:    m_dyn.process(l, r, ol, orr); break;
 		case kind::lofi:   m_lofi.process(l, r, ol, orr); break;
+		case kind::ring:   m_ring.process(l, r, ol, orr); break;
+		case kind::slice:  m_slice.process(l, r, ol, orr); break;
+		case kind::isolator: m_iso.process(l, r, ol, orr); break;
+		case kind::reso:   m_reso.process(l, r, ol, orr); break;
+		case kind::cancel: m_cancel.process(l, r, ol, orr); break;
+		case kind::enhancer: m_enh.process(l, r, ol, orr); break;
+		case kind::pitch:  m_pitch.process(l, r, ol, orr); break;
+		case kind::talk:   m_talk.process(l, r, ol, orr); break;
+		case kind::chain: {
+			// 組み合わせの種類（CMP+DT+DLY など）は、順につないで通す
+			float a = l, b = r, x = 0.0f, y = 0.0f;
+			if (m_chain_comp) { m_dyn.process(a, b, x, y); a = x; b = y; }
+			if (m_chain_wah)  { m_wah.process(a, b, x, y); a = x; b = y; }
+			if (m_chain_drive){ m_drv.process(a, b, x, y); a = x; b = y; }
+			if (m_chain_rotary){ m_rot.process(a, b, x, y); a = x; b = y; }
+			if (m_chain_delay) {
+				// ディレイは「足す」形（実機も直の音は減らない）
+				m_dly.process(a, b, x, y);
+				a += x * m_chain_delay_mix;
+				b += y * m_chain_delay_mix;
+			}
+			ol = a;
+			orr = b;
+			break;
+		}
 		case kind::thru:   ol = l; orr = r; break;
 		default:           ol = orr = 0.0f; break;
 		}
@@ -136,16 +179,25 @@ public:
 	{
 		if (msb == 0x00) return kind::none;
 		if (msb == 0x40) return kind::thru;
+		// 形が決まっているもの
+		if (msb == 0x70 || msb == 0x71) return kind::ring;
+		if (msb == 0x72) return kind::slice;
+		if (msb == 0x73) return kind::isolator;
+		if (msb == 0x74) return kind::reso;
+		if (msb == 0x55 || msb == 0x14) return kind::cancel;
+		if (msb == 0x51) return kind::enhancer;
+		if (msb == 0x50) return kind::pitch;
+		if (msb == 0x5d) return kind::talk;
+		if (msb == 0x58) return kind::early;                 // AMBIENCE は短い残響として
+		if (msb == 0x5f || msb == 0x60 || msb == 0x61) return kind::chain;
 		if ((msb >= 0x01 && msb <= 0x04) || (msb >= 0x10 && msb <= 0x14)) return kind::reverb;
 		if (msb >= 0x09 && msb <= 0x0b) return kind::early;
 		if ((msb >= 0x05 && msb <= 0x08) || msb == 0x15 || msb == 0x16) return kind::delay;
 		if (msb == 0x41 || msb == 0x42 || msb == 0x57 || msb == 0x43 || msb == 0x44 ||
 		    msb == 0x48 || msb == 0x68 || msb == 0x6b || msb == 0x6c || msb == 0x6e ||
-		    msb == 0x6f || msb == 0x50 || msb == 0x51 || msb == 0x55 || msb == 0x58 ||
-		    msb == 0x5d || msb == 0x70 || msb == 0x71) return kind::mod;
+		    msb == 0x6f) return kind::mod;
 		if (msb == 0x45 || msb == 0x46 || msb == 0x47 || msb == 0x56 || msb == 0x63) return kind::rotary;
-		if (msb == 0x49 || msb == 0x4a || msb == 0x4b || msb == 0x62 ||
-		    msb == 0x5f || msb == 0x60 || msb == 0x61) return kind::drive;
+		if (msb == 0x49 || msb == 0x4a || msb == 0x4b || msb == 0x62) return kind::drive;
 		if (msb == 0x4c || msb == 0x4d || msb == 0x73) return kind::eq;
 		if (msb == 0x4e || msb == 0x52 || msb == 0x6d || msb == 0x74) return kind::wah;
 		if (msb == 0x53 || msb == 0x54 || msb == 0x69) return kind::dyn;
@@ -336,6 +388,129 @@ private:
 			m_dyn.set_params(p);
 			break;
 		}
+		case kind::ring: {
+			ring_fx::params p;
+			// 掛ける波の高さ（粗いほうと細かいほう）
+			// FreqCourse は表に Hz が入っている。Freq Fine は細かい足し引き
+			p.freq_hz = clampf(par("FreqCourse", 400.0f) + par("Freq Fine", 0.0f), 10.0f, 8000.0f);
+			p.depth = 1.0f;                       // 混ぜ具合は Dry/Wet のほうで決まる
+			p.dry_wet = wet_of(1.0f);
+			p.by_envelope = (m_type >> 7) == 0x70;
+			p.sens = clampf(raw_of("Sensitivty", 64) / 127.0f, 0.0f, 1.0f);
+			m_ring.set_params(p);
+			break;
+		}
+		case kind::slice: {
+			slice_fx::params p;
+			// DivideType は 1 拍を何分割するか。テンポは分からないので 120 とみなす
+			// DivideType は 1 拍の分け方。テンポは分からないので 120 とみなす
+			p.rate_hz = clampf(2.0f * std::max(1.0f, raw_of("DivideType", 4)), 0.5f, 24.0f);
+			p.duty = clampf(par("Gate Time", 50.0f) / 100.0f, 0.05f, 0.95f);
+			p.depth = wet_of(1.0f);               // 切る深さは Dry/Wet に従う
+			m_slice.set_params(p);
+			break;
+		}
+		case kind::isolator: {
+			isolator_fx::params p;
+			p.low_hz = 200.0f;
+			p.high_hz = 2000.0f;
+			// Level は 0-127（64 で素通し）、Mute は 0/1
+			p.low_gain  = raw_of("Low Mute", 0)  > 0 ? 0.0f : clampf(raw_of("Low Level", 64) / 64.0f, 0.0f, 2.0f);
+			p.mid_gain  = raw_of("Mid Mute", 0)  > 0 ? 0.0f : clampf(raw_of("Mid Level", 64) / 64.0f, 0.0f, 2.0f);
+			p.high_gain = raw_of("High Mute", 0) > 0 ? 0.0f : clampf(raw_of("HighLevel", 64) / 64.0f, 0.0f, 2.0f);
+			m_iso.set_params(p);
+			break;
+		}
+		case kind::reso: {
+			reso_fx::params p;
+			// LOW RESO は低いところだけを共振させて残す種類。実機の出音もほぼ低音だけ
+			p.cutoff_hz = clampf(60.0f + raw_of("Resoltn", 0) * 4.0f, 40.0f, 600.0f);
+			p.resonance = clampf(2.0f + raw_of("Mod FB", 64) / 24.0f, 1.0f, 8.0f);
+			p.dry_wet = wet_of(1.0f);
+			m_reso.set_params(p);
+			break;
+		}
+		case kind::cancel: {
+			cancel_fx::params p;
+			p.low_hz = par("CrsoverFrq", 120.0f);
+			if (p.low_hz < 40.0f || p.low_hz > 1000.0f)
+				p.low_hz = 120.0f;
+			p.high_hz = 8000.0f;
+			m_cancel.set_params(p);
+			break;
+		}
+		case kind::enhancer: {
+			enhancer_fx::params p;
+			p.hpf_hz = par("HPF Cutoff", 2000.0f);
+			p.drive = clampf(raw_of("Drive", 64) / 127.0f, 0.0f, 1.0f);
+			p.mix = clampf(raw_of("Mix Level", 40) / 127.0f, 0.0f, 1.0f);
+			m_enh.set_params(p);
+			break;
+		}
+		case kind::pitch: {
+			pitch_fx::params p;
+			// Pitch は半音（64 が 0）、Fine はセント
+			p.cents = (raw_of("Pitch", 64) - 64.0f) * 100.0f + (raw_of("Fine 1", 64) - 64.0f);
+			p.dry_wet = wet_of(0.5f);
+			m_pitch.set_params(p);
+			break;
+		}
+		case kind::talk: {
+			talk_fx::params p;
+			p.vowel = clampf(raw_of("Vowel", 0) / 25.0f, 0.0f, 4.0f);
+			p.rate_hz = clampf(par("Move Speed", 0.0f), 0.0f, 10.0f);
+			p.drive = clampf(raw_of("Drive", 40) / 127.0f, 0.0f, 1.0f);
+			p.dry_wet = wet_of(1.0f);
+			m_talk.set_params(p);
+			break;
+		}
+		case kind::chain: {
+			// どれを通すかは種類で決まる（0x5f 歪み+ディレイ / 0x60 コンプ+歪み+ディレイ /
+			// 0x61 ワウ+歪み+ディレイ）
+			const int msb = m_type >> 7;
+			m_chain_comp = msb == 0x60;
+			m_chain_wah = msb == 0x61;
+			m_chain_drive = true;
+			m_chain_rotary = false;
+			m_chain_delay = true;
+			m_chain_delay_mix = clampf(raw_of("Delay Mix", 64) / 127.0f, 0.0f, 1.0f);
+
+			dyn_fx::params c;
+			c.threshold_db = par("Threshold", -20.0f);
+			c.ratio = std::max(1.0f, par("Ratio", 4.0f));
+			c.attack_ms = par("Attack", 5.0f);
+			c.release_ms = par("Release", 100.0f);
+			m_dyn.set_params(c);
+
+			wah_fx::params w;
+			w.by_envelope = true;
+			w.sens = clampf(raw_of("Sensitivty", 64) / 127.0f, 0.0f, 1.0f);
+			const float center = clampf(par("CutoffFreq", 800.0f), 100.0f, 6000.0f);
+			w.low_hz = center * 0.8f;
+			w.high_hz = clampf(center * 5.0f, 500.0f, 14000.0f);
+			w.resonance = clampf(par("Resonance", 30.0f) / 20.0f, 0.5f, 3.0f);
+			m_wah.set_params(w);
+
+			drive_fx::params d;
+			d.drive = clampf(raw_of("Dist Drive", 60) / 127.0f, 0.0f, 1.0f);
+			d.edge = 0.5f;
+			d.out_level = clampf(raw_of("DistOutLvl", 64) / 49.0f, 0.0f, 2.6f);
+			d.lpf_hz = par("LPF Cutoff", 4000.0f);
+			d.eq_low_db = gain_db("DT LowGain");
+			d.eq_mid_db = gain_db("DT MidGain");
+			d.dry_wet = 1.0f;
+			m_drv.set_params(d);
+
+			delay_fx::params dl;
+			dl.l_ms = par("LchDelay", par("Delay", 300.0f));
+			dl.r_ms = par("RchDelay", dl.l_ms);
+			dl.c_ms = dl.l_ms;
+			dl.fb_ms = par("FB Delay", dl.l_ms);
+			dl.feedback = clampf((raw_of("FB Level", raw_of("DelayFBLvl", 64)) / 64.0f - 1.0f) * 1.2f, -0.9f, 0.9f);
+			dl.c_level = 0.0f;
+			m_dly.set_params(dl);
+			break;
+		}
 		case kind::lofi: {
 			lofi_fx::params p;
 			p.bits = clampf(par("WordLength", par("Bit Assign", 8.0f)), 1.0f, 16.0f);
@@ -364,6 +539,11 @@ private:
 	const xg::fx_def *m_def = nullptr;
 	float m_rate = 44100.0f;
 
+	// 組み合わせの種類で、どれを通すか
+	bool m_chain_comp = false, m_chain_wah = false, m_chain_drive = true;
+	bool m_chain_rotary = false, m_chain_delay = true;
+	float m_chain_delay_mix = 0.5f;
+
 	reverb    m_rev;
 	early_ref m_er;
 	delay_fx  m_dly;
@@ -374,6 +554,14 @@ private:
 	wah_fx    m_wah;
 	dyn_fx    m_dyn;
 	lofi_fx   m_lofi;
+	ring_fx     m_ring;
+	slice_fx    m_slice;
+	isolator_fx m_iso;
+	reso_fx     m_reso;
+	cancel_fx   m_cancel;
+	enhancer_fx m_enh;
+	pitch_fx    m_pitch;
+	talk_fx     m_talk;
 };
 
 // 7 つの口（リバーブ・コーラス・バリエーション・インサーション 1-4）をまとめたもの

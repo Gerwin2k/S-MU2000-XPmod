@@ -1018,7 +1018,9 @@ int xg_read(const std::vector<u8> &ram, int hi, int mid, int lo, int size)
 // インサーション n のパラメータ 1-10 が 2 バイトの種類のときの値（16bit がそのまま並ぶ）
 int ins_wide(const std::vector<u8> &ram, int n, int addr)
 {
-	const u32 off = xg::ram::INS_BLOCK[n] + xg::ram::INS_WIDE + u32(2 * (addr - 0x30));
+	// 2 バイトのパラメータは 0x30, 0x32, ... と 2 番地ずつ使い、RAM にも 2 バイトずつ並ぶ。
+	// つまり RAM での位置は「番地の差」そのもの（前は 2 倍していて 1 つおきに読んでいた）
+	const u32 off = xg::ram::INS_BLOCK[n] + xg::ram::INS_WIDE + u32(addr - 0x30);
 	if (off + 1 >= ram.size())
 		return -1;
 	return ram[off] << 8 | ram[off + 1];
