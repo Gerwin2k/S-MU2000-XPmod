@@ -12,6 +12,7 @@
 //   build/nativeplay.exe <rom ディレクトリ> <出力.wav> [-b msb,lsb,prog] [-n 鍵] [-v 強さ]
 //                        [-s 秒] [--firmware]
 //   --firmware を付けると、比べるための「firmware に鳴らさせた版」を出す。
+#include "compat/platform.h"
 #include "mu2000.h"
 #include "xg/native_voice.h"
 #include "xg/ram.h"
@@ -57,6 +58,15 @@ void poke_slot(mu2000 &mu, int slot, const xg::nv::slot_regs &r)
 			mu.poke_swp(true, u32(slot) * 64 + u32(i), r.v[i]);
 }
 
+// まとめて keyon する
+void key_on_mask(mu2000 &mu, u64 mask)
+{
+	const u32 MASK_REG[4] = { 0x1cf, 0x1ce, 0x18f, 0x18e };
+	for (int i = 0; i < 4; i++)
+		mu.poke_swp(true, MASK_REG[i], u16((mask >> (i * 16)) & 0xffff));
+	mu.poke_swp(true, 0x20e, 1);
+}
+
 // keyon のマスクを立てて引き金を引く
 void key_on(mu2000 &mu, int slot)
 {
@@ -66,11 +76,12 @@ void key_on(mu2000 &mu, int slot)
 	mu.poke_swp(true, 0x20e, 1);
 }
 
-// firmware に 1 音鳴らしてもらって、そのときのレジスタを写し取る
-xg::nv::voice_cal take_cal(mu2000 &mu, const u8 *rom, const u8 *elem,
-                           int note, int vel, u32 rate)
+// firmware に 1 音鳴らしてもらって、そのときのレジスタを写し取る。
+// 要素が複数ある音色では、鳴ったスロットの数だけ返す（スロット番号の順）
+std::vector<xg::nv::voice_cal> take_cals(mu2000 &mu, const u8 *rom, u32 rec,
+                                         int note, int vel, u32 rate)
 {
-	xg::nv::voice_cal cal;
+	std::vector<xg::nv::voice_cal> out;
 	std::map<u32, u16> latest, seen;      // latest = 最後の値、seen = 引き金を引いた瞬間の写し
 	u64 mask = 0, keyed = 0;
 	mu.set_swp_watch([&](bool master, u32 reg, u16 value) {
@@ -93,24 +104,58 @@ xg::nv::voice_cal take_cal(mu2000 &mu, const u8 *rom, const u8 *elem,
 	for (u32 i = 0; i < rate / 25; i++)
 		mu.run_sample(l, r);
 	mu.set_swp_watch(nullptr);
-	int ch = -1;
-	for (int c = 0; c < 64; c++)
-		if (keyed & (u64(1) << c)) { ch = c; break; }
-	if (ch < 0)
-		return cal;
-	// 鳴らす値として何を採るか。
-	//   0x05・0x0a は LFO の更新で動き続けるので**引き金の瞬間**
-	//   ほかは、鳴らしたあとに落ち着いた値（0x01 は鳴らしてから上がっていく）
-	for (int i = 0; i < 0x40; i++) {
-		const bool at_key = (i == 0x05 || i == 0x0a || i == 0x11);
-		const std::map<u32, u16> &src = at_key ? seen : latest;
-		const auto it = src.find(u32(ch) * 64 + u32(i));
-		if (it != src.end())
-			cal.set(i, it->second);
+	for (int ch = 0; ch < 64; ch++) {
+		if (!(keyed & (u64(1) << ch)))
+			continue;
+		xg::nv::voice_cal cal;
+		// 鳴らす値として何を採るか。
+		//   0x05・0x0a・0x11 は LFO の更新で動き続けるので**引き金の瞬間**
+		//   ほかは、鳴らしたあとに落ち着いた値（0x01 は鳴らしてから上がっていく）
+		for (int i = 0; i < 0x40; i++) {
+			const bool at_key = (i == 0x05 || i == 0x0a || i == 0x11);
+			const std::map<u32, u16> &src = at_key ? seen : latest;
+			const auto it = src.find(u32(ch) * 64 + u32(i));
+			if (it != src.end())
+				cal.set(i, it->second);
+		}
+		// **要素ごとに**音量を校正する。そのスロットに書かれた 0x09 が、
+		// firmware がその要素に使った減衰そのもの。
+		// どの要素かは、そのスロットが鳴らしている波形の番地で見分ける
+		const int nel = xg::nv::element_count(rom, rec);
+		int idx = -1;
+		if (cal.has(0x16) && cal.has(0x17)) {
+			const u32 want = u32(cal.reg[0x16]) << 16 | cal.reg[0x17];
+			for (int k = 0; k < nel; k++) {
+				const u8 *e2 = xg::nv::element(rom, rec, k);
+				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), note);
+				if (w2 && xg::nv::read_wave(w2).format_addr == want) { idx = k; break; }
+			}
+		}
+		if (idx < 0) {                      // 見分けられなければ順番で
+			int cnt = int(out.size());
+			idx = 0;
+			for (int k = 0; k < nel; k++) {
+				const u8 *e2 = xg::nv::element(rom, rec, k);
+				if (!xg::nv::element_active(e2, note, vel))
+					continue;
+				if (cnt-- == 0) { idx = k; break; }
+			}
+		}
+		const u8 *el = xg::nv::element(rom, rec, idx);
+		cal.base_level = xg::nv::calibrate_level(rom, el,
+		    cal.has(9) ? (cal.reg[9] & 0xff) : mu.nvram()[0x3e96a], note, vel);
+		cal.have = true;
+		out.push_back(cal);
 	}
-	cal.base_level = xg::nv::calibrate_level(rom, elem, mu.nvram()[0x3e96a], note, vel);
-	cal.have = true;
-	return cal;
+	return out;
+}
+
+// 1 つだけ要るとき
+xg::nv::voice_cal take_cal(mu2000 &mu, const u8 *rom, u32 rec,
+                           int note, int vel, u32 rate)
+{
+	const std::vector<xg::nv::voice_cal> v = take_cals(mu, rom, rec, note, vel, rate);
+	return v.empty() ? xg::nv::voice_cal() : v[0];
 }
 
 } // namespace
@@ -127,6 +172,7 @@ int main(int argc, char **argv)
 	double seconds = 2.0;
 	bool firmware = false, compare = false, song = false, dump_voice = false, copyall = false;
 	int sweep = 0, volsweep = 0, levels = 0;
+	bool bench = false;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -139,6 +185,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--song")) song = true;
 		else if (!std::strcmp(argv[i], "--dump-voice")) dump_voice = true;
 		else if (!std::strcmp(argv[i], "--copyall")) copyall = true;
+		else if (!std::strcmp(argv[i], "--bench")) bench = true;
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -220,6 +267,59 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	// --bench: 「firmware を走らせたまま」と「SH-2 を止めて」で、
+	// 1 サンプルを作るのに何ナノ秒かかるかを測る。これが軽量化の答え
+	if (bench) {
+		const u8 *elem0 = xg::nv::element(rom, rec, 0);
+		const int nelem = xg::nv::element_count(rom, rec);
+		const std::vector<u8> base = mu.save_state();
+		const u32 SECS = 6;
+		auto run = [&](bool cpu_on, int voices) {
+			std::string e2;
+			mu.load_state(base.data(), base.size(), e2);
+			mu.set_cpu_enabled(true);
+			// 声を鳴らす
+			if (cpu_on) {
+				for (int v = 0; v < voices; v++)
+					for (u8 b : { u8(0x90), u8(48 + v * 2), u8(vel & 0x7f) })
+						mu.midi_in(b, 0);
+				for (u32 i = 0; i < RATE / 10; i++) { s32 a = 0, b2 = 0; mu.run_sample(a, b2); }
+			} else {
+				const std::vector<xg::nv::voice_cal> cs = take_cals(mu, rom, rec, 60, vel, RATE);
+				mu.load_state(base.data(), base.size(), e2);
+				mu.set_cpu_enabled(false);
+				u64 km = 0;
+				int slot = 0;
+				for (int v = 0; v < voices; v++) {
+					for (int k = 0; k < nelem && slot < 60; k++) {
+						const u8 *el = xg::nv::element(rom, rec, k);
+						if (!xg::nv::element_active(el, 48 + v * 2, vel))
+							continue;
+						const xg::nv::voice_cal *c = cs.empty() ? nullptr : &cs[std::min(cs.size() - 1, size_t(k))];
+						const int att = xg::nv::volume_att(rom, el, c ? c->base_level : 64, 48 + v * 2, vel);
+						poke_slot(mu, slot, xg::nv::build_note(rom, el, 48 + v * 2, att, c));
+						km |= u64(1) << slot;
+						slot++;
+					}
+				}
+				key_on_mask(mu, km);
+			}
+			const u64 t0 = smu2000::perf_ticks();
+			for (u32 i = 0; i < SECS * RATE; i++) { s32 a = 0, b2 = 0; mu.run_sample(a, b2); }
+			const u64 t1 = smu2000::perf_ticks();
+			mu.set_cpu_enabled(true);
+			return 1e9 * double(t1 - t0) / double(smu2000::perf_freq()) / double(SECS * RATE);
+		};
+		std::printf("%c声の数   firmware あり   SH-2 なし   速さの比%c", 10, 10);
+		for (int v : { 1, 8, 16, 32 }) {
+			const double a = run(true, v);
+			const double b = run(false, v);
+			std::printf("%6d %13.0f ns %10.0f ns %8.2f 倍%c", v, a, b, a / b, 10);
+			std::fflush(stdout);
+		}
+		return 0;
+	}
+
 	// --levels: 音色ごとに「firmware で鳴らした音」と「SH-2 なしで鳴らした音」の
 	// 大きさを比べる。音量の式の残りが、実際どれだけ効くかを見る
 	if (levels) {
@@ -235,12 +335,13 @@ int main(int argc, char **argv)
 			const u8 *pr2 = mu.nvram().data() + part0;
 			const u32 rec2 = u32(pr2[xg::ram::PART_VOICE]) << 24 | u32(pr2[xg::ram::PART_VOICE + 1]) << 16 |
 			                 u32(pr2[xg::ram::PART_VOICE + 2]) << 8 | pr2[xg::ram::PART_VOICE + 3];
-			if (!rec2 || xg::nv::element_count(rom, rec2) != 1)
+			if (!rec2)
 				continue;
+			const int nelem = xg::nv::element_count(rom, rec2);
 			// **写し取り**: firmware に 1 回鳴らしてもらって、その音色の癖を覚える
-			const u8 *el = xg::nv::element(rom, rec2, 0);
 			const std::vector<u8> before = mu.save_state();
-			const xg::nv::voice_cal cal = take_cal(mu, rom, el, note, vel, RATE);
+			const std::vector<xg::nv::voice_cal> cals =
+			    take_cals(mu, rom, rec2, note, vel, RATE);
 			std::string err0;
 			if (!mu.load_state(before.data(), before.size(), err0)) { std::fprintf(stderr, "%s%c", err0.c_str(), 10); return 1; }
 
@@ -262,9 +363,24 @@ int main(int argc, char **argv)
 			std::string err2;
 			if (!mu.load_state(saved.data(), saved.size(), err2)) { std::fprintf(stderr, "%s%c", err2.c_str(), 10); return 1; }
 			mu.set_cpu_enabled(false);
-			const int att = xg::nv::volume_att(rom, el, cal.base_level, note, vel);
-			poke_slot(mu, 0, xg::nv::build_note(rom, el, note, att, &cal));
-			key_on(mu, 0);
+			u64 km = 0;
+			int used = 0;
+			for (int k = 0; k < nelem; k++) {
+				const u8 *el = xg::nv::element(rom, rec2, k);
+				if (!xg::nv::element_active(el, note, vel))
+					continue;
+				const u8 *we = xg::nv::wave_entry(rom, xg::nv::wave_set(el), note);
+				const xg::nv::voice_cal *c = we ? xg::nv::match_cal(cals, xg::nv::read_wave(we).format_addr) : nullptr;
+				if (!c && size_t(used) < cals.size())
+					c = &cals[used];
+				const int att = xg::nv::volume_att(rom, el, c ? c->base_level : 64, note, vel);
+				poke_slot(mu, used, xg::nv::build_note(rom, el, note, att, c));
+				km |= u64(1) << used;
+				used++;
+			}
+			if (!km)
+				continue;
+			key_on_mask(mu, km);
 			double nv = 0.0;
 			nv_pcm.reserve(RATE / 4);
 			for (u32 i = 0; i < RATE / 4; i++) {
@@ -303,7 +419,8 @@ int main(int argc, char **argv)
 			if (!mu.load_state(saved.data(), saved.size(), err2)) { std::fprintf(stderr, "%s%c", err2.c_str(), 10); return 1; }
 			if (fw > 1.0 && nv > 1.0) {
 				const double db = 20.0 * std::log10(nv / fw);
-				std::printf("%5d %9.1f %11.1f %+7.2f %+9.1f%c", pg, fw, nv, db, resid, 10);
+				std::printf("%5d %9.1f %11.1f %+7.2f %+9.1f  要素%d 実機%zu こちら%d%c",
+				            pg, fw, nv, db, resid, nelem, cals.size(), used, 10);
 				worst = std::max(worst, std::fabs(db));
 				sum += std::fabs(db);
 				rsum += resid;
@@ -499,12 +616,14 @@ int main(int argc, char **argv)
 
 	// --song: SH-2 を止めたまま、何音かを順に鳴らす（段 2 の「和音と声の取り合い」の入口）
 	if (song) {
-		const u8 *elem = xg::nv::element(rom, rec, 0);
+		const int nelem = std::min(4, xg::nv::element_count(rom, rec));
 		// 先に 1 音だけ firmware に鳴らしてもらって、この音色の癖を写し取る
 		const std::vector<u8> before = mu.save_state();
-		const xg::nv::voice_cal cal = take_cal(mu, rom, elem, 60, vel, RATE);
+		const std::vector<xg::nv::voice_cal> cals =
+		    take_cals(mu, rom, rec, 60, vel, RATE);
 		std::string errc;
 		if (!mu.load_state(before.data(), before.size(), errc)) { std::fprintf(stderr, "%s%c", errc.c_str(), 10); return 1; }
+		std::printf("要素 %d、写し取ったスロット %zu%c", nelem, cals.size(), 10);
 		mu.set_cpu_enabled(false);
 		std::vector<s16> out;
 		struct ev { double t; int note; bool on; int slot; };
@@ -531,14 +650,31 @@ int main(int argc, char **argv)
 			const double t = double(i) / RATE;
 			while (at < evs.size() && evs[at].t <= t) {
 				const ev &e = evs[at];
-				const int att = xg::nv::volume_att(rom, elem, cal.base_level, e.note, vel);
-				if (e.on) {
-					poke_slot(mu, e.slot, xg::nv::build_note(rom, elem, e.note, att, &cal));
-					key_on(mu, e.slot);
-				} else {
-					mu.poke_swp(true, u32(e.slot) * 64 + 9,
-					            xg::nv::release_reg(rom, elem, e.note, att));
+				// 要素の数だけスロットを使う。鍵と強さの範囲に入るものだけ
+				u64 keymask = 0;
+				int used = 0;
+				for (int k = 0; k < nelem; k++) {
+					const u8 *el = xg::nv::element(rom, rec, k);
+					if (!xg::nv::element_active(el, e.note, vel))
+						continue;
+					const u8 *we2 = xg::nv::wave_entry(rom, xg::nv::wave_set(el), e.note);
+					const xg::nv::voice_cal *c = we2 ? xg::nv::match_cal(cals, xg::nv::read_wave(we2).format_addr) : nullptr;
+					if (!c && size_t(used) < cals.size())
+						c = &cals[used];
+					used++;
+					const int slot = (e.slot * 4 + k) & 0x3f;
+					const int att = xg::nv::volume_att(rom, el,
+					    c ? c->base_level : 64, e.note, vel);
+					if (e.on) {
+						poke_slot(mu, slot, xg::nv::build_note(rom, el, e.note, att, c));
+						keymask |= u64(1) << slot;
+					} else {
+						mu.poke_swp(true, u32(slot) * 64 + 9,
+						            xg::nv::release_reg(rom, el, e.note, att));
+					}
 				}
+				if (e.on)
+					key_on_mask(mu, keymask);
 				at++;
 			}
 			s32 li = 0, ri = 0;
@@ -566,7 +702,7 @@ int main(int argc, char **argv)
 		const u8 *elem = xg::nv::element(rom, rec, 0);
 		// 先に 1 音だけ firmware に鳴らしてもらって癖を写し取る
 		const std::vector<u8> before1 = mu.save_state();
-		const xg::nv::voice_cal cal = take_cal(mu, rom, elem, note, vel, RATE);
+		const xg::nv::voice_cal cal = take_cal(mu, rom, rec, note, vel, RATE);
 		std::string err1;
 		if (!mu.load_state(before1.data(), before1.size(), err1)) { std::fprintf(stderr, "%s%c", err1.c_str(), 10); return 1; }
 		// ---- ここから SH-2 を止める

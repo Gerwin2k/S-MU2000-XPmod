@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace xg {
 namespace nv {
@@ -41,7 +42,22 @@ inline const u8 *element(const u8 *rom, u32 rec, int index = 0)
 {
 	return rom + rec + 12 + u32(index) * 84;
 }
-inline int element_count(const u8 *rom, u32 rec) { return rom[rec]; }
+// 記録の先頭のバイトは**要素のビットマスク**（1/3/7/15 ＝ 1〜4 要素）。
+// 数ではないので、立っているビットを数える
+inline int element_count(const u8 *rom, u32 rec)
+{
+	int n = 0;
+	for (int i = 0; i < 4; i++)
+		if (rom[rec] & (1 << i))
+			n++;
+	return n;
+}
+
+// その要素が、この鍵と強さで鳴るか（byte4,5 が鍵の範囲、byte6,7 が強さの範囲）
+inline bool element_active(const u8 *elem, int note, int vel)
+{
+	return note >= elem[4] && note <= elem[5] && vel >= elem[6] && vel <= elem[7];
+}
 
 // 波形の組の番号（7bit が 2 つ）
 inline int wave_set(const u8 *elem) { return (elem[2] << 7) | (elem[3] & 0x7f); }
@@ -232,7 +248,20 @@ struct voice_cal {
 
 	bool has(int r) const { return (mask & (u64(1) << r)) != 0; }
 	void set(int r, u16 v) { reg[r] = v; mask |= u64(1) << r; }
+
+	// そのスロットが鳴らしていた波形の番地（0x16/0x17）
+	u32 wave_addr() const { return u32(reg[0x16]) << 16 | reg[0x17]; }
 };
+
+// 要素と、写し取ったスロットを**波形の番地で**結び付ける。
+// 要素の並びとスロットの並びが同じとは限らないので、順番では当てにならない
+inline const voice_cal *match_cal(const std::vector<voice_cal> &cals, u32 want)
+{
+	for (const voice_cal &c : cals)
+		if (c.has(0x16) && c.has(0x17) && c.wave_addr() == want)
+			return &c;
+	return nullptr;
+}
 
 // 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
 inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
