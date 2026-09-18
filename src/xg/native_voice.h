@@ -28,6 +28,7 @@ constexpr u32 ATTACK_TAB = 0x1F4DB8;   // アタックの速さ（128 バイト�
 constexpr u32 DECAY_TAB  = 0x1F4E38;   // 減衰の速さ（128 バイト）
 constexpr u32 LEVEL_TAB  = 0x1E6818;   // 音量 0-127 → 減衰（128 バイト）
 constexpr u32 SLOT_TABLE = 0x1F4F58;   // スロット番号 → レジスタの先頭（4 バイト × 64）
+constexpr u32 CUTOFF_TAB = 0x1E5B58;   // フィルタの切る高さ（16bit。索引は記録の byte37）
 
 inline u16 rd16(const u8 *rom, u32 a) { return u16(rom[a] << 8 | rom[a + 1]); }
 inline u32 rd32(const u8 *rom, u32 a)
@@ -137,14 +138,17 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 		return r;
 	const wave_info w = read_wave(we);
 
-	// --- フィルタと LFO（式はまだ分かっていない。素直な値を置く）
-	r.set(0x00, d.filter1);
+	// --- フィルタ。切る高さは ROM の表（0x1E5B58）を byte37 で引く。
+	// 実機はここに鍵と強さの倍率を掛ける（`0x127FA4`）が、その係数がまだ分からない。
+	// 倍率 1 として表を引くだけでも、開き切りよりはずっと実機に近い
+	r.set(0x00, u16(0x1000 | (rd16(rom, CUTOFF_TAB + u32(elem[37]) * 2) & 0x7ff)));
 	r.set(0x01, d.bypass);
 	r.set(0x02, d.filter2);
 	r.set(0x03, d.post);
 	r.set(0x04, d.filter2p);
 	r.set(0x05, d.lfo_amp);
-	r.set(0x0a, d.lfo);
+	// LFO の型と刻み。上位は 0x40 | byte11（402 組で例外なし）、下位（音程の深さ）は 0
+	r.set(0x0a, u16((0x40 | (elem[11] & 0x3f)) << 8));
 	r.set(0x0b, d.r0b);
 	r.set(0x10, d.r10);
 
@@ -169,7 +173,8 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	const u8 atk = rom[ATTACK_TAB + std::min(0x7f, int(elem[73]) * 2)];
 	const u8 dc1 = rom[DECAY_TAB  + rate(elem[74])];
 	const u8 dc2 = rom[DECAY_TAB  + rate(elem[75])];
-	r.set(0x06, u16(atk << 8 | 0x7e));
+	// はじめの音量。アタックが最速（63）のときだけ 0 で、あとは 0x7e
+	r.set(0x06, u16(atk << 8 | (elem[73] >= 0x3f ? 0x00 : 0x7e)));
 	r.set(0x07, u16(dc1 << 8 | (((0x7f - elem[77]) * 2) & 0xff)));
 	r.set(0x08, u16(dc2 << 8 | (((0x7f - elem[78]) * 2) & 0xff)));
 	r.set(0x09, u16(att & 0xff));
