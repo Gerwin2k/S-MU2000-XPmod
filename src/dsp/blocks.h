@@ -140,8 +140,11 @@ public:
 		const float fl = m_l.tapf(ms(m_p.fb_ms));
 		const float fr = m_r.tapf(ms(m_p.fb_ms));
 
-		float bl = m_lp[0].lp(m_hp[0].hp(m_p.cross ? fr : fl)) * m_p.feedback;
-		float br = m_lp[1].lp(m_hp[1].hp(m_p.cross ? fl : fr)) * m_p.feedback;
+		// 戻すのは、出ている音（左右と真ん中）をまとめたもの。実機の LCR ディレイは
+		// 尾がはっきり残るので、1 本だけ戻すと足りない
+		const float mix = (fl + fr) * 0.5f + dc * 0.5f;
+		float bl = m_lp[0].lp(m_hp[0].hp(m_p.cross ? mix : mix)) * m_p.feedback;
+		float br = m_lp[1].lp(m_hp[1].hp(m_p.cross ? mix : mix)) * m_p.feedback;
 		bl = clampf(bl, -4.0f, 4.0f);
 		br = clampf(br, -4.0f, 4.0f);
 
@@ -401,12 +404,15 @@ public:
 	void process(float l, float r, float &ol, float &orr)
 	{
 		const float in = (l + r) * 0.5f;
-		const float g = 1.0f + clampf(m_p.drive, 0.0f, 1.0f) * 60.0f;
+		const float d = clampf(m_p.drive, 0.0f, 1.0f);
+		const float g = 1.0f + d * 60.0f;
 		float x = m_mid.process(m_low.process(in)) * g;
 		// edge が高いほど頭を角ばらせる
 		const float soft = soft_clip(x);
 		const float hard = hard_clip(x * 0.7f);
 		x = soft * (1.0f - m_p.edge) + hard * m_p.edge;
+		// 潰すと振幅が全振幅に張り付くので、持ち上げたぶんを戻す
+		x *= 1.0f / (1.0f + d * 12.0f);
 		x = m_dc.process(m_cab.lp(x));
 		const float wet = x * m_p.out_level;
 		ol = orr = wet * m_p.dry_wet + in * (1.0f - m_p.dry_wet);

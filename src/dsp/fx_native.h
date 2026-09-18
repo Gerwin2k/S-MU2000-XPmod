@@ -236,7 +236,8 @@ private:
 			p.r_ms = par("RchDelay", par("Rch Delay", p.l_ms * 1.3f));
 			p.c_ms = par("CchDelay", (p.l_ms + p.r_ms) * 0.5f);
 			p.fb_ms = par("FB Delay", par("FBDelay1", p.l_ms));
-			p.feedback = clampf(raw_of("FB Level", 64) / 64.0f - 1.0f, -0.95f, 0.95f);
+			// FB Level は 1-127 で 64 が 0。実機の尾に合わせて少し強めにする
+			p.feedback = clampf((raw_of("FB Level", 64) / 64.0f - 1.0f) * 1.2f, -0.95f, 0.95f);
 			p.c_level = clampf(raw_of("Cch Level", 100) / 127.0f, 0.0f, 1.0f);
 			p.hpf_hz = par("HPF Cutoff", 60.0f);
 			p.lpf_hz = par("LPF Cutoff", 8000.0f) * clampf(par("High Damp", 5.0f) / 5.0f, 0.3f, 2.0f);
@@ -282,7 +283,8 @@ private:
 			drive_fx::params p;
 			p.drive = clampf(raw_of("Drive", raw_of("Dist Drive", 60)) / 127.0f, 0.0f, 1.0f);
 			p.edge = clampf(raw_of("Edge", 64) / 127.0f, 0.0f, 1.0f);
-			p.out_level = clampf(raw_of("OutputLvl", raw_of("DistOutLvl", 64)) / 64.0f, 0.0f, 2.0f);
+			// 実機の歪みは思ったより小さい。同じ曲で rms を合わせた
+			p.out_level = clampf(raw_of("OutputLvl", raw_of("DistOutLvl", 64)) / 127.0f, 0.0f, 1.0f);
 			p.lpf_hz = par("LPF Cutoff", 4000.0f);
 			p.eq_low_db = gain_db("EQ LowGain");
 			p.eq_low_hz = par("EQ LowFreq", 200.0f);

@@ -1034,6 +1034,24 @@ void mu2000::native_fx_update()
 		{ nfx::INS1,      0x03, 0x00, 0x00, -1,    0 },
 	};
 
+	// パラメータの並びは、置き場ごとに違う（表の addr はインサーションの番地）。
+	//   リバーブ・コーラス … 1-10 は base+02〜0B の 1 バイト、11-16 は base+10〜15
+	//   バリエーション     … 1-10 は 02 01 42 から 2 バイトずつ、11-16 は 02 01 70〜75
+	//   インサーション     … 表の番地そのまま（2 バイトのものは +0x18 に 16bit で並ぶ）
+	auto read_param = [&](const slot_def &s, const xg::fx_param &p, int index) {
+		if (s.ins >= 0)
+			return p.addr >= 0x30 ? ins_wide(ram, s.ins, p.addr)
+			                      : xg_read(ram, s.hi, s.mid, s.base + p.addr, p.size);
+		if (s.id == nfx::VARIATION) {
+			if (p.addr >= 0x30 || index < 10)
+				return xg_read(ram, s.hi, s.mid, 0x42 + 2 * index, 2);
+			return xg_read(ram, s.hi, s.mid, 0x70 + (p.addr - 0x20), 1);
+		}
+		if (p.addr >= 0x20)
+			return xg_read(ram, s.hi, s.mid, s.base + 0x10 + (p.addr - 0x20), 1);
+		return xg_read(ram, s.hi, s.mid, s.base + p.addr, p.size);
+	};
+
 	for (const slot_def &s : SLOTS) {
 		const int type = xg_read(ram, s.hi, s.mid, s.base, 2);
 		if (type < 0)
@@ -1043,11 +1061,7 @@ void mu2000::native_fx_update()
 		const int n = def ? std::min(def->count, 16) : 0;
 		for (int i = 0; i < n; i++) {
 			const xg::fx_param &p = def->params[i];
-			int v;
-			if (s.ins >= 0 && p.addr >= 0x30)
-				v = ins_wide(ram, s.ins, p.addr);
-			else
-				v = xg_read(ram, s.hi, s.mid, s.base + p.addr, p.size);
+			const int v = read_param(s, p, i);
 			raw[i] = v < 0 ? int(p.lo) : v;
 		}
 		m_nfx.set(s.id, type, raw, n);
