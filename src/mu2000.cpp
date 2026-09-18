@@ -1505,11 +1505,12 @@ bool mu2000::native_midi(u8 byte, int port)
 		// こちらでさばける CC（音量・パン・ダンパー）は firmware に渡すだけなので短く。
 		// 知らない CC は firmware がすべてやるので、処理が終わるまで見る
 		// （5ms に詰めたら bend の残差が -35.8dB から -14dB に落ちた）
-		// こちらでさばける CC は渡すだけなので短く。ただし
-		//   * そのパートを firmware が鳴らしている間
-		//   * モジュレーション（firmware がソフトで揺れを増やしていく）
-		// は firmware に効かせてもらうので長く見る
-		const bool quick = mine && !m_fw_notes[part] && (n.d0 & 0x7f) != 0x01;
+		// こちらでさばける CC は渡すだけなので短く。ただし **そのパートを
+		// firmware が鳴らしている間**は、firmware に効かせてもらうので長く見る
+		// （渡したバイトは列に並ぶので、写し取りで回すときに順に処理される）
+		// まだ写し取っていないパートは、1 音目を firmware が鳴らすので、
+		// CC も firmware に効かせてもらう
+		const bool quick = mine && !m_fw_notes[part] && m_ndrv.part_learned(part);
 		m_fw_hold = std::max(m_fw_hold, u32(quick ? 44100 / 500 : 44100 / 50));
 		replay_note(n.status, n.d0, byte, port);
 		return true;
