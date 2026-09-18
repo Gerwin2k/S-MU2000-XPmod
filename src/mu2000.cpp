@@ -1356,5 +1356,12 @@ bool mu2000::load_state(const u8 *p, size_t n, std::string &err)
 	// MIDI OUT の途中の枠と溜めは保存していない。空から始める
 	m_tx_r = m_tx_w = 0;
 	m_tx_bit = -1;
+
+	// 軽量モード（C++ のエフェクト）の中身は状態に**入れない**。ディレイと残響の
+	// 遅延線だけで 5MB 近くあって、DAW の企画ファイルが膨らむわりに、得られるのは
+	// 「尾が切れない」だけだから（MEG の側の尾は SWP30 のリバーブ RAM に入っている）。
+	// ただし前の曲の尾が残ったままだと、戻した曲に混ざる。ここで消す
+	if (m_nfx_on)
+		m_nfx.reset();
 	return true;
 }
