@@ -557,6 +557,11 @@ public:
 		return it != m_cal.end() && ctx_ok(it->second, part);
 	}
 
+	// そのパートは firmware に任せきりか（知らない CC が効いている）。
+	// このパートでは写し取りをしても使い道が無いので、やらない
+	bool delegated(int part) const
+	{ return part >= 0 && part < PARTS && m_cc[part].unknown != 0; }
+
 	// その音を native で鳴らせるか（実際に鳴らす前に決める必要がある。
 	// 鳴らせないなら firmware に回すので、遅らせてはいけない）
 	bool can_play(int part, int note) const

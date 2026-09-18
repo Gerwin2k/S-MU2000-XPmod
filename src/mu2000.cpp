@@ -1629,7 +1629,8 @@ bool mu2000::native_midi(u8 byte, int port)
 	// まだ写し取っていない音（ドラムは音ごと）。firmware に鳴らさせて覚える
 	const u32 rec = m_ndrv.record_of(part);
 	const bool drum = m_ndrv.is_drum(part);
-	if ((rec || drum) && !m_learning) {
+	// 知らない CC で firmware に任せているパートは、写し取っても使わない
+	if ((rec || drum) && !m_learning && !m_ndrv.delegated(part)) {
 		m_learn_note = note;
 		m_learn_vel = vel;
 		m_learn_drum = drum ? m_ndrv.drum_key(part, note) : 0;
