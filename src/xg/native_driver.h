@@ -54,6 +54,7 @@ public:
 		const u8 *elem = nullptr;
 		const u8 *wave = nullptr;       // ベンドで音程を作り直すのに要る
 		const nv::voice_cal *cal = nullptr;
+		u16 lfo = 0;                    // いま鳴らしている 0x0a（モジュレーションを足す前）
 		u16 drum_rel = 0;
 		u64 age = 0;
 	};
@@ -162,7 +163,12 @@ public:
 				continue;
 			const std::vector<nv::fstep> &fe = s.cal->filter_env;
 			while (s.tpos < fe.size() && s.tstart + fe[s.tpos].at <= clock) {
-				m_poke(u32(i) * 64 + fe[s.tpos].reg, fe[s.tpos].v);
+				u16 v = fe[s.tpos].v;
+				if (fe[s.tpos].reg == 0x0a) {      // 深さにモジュレーションを足す
+					s.lfo = v;
+					v = lfo_reg(v, *s.cal, s.part);
+				}
+				m_poke(u32(i) * 64 + fe[s.tpos].reg, v);
 				s.tpos++;
 			}
 			if (s.tpos < fe.size() && s.tstart + fe[s.tpos].at < next)
@@ -206,6 +212,7 @@ public:
 	struct part_cc {
 		// -1 は「まだ動かされていない＝写し取ったときのまま」
 		int vol = -1, expr = -1, pan = -1;     // CC7 / CC11 / CC10
+		int mod = -1;                          // CC1（モジュレーション）
 		int bend = 8192, range = 2;            // ピッチベンドと、その幅（半音）
 		bool damper = false;                   // CC64
 	};
@@ -226,6 +233,8 @@ public:
 				m_cc[p].expr = b[ram::PART_EXP];
 			if (m_cc[p].pan < 0)
 				m_cc[p].pan = b[0x0e];
+			if (m_cc[p].mod < 0)
+				m_cc[p].mod = b[ram::PART_MOD];
 			// ベンド幅（08 pp 23。64 が 0 半音）。RPN でも SysEx でもここに入る
 			const int r2 = int(b[0x23]) - 64;
 			m_cc[p].range = r2 < 0 ? 0 : (r2 > 24 ? 24 : r2);
@@ -236,10 +245,11 @@ public:
 	int part_vol(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0b]) : 100; }
 	int part_expr(int part) const { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_EXP]) : 127; }
 	int part_pan(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0e]) : 64; }
+	int part_mod(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_MOD]) : 0; }
 
 	// その CC を native でさばけるか（実際にさばく前に決める）
 	static bool handles_cc(int cc)
-	{ return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40; }
+	{ return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01; }
 
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
 	bool control(int part, int cc, int value)
@@ -251,6 +261,7 @@ public:
 		case 0x07: p.vol = value; break;
 		case 0x0b: p.expr = value; break;
 		case 0x0a: p.pan = value; break;
+		case 0x01: p.mod = value; break;
 		case 0x40:                             // ダンパー
 			p.damper = value >= 64;
 			if (!p.damper)
@@ -299,6 +310,8 @@ private:
 			m_poke(u32(i) * 64 + 9, u16(note_att(s, part)));
 			if (s.cal->has(0x32))
 				m_poke(u32(i) * 64 + 0x32, pan_reg(*s.cal, part));
+			if (s.lfo)
+				m_poke(u32(i) * 64 + 0x0a, lfo_reg(s.lfo, *s.cal, part));
 		}
 	}
 
@@ -340,6 +353,16 @@ private:
 				a += nv::cc_vol_att(m_rom, p.expr) - nv::cc_vol_att(m_rom, c->cal_expr);
 		}
 		return nv::clamp_att(a);
+	}
+
+	// LFO のレジスタ。下位が深さで、モジュレーション（CC1）のぶんを足す
+	u16 lfo_reg(u16 base, const nv::voice_cal &c, int part) const
+	{
+		const int now = m_cc[part].mod;
+		if (now < 0)
+			return base;
+		const int d = nv::mod_depth(now) - nv::mod_depth(c.cal_mod);
+		return u16((base & 0xff00) | nv::clamp_att(int(base & 0xff) + d));
 	}
 
 	// パンのレジスタ（写し取った値からの差ぶんで動かす）
@@ -416,6 +439,9 @@ public:
 			                                  nv::defaults(), nv::bend_cents(pc.bend, pc.range));
 			if (c && c->has(0x32))
 				sr.set(0x32, pan_reg(*c, part));
+			su.lfo = sr.v[0x0a];
+			if (c)
+				sr.set(0x0a, lfo_reg(su.lfo, *c, part));
 			write_slot(slot, sr);
 			if (debug_on())
 				std::fprintf(stderr, "note part=%d note=%d vel=%d vol=%d/%d expr=%d/%d pan=%d/%d att=%d->%d\n",
@@ -488,10 +514,14 @@ public:
 			m_traj_next = 0;
 			su.att = att0 + 2 * (nv::velocity_att(m_rom, vel) - nv::velocity_att(m_rom, c.cal_vel));
 			const int att = note_att(su, part);
+			su.lfo = c.has(0x0a) ? c.reg[0x0a] : 0;
 			for (int i = 0; i < 0x40; i++)
 				if (c.has(i))
 					m_poke(u32(slot) * 64 + u32(i),
-					       i == 9 ? u16(att) : (i == 0x32 ? pan_reg(c, part) : c.reg[i]));
+					       i == 9 ? u16(att)
+					              : (i == 0x32 ? pan_reg(c, part)
+					                           : (i == 0x0a ? lfo_reg(c.reg[0x0a], c, part)
+					                                        : c.reg[i])));
 
 			su.drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
 			if (debug_on())

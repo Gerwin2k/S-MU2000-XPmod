@@ -167,6 +167,19 @@ inline int pan_att(int x)
 	return v < 0 ? 0 : (v > 255 ? 255 : v);
 }
 
+// モジュレーション（CC1）→ レジスタ 0x0a の下位（LFO の深さ）に足す。
+// 実測は 10 段で、**音色によらない**（GrandPno・Strings・SawLead で同じ）。
+// 0x0a の上位は LFO の型と刻みなので触らない
+inline int mod_depth(int cc)
+{
+	static const u8 STEP[10] = { 0, 9, 17, 26, 35, 43, 52, 60, 72, 84 };
+	static const u8 EDGE[9]  = { 13, 26, 39, 52, 64, 77, 90, 103, 116 };
+	int i = 0;
+	while (i < 9 && cc >= int(EDGE[i]))
+		i++;
+	return int(STEP[i]);
+}
+
 // ピッチベンド → セント。firmware は 2 回とも 0 の側へ切り捨てる
 // （ベンド幅 2 半音・目一杯で 167 目盛り。実測と一致）
 inline int bend_cents(int bend14, int range_semitones)
@@ -324,7 +337,7 @@ struct voice_cal {
 	int  base_level = 64;      // 校正した素の音量
 	int  cal_vel = 100;        // 写し取ったときの強さ（強さを変えるときの基準）
 	// 写し取ったときのコントローラの位置。ここからの差ぶんだけ動かす
-	int  cal_vol = 100, cal_expr = 127, cal_pan = 64;
+	int  cal_vol = 100, cal_expr = 127, cal_pan = 64, cal_mod = 0;
 	u16  reg[0x40] = {};       // 基準の鍵・強さでの値
 	u64  mask = 0;             // 覚えているレジスタ
 

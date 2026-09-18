@@ -1099,6 +1099,7 @@ void mu2000::native_learn_finish()
 			cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
 			cal.cal_expr = m_ndrv.part_expr(m_learn_part);
 			cal.cal_pan  = m_ndrv.part_pan(m_learn_part);
+			cal.cal_mod  = m_ndrv.part_mod(m_learn_part);
 			cal.have = true;
 			cals.push_back(cal);
 		}
@@ -1162,6 +1163,7 @@ void mu2000::native_learn_finish()
 		cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
 		cal.cal_expr = m_ndrv.part_expr(m_learn_part);
 		cal.cal_pan  = m_ndrv.part_pan(m_learn_part);
+		cal.cal_mod  = m_ndrv.part_mod(m_learn_part);
 		cal.have = true;
 		cals.push_back(cal);
 	}
@@ -1201,7 +1203,7 @@ void mu2000::native_learn_finish()
 namespace {
 
 constexpr u32 CAL_MAGIC = 0x43563253u;   // "S2VC"
-constexpr u32 CAL_VERSION = 1;
+constexpr u32 CAL_VERSION = 2;
 
 void put8(std::vector<u8> &v, u8 x) { v.push_back(x); }
 void put16v(std::vector<u8> &v, u16 x) { v.push_back(u8(x)); v.push_back(u8(x >> 8)); }
@@ -1229,6 +1231,7 @@ void write_cals(std::vector<u8> &out, u8 kind, u64 key, const std::vector<xg::nv
 		put16v(out, u16(c.cal_vol));
 		put16v(out, u16(c.cal_expr));
 		put16v(out, u16(c.cal_pan));
+		put16v(out, u16(c.cal_mod));
 		for (int i = 0; i < 0x40; i++)
 			if (c.mask & (u64(1) << i))
 				put16v(out, c.reg[i]);
@@ -1284,6 +1287,7 @@ bool mu2000::native_cal_load(const u8 *data, size_t n)
 			c.cal_vol = s16(r.g16());
 			c.cal_expr = s16(r.g16());
 			c.cal_pan = s16(r.g16());
+			c.cal_mod = s16(r.g16());
 			for (int i = 0; i < 0x40; i++)
 				if (c.mask & (u64(1) << i))
 					c.reg[i] = r.g16();
@@ -1485,7 +1489,12 @@ bool mu2000::native_midi(u8 byte, int port)
 		// こちらでさばける CC（音量・パン・ダンパー）は firmware に渡すだけなので短く。
 		// 知らない CC は firmware がすべてやるので、処理が終わるまで見る
 		// （5ms に詰めたら bend の残差が -35.8dB から -14dB に落ちた）
-		m_fw_hold = std::max(m_fw_hold, u32(mine ? 44100 / 500 : 44100 / 50));
+		// こちらでさばける CC は渡すだけなので短く。ただし
+		//   * そのパートを firmware が鳴らしている間
+		//   * モジュレーション（firmware がソフトで揺れを増やしていく）
+		// は firmware に効かせてもらうので長く見る
+		const bool quick = mine && !m_fw_notes[part] && (n.d0 & 0x7f) != 0x01;
+		m_fw_hold = std::max(m_fw_hold, u32(quick ? 44100 / 500 : 44100 / 50));
 		replay_note(n.status, n.d0, byte, port);
 		return true;
 	}
