@@ -991,6 +991,7 @@ void mu2000::set_native_engine(int mode)
 	m_learn_left = 0;
 	for (u8 &c : m_fw_notes)
 		c = 0;
+	m_fw_note_total = 0;
 	m_nq.clear();
 	m_ne_clock = 0;
 	for (u64 &t : m_rx_at)
@@ -1221,8 +1222,11 @@ bool mu2000::native_midi(u8 byte, int port)
 			return true;
 		}
 		// native で鳴っていない音は firmware に任せる
-		if (m_fw_notes[part])
+		if (m_fw_notes[part]) {
 			m_fw_notes[part]--;
+			if (m_fw_note_total)
+				m_fw_note_total--;
+		}
 		replay_note(n.status, u8(note), u8(vel), port);
 		return true;
 	}
@@ -1244,8 +1248,10 @@ bool mu2000::native_midi(u8 byte, int port)
 		native_learn_start(rec);
 	}
 	m_fw_hold = std::max(m_fw_hold, u32(44100 / 20));
-	if (m_fw_notes[part] < 255)
+	if (m_fw_notes[part] < 255) {
 		m_fw_notes[part]++;
+		m_fw_note_total++;
+	}
 	replay_note(n.status, u8(note), u8(vel), port);
 	return true;
 }
@@ -1444,6 +1450,10 @@ void mu2000::run_sample(s32 &left, s32 &right)
 		m_ne_samples.fetch_add(1, std::memory_order_relaxed);
 		if (midi_pending())
 			m_fw_hold = std::max(m_fw_hold, u32(44100 / 500));   // 溜まっている間は回す
+		// firmware が鳴らしている音がある間は止めない。LFO・包絡線・ベンドの
+		// 追従をやっているのは firmware なので、止めるとその音だけ変わってしまう
+		if (m_fw_note_total)
+			m_fw_hold = std::max(m_fw_hold, u32(2));
 		if (m_fw_hold) {
 			if (--m_fw_hold == 0)
 				m_ndrv.sync_cc();       // 止める前に、つまみの位置を取り直す

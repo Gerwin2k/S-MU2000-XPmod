@@ -392,6 +392,7 @@ private:
 	int  m_learn_note = 60, m_learn_vel = 100, m_learn_part = 0;
 	// firmware が鳴らしている音の数（パートごと）。0 でなければベンドも firmware へ回す
 	u8   m_fw_notes[64] = {};
+	u32  m_fw_note_total = 0;
 	u64  m_learn_drum = 0;         // ドラムのとき、覚える鍵
 	native_stats m_ne_stats;
 
