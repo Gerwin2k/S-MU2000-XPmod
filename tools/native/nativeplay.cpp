@@ -732,7 +732,7 @@ int main(int argc, char **argv)
 		}
 		const int base = xg::nv::calibrate_level(rom, el, ref, 60, 100);
 		std::printf("== 音量の式くらべ（鍵 60・強さ 100 で校正。素の音量 %d）%c", base, 10);
-		std::printf("   鍵  強さ   実機   こちら   ずれ   曲線  段の音量  基準鍵  波形%c", 10);
+		std::printf("   鍵  強さ   実機   こちら   ずれ   曲線  段音量  基準鍵  b11  要る値%c", 10);
 		int bad = 0, n = 0;
 		for (int nn : { 36, 48, 60, 72, 84, 96 })
 			for (int vv : { 20, 60, 100, 127 }) {
@@ -748,8 +748,11 @@ int main(int argc, char **argv)
 				const u8 *we2 = xg::nv::wave_entry(rom, xg::nv::wave_set(el),
 				                                  xg::nv::wave_note(el, nn));
 				const xg::nv::wave_info wi = we2 ? xg::nv::read_wave(we2) : xg::nv::wave_info();
-				std::printf("  %3d  %3d   %4d   %4d   %+4d %-6s %+4d  %4d  %5d  %08x%c", nn, vv, got, mine,
-				            mine - got, got == mine ? "" : "← 違う", cv, wl, wi.base_key, wi.format_addr, 10);
+				// **段の音量として必要な値**を逆算して出す（式を解く材料）
+				const int needwl = got / 2 - base - xg::nv::velocity_att(rom, vv)
+				                 + xg::nv::level_key_curve(rom, el, nn) / 2;
+				std::printf("  %3d  %3d   %4d   %4d   %+4d %-6s %+4d  %4d  %5d  %3d  %3d%c", nn, vv, got, mine,
+				            mine - got, got == mine ? "" : "← 違う", cv, wl, wi.base_key, we2 ? we2[11] : -1, needwl, 10);
 			}
 		std::printf("ずれた点: %d / %d%c", bad, n, 10);
 		return 0;
