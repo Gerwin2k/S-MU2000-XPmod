@@ -174,6 +174,7 @@ int main(int argc, char **argv)
 	int sweep = 0, volsweep = 0, levels = 0;
 	bool bench = false, ccwatch = false, ccsweep = false, ccram = false, attsweep = false, cutsweep = false, listvoices = false, ccfilter = false;
 	int ccreg = -1;
+	int ccbyte = -1;
 	for (int i = 3; i < argc; i++) {
 		if (!std::strcmp(argv[i], "-b") && i + 1 < argc)
 			std::sscanf(argv[++i], "%d,%d,%d", &msb, &lsb, &prog);
@@ -195,6 +196,7 @@ int main(int argc, char **argv)
 		else if (!std::strcmp(argv[i], "--list")) listvoices = true;
 		else if (!std::strcmp(argv[i], "--ccfilter")) ccfilter = true;
 		else if (!std::strcmp(argv[i], "--ccreg") && i + 1 < argc) ccreg = std::atoi(argv[++i]);
+		else if (!std::strcmp(argv[i], "--ccbyte") && i + 1 < argc) ccbyte = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--sweep") && i + 1 < argc) sweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--volsweep") && i + 1 < argc) volsweep = std::atoi(argv[++i]);
 		else if (!std::strcmp(argv[i], "--levels") && i + 1 < argc) levels = std::atoi(argv[++i]);
@@ -663,6 +665,41 @@ int main(int argc, char **argv)
 			if (o.vel == 100 && o.cut >= 0)
 				std::printf("CUT 鍵 %3d 強さ %3d  0x00=%04x 切る高さ %4d（表との差 %+d） 0x04=%04x%c",
 				            o.note, o.vel, o.cut, o.cut & 0x7ff, (o.cut & 0x7ff) - tab, o.res, 10);
+		return 0;
+	}
+
+	// --ccbyte N: その CC を振って、**パートの塊のどのバイトが動くか**を出す。
+	// 動くバイトが分かれば、写し取りの「経路の印」にそのバイトを混ぜるだけで、
+	// つまみが変わったときに写し取りを取り直せる（式を起こさなくて済む）
+	if (ccbyte >= 0) {
+		const std::vector<u8> &wr = mu.nvram();
+		const int ccs[] = { 0, 32, 64, 96, 127 };
+		std::vector<std::vector<u8>> snap;
+		for (int cc : ccs) {
+			for (u8 bb : { u8(0xb0), u8(ccbyte & 0x7f), u8(cc) })
+				mu.midi_in(bb, 0);
+			for (u32 i = 0; i < RATE / 10; i++)
+				mu.run_sample(l, r);
+			snap.push_back(wr);
+		}
+		std::printf("== CC%d で動くワーク RAM のバイト%c", ccbyte, 10);
+		int shown = 0;
+		for (size_t o = 0; o < wr.size() && shown < 40; o++) {
+			bool same = true;
+			for (size_t k = 1; k < snap.size(); k++)
+				if (snap[k][o] != snap[0][o])
+					same = false;
+			if (same)
+				continue;
+			if (o >= part0 && o < part0 + 0x100)
+				std::printf("  パート+0x%02x :", unsigned(o - part0));
+			else
+				std::printf("  RAM %08x  :", unsigned(0x400000 + o));
+			for (size_t k = 0; k < snap.size(); k++)
+				std::printf(" cc%d=%d", ccs[k], snap[k][o]);
+			std::printf("%c", 10);
+			shown++;
+		}
 		return 0;
 	}
 
