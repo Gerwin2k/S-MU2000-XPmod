@@ -732,7 +732,7 @@ int main(int argc, char **argv)
 		}
 		const int base = xg::nv::calibrate_level(rom, el, ref, 60, 100);
 		std::printf("== 音量の式くらべ（鍵 60・強さ 100 で校正。素の音量 %d）%c", base, 10);
-		std::printf("   鍵  強さ   実機   こちら   ずれ%c", 10);
+		std::printf("   鍵  強さ   実機   こちら   ずれ   曲線  段の音量  目盛り%c", 10);
 		int bad = 0, n = 0;
 		for (int nn : { 36, 48, 60, 72, 84, 96 })
 			for (int vv : { 20, 60, 100, 127 }) {
@@ -743,8 +743,10 @@ int main(int argc, char **argv)
 				n++;
 				if (got != mine)
 					bad++;
-				std::printf("  %3d  %3d   %4d   %4d   %+4d %s%c", nn, vv, got, mine,
-				            mine - got, got == mine ? "" : "← 違う", 10);
+				const int cv = xg::nv::level_key_curve(rom, el, nn);
+				const int wl = xg::nv::wave_level(rom, el, nn);
+				std::printf("  %3d  %3d   %4d   %4d   %+4d %-6s %+4d  %4d  %4d%c", nn, vv, got, mine,
+				            mine - got, got == mine ? "" : "← 違う", cv, wl, base + cv, 10);
 			}
 		std::printf("ずれた点: %d / %d%c", bad, n, 10);
 		return 0;
