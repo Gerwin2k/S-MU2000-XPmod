@@ -57,7 +57,7 @@ public:
 			m_tap[i] = t * m_rate;
 			float g = std::pow(0.15f + 0.85f * m_p.liveness, u * 4.0f);
 			if (m_p.gate)
-				g = u < 0.85f ? g : 0.0f;
+				g = u < 0.85f ? 1.0f : 0.0f;      // 切るまでは減らさない
 			if (m_p.reverse)
 				g = u * u;                      // だんだん大きく
 			m_gain[i] = g * (i % 2 ? -1.0f : 1.0f) * (0.5f + 0.5f * m_p.diffuse);
@@ -178,6 +178,7 @@ public:
 		float feedback = 0.0f;     // フランジャー用（-1..1）
 		float phase_deg = 90.0f;   // 左右のずれ
 		float stages = 6.0f;       // フェイザーの段数
+		float dry_wet = 0.5f;      // 1 で揺れた音だけ
 		float level = 1.0f;
 	};
 
@@ -244,8 +245,8 @@ public:
 			m_r.push(r);
 			const float a = (m_l.tapf(dl) + m_l.tapf(d2) + m_l.tapf(d3)) / 3.0f;
 			const float b = (m_r.tapf(dr) + m_r.tapf(d2) + m_r.tapf(d3)) / 3.0f;
-			ol = a * m_p.level;
-			orr = b * m_p.level;
+			ol = (a * m_p.dry_wet + l * (1.0f - m_p.dry_wet)) * m_p.level;
+			orr = (b * m_p.dry_wet + r * (1.0f - m_p.dry_wet)) * m_p.level;
 			return;
 		}
 
@@ -253,8 +254,8 @@ public:
 		const float wr = m_r.tapf(dr);
 		m_l.push(clampf(l + wl * m_p.feedback, -4.0f, 4.0f));
 		m_r.push(clampf(r + wr * m_p.feedback, -4.0f, 4.0f));
-		ol = wl * m_p.level;
-		orr = wr * m_p.level;
+		ol = (wl * m_p.dry_wet + l * (1.0f - m_p.dry_wet)) * m_p.level;
+		orr = (wr * m_p.dry_wet + r * (1.0f - m_p.dry_wet)) * m_p.level;
 	}
 
 private:
@@ -319,7 +320,7 @@ public:
 		const float d = clampf(m_p.depth, 0.0f, 1.0f);
 
 		if (m_p.type == kind::tremolo) {
-			const float g = 1.0f - d * 0.5f * (1.0f - m_lfo.sine());
+			const float g = 1.0f - d * 0.35f * (1.0f - m_lfo.sine());
 			ol = l * g * m_p.level;
 			orr = r * g * m_p.level;
 			return;
@@ -351,8 +352,8 @@ public:
 			a = soft_clip(a * g) * (1.0f / (1.0f + m_p.drive * 2.0f));
 			b = soft_clip(b * g) * (1.0f / (1.0f + m_p.drive * 2.0f));
 		}
-		ol = a * m_p.level;
-		orr = b * m_p.level;
+		ol = a * m_p.level * 1.7f;      // 分けたぶんの戻し（実機と rms を合わせた）
+		orr = b * m_p.level * 1.7f;
 	}
 
 private:
@@ -523,7 +524,8 @@ public:
 		const float f = m_p.low_hz * std::pow(std::max(1.01f, m_p.high_hz / m_p.low_hz), u);
 		m_bp[0].band_pass(f, m_p.resonance, m_rate);
 		m_bp[1] = m_bp[0];
-		const float wl = m_bp[0].process(l), wr = m_bp[1].process(r);
+		const float k = 0.6f + 0.7f * m_p.resonance;      // 帯だけ取り出すと痩せるぶん
+		const float wl = m_bp[0].process(l) * k, wr = m_bp[1].process(r) * k;
 		ol = (wl * m_p.dry_wet + l * (1.0f - m_p.dry_wet)) * m_p.level;
 		orr = (wr * m_p.dry_wet + r * (1.0f - m_p.dry_wet)) * m_p.level;
 	}
@@ -555,6 +557,11 @@ public:
 		m_p = p;
 		m_env.set(m_p.attack_ms, m_p.release_ms, m_rate);
 		m_thresh = db_to_lin(m_p.threshold_db);
+		// 潰したぶんの持ち上げ（全振幅のところで元に戻る量）
+		// 実機と同じ大きさになるところを実測で選んだ（全部戻すと大きすぎる）
+		m_makeup = m_p.gate ? 1.0f
+		                    : clampf(std::pow(std::pow(std::max(1e-4f, m_thresh), 1.0f / std::max(1.0f, m_p.ratio) - 1.0f), 0.75f),
+		                             1.0f, 10.0f);
 	}
 
 	void reset() { m_env.clear(); }
@@ -570,15 +577,15 @@ public:
 			const float over = e / m_thresh;
 			g = std::pow(over, 1.0f / std::max(1.0f, m_p.ratio)) / over;
 		}
-		ol = l * g * m_p.out_level;
-		orr = r * g * m_p.out_level;
+		ol = l * g * m_p.out_level * m_makeup;
+		orr = r * g * m_p.out_level * m_makeup;
 	}
 
 private:
 	params m_p;
 	float m_rate = 44100.0f;
 	follower m_env;
-	float m_thresh = 0.1f;
+	float m_thresh = 0.1f, m_makeup = 1.0f;
 };
 
 // ---- ローファイ ---------------------------------------------------------------

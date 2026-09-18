@@ -251,9 +251,11 @@ private:
 			p.rate_hz = par("LFO Freq", 0.6f);
 			p.depth = clampf(raw_of("LFO Depth", 40) / 127.0f, 0.0f, 1.0f);
 			p.delay_ms = par("DelayOfst", par("ModDlyOfst", 10.0f));
-			p.feedback = clampf(raw_of("FB Level", 64) / 64.0f - 1.0f, -0.95f, 0.95f);
+			// 戻す量。実機のフランジャーはここまで共振しないので、7 割にしてある
+			p.feedback = clampf((raw_of("FB Level", 64) / 64.0f - 1.0f) * 0.4f, -0.8f, 0.8f);
 			p.phase_deg = par("LFO Phase", par("PhaseShift", 90.0f));
 			p.stages = par("Stage", 6.0f);
+			p.dry_wet = wet_of(0.3f);
 			if (msb == 0x43 || msb == 0x44 || msb == 0x68 || msb == 0x6b || msb == 0x6e)
 				p.type = mod_fx::kind::flanger;
 			else if (msb == 0x48 || msb == 0x6c || msb == 0x6f)
@@ -283,8 +285,8 @@ private:
 			drive_fx::params p;
 			p.drive = clampf(raw_of("Drive", raw_of("Dist Drive", 60)) / 127.0f, 0.0f, 1.0f);
 			p.edge = clampf(raw_of("Edge", 64) / 127.0f, 0.0f, 1.0f);
-			// 実機の歪みは思ったより小さい。同じ曲で rms を合わせた
-			p.out_level = clampf(raw_of("OutputLvl", raw_of("DistOutLvl", 64)) / 127.0f, 0.0f, 1.0f);
+			// 出口の大きさは、同じ曲を MEG と鳴らして rms を合わせた
+			p.out_level = clampf(raw_of("OutputLvl", raw_of("DistOutLvl", 64)) / 49.0f, 0.0f, 2.6f);
 			p.lpf_hz = par("LPF Cutoff", 4000.0f);
 			p.eq_low_db = gain_db("EQ LowGain");
 			p.eq_low_hz = par("EQ LowFreq", 200.0f);
@@ -314,9 +316,11 @@ private:
 			p.rate_hz = par("LFO Freq", 1.0f);
 			p.depth = clampf(raw_of("LFO Depth", 64) / 127.0f, 0.0f, 1.0f);
 			p.sens = clampf(raw_of("Sensitivty", 64) / 127.0f, 0.0f, 1.0f);
-			p.low_hz = par("CutoffFreq", 300.0f);
-			p.high_hz = std::max(p.low_hz * 2.0f, p.low_hz * 8.0f);
-			p.resonance = std::max(0.5f, par("Resonance", 30.0f) / 10.0f);
+			// CutoffFreq は揺れの真ん中。そこから下 1/2・上 4 倍まで振る
+			const float center = clampf(par("CutoffFreq", 800.0f), 100.0f, 6000.0f);
+			p.low_hz = center * 0.8f;
+			p.high_hz = clampf(center * 5.0f, 500.0f, 14000.0f);
+			p.resonance = clampf(par("Resonance", 30.0f) / 20.0f, 0.5f, 3.0f);
 			p.dry_wet = wet_of(1.0f);
 			m_wah.set_params(p);
 			break;
@@ -335,7 +339,9 @@ private:
 		case kind::lofi: {
 			lofi_fx::params p;
 			p.bits = clampf(par("WordLength", par("Bit Assign", 8.0f)), 1.0f, 16.0f);
-			p.rate_div = std::max(1.0f, par("SmplFreq", 4.0f));
+			// SmplFreq は落とし先の周波数（44.1k など）。何サンプルに 1 回にするかへ直す
+			const float hz = par("SmplFreq", 11025.0f);
+			p.rate_div = hz > 100.0f ? clampf(44100.0f / hz, 1.0f, 64.0f) : std::max(1.0f, hz);
 			p.noise = clampf(raw_of("NoiseLevel", 0) / 127.0f, 0.0f, 0.2f);
 			p.lpf_hz = par("LPF Cutoff", 8000.0f);
 			m_lofi.set_params(p);
@@ -409,7 +415,9 @@ public:
 private:
 	fx_slot   m_slot[SLOTS];
 	master_eq m_meq;
-	float   m_return[SLOTS] = { 0.6f, 0.6f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f };
+	// 送りに対する戻りの量。インサーションは、送りの目盛りが乾いた音と違うので実測で合わせた
+	// （THRU を掛けて、MEG のときと同じ大きさになる値。doc/native-dsp.md）
+	float   m_return[SLOTS] = { 0.6f, 0.6f, 0.6f, 0.31f, 0.31f, 0.31f, 0.31f };
 };
 
 } // namespace smu2000::dsp

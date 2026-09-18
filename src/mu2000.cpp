@@ -986,7 +986,10 @@ void mu2000::set_native_fx(int mode)
 #endif
 	m_nfx.set_rate(44100.0f);
 	m_nfx.reset();
-	m_swpm.set_native_fx(mode ? &m_nfx : nullptr, mode >= 2);
+	int mask = 15;
+	if (const char *e = std::getenv("SMU2000_NATIVE_SLOTS"))
+		mask = std::atoi(e);
+	m_swpm.set_native_fx(mode ? &m_nfx : nullptr, mode >= 2, mask);
 	if (mode)
 		native_fx_update();
 }

@@ -4173,6 +4173,8 @@ void swp30_device::run_sample(s32 &left, s32 &right)
 		static const nfx::slot_id ID[4] = { nfx::REVERB, nfx::CHORUS, nfx::VARIATION, nfx::INS1 };
 		float wl = 0.0f, wr = 0.0f;
 		for(int i = 0; i != 4; i++) {
+			if(!(m_native_mask & (1 << i)))
+				continue;
 			const float il = float(m_nsend[i][0]) / SCALE, ir = float(m_nsend[i][1]) / SCALE;
 			float ol = 0.0f, orr = 0.0f;
 			m_native->process(ID[i], il, ir, ol, orr);
