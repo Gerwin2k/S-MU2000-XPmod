@@ -1272,6 +1272,29 @@ void mu2000::native_learn_finish()
 		cal.base_level = xg::nv::calibrate_level(rom, xg::nv::element(rom, m_learn_rec, idx),
 		                                         cal.has(9) ? (cal.reg[9] & 0xff) : 64,
 		                                         m_learn_note, m_learn_vel);
+		// **減衰の目盛りのずれを覚える**。実機が書いた 0x07・0x08 の上位から
+		// 目盛りを引き直し、こちらの式で出した目盛りとの差を取る。
+		// 同じ値が並ぶ表なので、こちらの目盛りにいちばん近いものを選ぶ
+		{
+			const u8 *el2 = xg::nv::element(rom, m_learn_rec, idx);
+			const int corr2 = xg::nv::rate_key_corr(el2, m_learn_note);
+			const int raw[2] = { int(el2[74]), int(el2[75]) };
+			for (int k = 0; k < 2; k++) {
+				if (!cal.has(0x07 + k))
+					continue;
+				const int mine = xg::nv::rate_scale(raw[k], corr2);
+				const u8 want = u8(cal.reg[0x07 + k] >> 8);
+				int best = -1, bestd = 1 << 30;
+				// **奇数の目盛りも見る**（実機は 2 倍の単位に乗らない値も使う）
+				for (int i = 0; i <= 127; i++)
+					if (rom[xg::nv::DECAY_TAB + i] == want && std::abs(i - mine) < bestd) {
+						bestd = std::abs(i - mine);
+						best = i;
+					}
+				if (best >= 0)
+					cal.dec_adj[k] = best - mine;
+			}
+		}
 		cal.cal_vel  = m_learn_vel;
 		cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
 		cal.cal_expr = m_ndrv.part_expr(m_learn_part);
@@ -1322,7 +1345,7 @@ void mu2000::native_learn_finish()
 namespace {
 
 constexpr u32 CAL_MAGIC = 0x43563253u;   // "S2VC"
-constexpr u32 CAL_VERSION = 6;
+constexpr u32 CAL_VERSION = 7;
 
 void put8(std::vector<u8> &v, u8 x) { v.push_back(x); }
 void put16v(std::vector<u8> &v, u16 x) { v.push_back(u8(x)); v.push_back(u8(x >> 8)); }
@@ -1356,6 +1379,8 @@ void write_cals(std::vector<u8> &out, u8 kind, u64 key, const std::vector<xg::nv
 		put16v(out, u16(c.cal_bri));
 		put16v(out, u16(c.cal_res));
 		put32v(out, c.cal_ctx);
+		put16v(out, u16(s16(c.dec_adj[0])));
+		put16v(out, u16(s16(c.dec_adj[1])));
 		for (int i = 0; i < 0x40; i++)
 			if (c.mask & (u64(1) << i))
 				put16v(out, c.reg[i]);
@@ -1417,6 +1442,8 @@ bool mu2000::native_cal_load(const u8 *data, size_t n)
 			c.cal_bri = s16(r.g16());
 			c.cal_res = s16(r.g16());
 			c.cal_ctx = r.g32();
+			c.dec_adj[0] = s16(r.g16());
+			c.dec_adj[1] = s16(r.g16());
 			for (int i = 0; i < 0x40; i++)
 				if (c.mask & (u64(1) << i))
 					c.reg[i] = r.g16();

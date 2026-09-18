@@ -7,6 +7,7 @@ native の書き込み）。鍵を押した瞬間（レジスタ 0x20e）ごと�
 鳴らすスロットのレジスタ一式を集めて、同じ順番の音どうしで比べる。
 """
 import collections
+import itertools
 import re
 import sys
 
@@ -84,19 +85,18 @@ def main():
         if len(fl) != len(nl):
             tally['要素の数が違う'] += 1
             continue
-        rest = list(nl)
-        paired = []
-        for a in fl:
-            hit = None
-            for b in rest:
-                if key(a) is not None and key(a) == key(b):
-                    hit = b
-                    break
-            if hit is None:
-                hit = rest[0]
-            rest.remove(hit)
-            paired.append((a, hit))
-        for a, b in paired:
+        # **食い違いがいちばん少なくなる組み合わせ**を選ぶ。要素の数は
+        # せいぜい数個なので総当たりでよい。こうしないと、こちらが
+        # スロットを上から取ることによる並びの差を「違い」と数えてしまう
+        def cost(a, b):
+            return sum(1 for rr in set(a) | set(b) if a.get(rr) != b.get(rr))
+        best_perm, best_cost = None, None
+        for perm in itertools.permutations(range(len(nl))):
+            c = sum(cost(fl[i], nl[perm[i]]) for i in range(len(fl)))
+            if best_cost is None or c < best_cost:
+                best_cost, best_perm = c, perm
+        for i in range(len(fl)):
+            a, b = fl[i], nl[best_perm[i]]
             for rr in sorted(set(a) | set(b)):
                 av, bv = a.get(rr), b.get(rr)
                 if av != bv:

@@ -351,6 +351,9 @@ inline int rate_key_corr(const u8 *elem, int note)
 	return c >> 8;
 }
 
+// 減衰の表の目盛りを 0-127 に収める
+inline int clamp_idx(int i) { return i < 0 ? 0 : (i > 127 ? 127 : i); }
+
 inline int rate_scale(int raw, int corr)
 {
 	int v = raw + corr;
@@ -393,6 +396,13 @@ struct voice_cal {
 	// パートの EQ・インサーションの掛かり先）をまとめた印。
 	// ここが違うと、写し取った 0x20-0x2b・0x32-0x37 はそのまま使えない
 	u32  cal_ctx = 0;
+	// **減衰の表の目盛りのずれ**（写し取ったときの実機の値と、こちらの式の差）。
+	// 減衰は鍵で変わるので写し取った値をそのまま使えないが、ずれは鍵に
+	// よらないとみて、式で出した目盛りにこれを足す。これでパート側の
+	// EG の設定（CC75 など）も、こちらの式の小さなずれも一緒に吸収できる。
+	// **表の目盛りそのもの**で持つ（実機は奇数の目盛りも使うので、
+	// rate_scale の「2 倍」の単位では足りない）
+	int  dec_adj[2] = { 0, 0 };
 	u16  reg[0x40] = {};       // 基準の鍵・強さでの値
 	u64  mask = 0;             // 覚えているレジスタ
 
@@ -463,8 +473,11 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 深さは byte70、折れ点の鍵は byte71（鍵 36・60・84 で確かめた）。
 	const int corr = rate_key_corr(elem, note);
 	const u8 atk = rom[ATTACK_TAB + std::min(0x7f, int(elem[73]) * 2)];
-	const u8 dc1 = rom[DECAY_TAB  + rate_scale(elem[74], corr)];
-	const u8 dc2 = rom[DECAY_TAB  + rate_scale(elem[75], corr)];
+	// 写し取りがあれば、そのときのずれを表の目盛りに足す（上の dec_adj を見よ）
+	const int a1 = cal && cal->have ? cal->dec_adj[0] : 0;
+	const int a2 = cal && cal->have ? cal->dec_adj[1] : 0;
+	const u8 dc1 = rom[DECAY_TAB  + clamp_idx(rate_scale(elem[74], corr) + a1)];
+	const u8 dc2 = rom[DECAY_TAB  + clamp_idx(rate_scale(elem[75], corr) + a2)];
 	// はじめの音量。アタックが最速（63）のときだけ 0 で、あとは 0x7e
 	r.set(0x06, u16(atk << 8 | (elem[73] >= 0x3f ? 0x00 : 0x7e)));
 	r.set(0x07, u16(dc1 << 8 | (((0x7f - elem[77]) * 2) & 0xff)));
