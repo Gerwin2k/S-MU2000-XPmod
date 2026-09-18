@@ -37,6 +37,15 @@ public:
 	static constexpr int PARTS = 64;
 	static constexpr int SLOTS = 64;
 
+	// **フィルタの段を流す時刻の補正**（サンプル）。
+	// 段の時刻は firmware に鳴らさせた音から録るが、録るときの時計と
+	// 流すときの時計で、数え始めの位置が少しずれる（録るのは run_cycles の
+	// 中、流すのは tick の中で、同じサンプルでも順番が違う）。
+	// 実測で決めた: 乾いた音の 2 音目を実機と突き合わせて、-3 で
+	// **1 ビットも違わなくなる**（-2 だと 99.9%、0 だと 99.8%）。
+	// doc/native-engine.md の 6.63
+	static constexpr int EG_LAG = -3;
+
 	// SMU2000_NATIVE_DEBUG が立っていれば、鳴らすたびに値を出す（調べもの用）
 	static bool debug_on()
 	{
@@ -254,7 +263,7 @@ public:
 				const std::vector<nv::fstep> &re = s.cal->filter_env;
 				while (s.rpos < re.size()) {
 					if (!re[s.rpos].rel) { s.rpos++; continue; }
-					if (s.rel_at + re[s.rpos].at > clock)
+					if (u64(s64(s.rel_at + re[s.rpos].at) + EG_LAG) > clock)
 						break;
 					u16 v = re[s.rpos].v;
 					if (re[s.rpos].reg == 0x0a) {
@@ -273,8 +282,8 @@ public:
 					s.rpos++;
 				if (s.rpos < re.size()) {
 					live++;
-					if (s.rel_at + re[s.rpos].at < next)
-						next = s.rel_at + re[s.rpos].at;
+					if (u64(s64(s.rel_at + re[s.rpos].at) + EG_LAG) < next)
+						next = u64(s64(s.rel_at + re[s.rpos].at) + EG_LAG);
 				}
 				continue;
 			}
@@ -297,7 +306,7 @@ public:
 				continue;
 			const std::vector<nv::fstep> &fe = s.cal->filter_env;
 			while (s.tpos < fe.size() && !fe[s.tpos].rel &&
-			       s.tstart + fe[s.tpos].at <= clock) {
+			       u64(s64(s.tstart + fe[s.tpos].at) + EG_LAG) <= clock) {
 				u16 v = fe[s.tpos].v;
 				if (fe[s.tpos].reg == 0x0a) {      // 深さにモジュレーションを足す
 					s.lfo = v;
@@ -314,8 +323,9 @@ public:
 			// 離しの段に行き当たったら、押してからの並びはそこで終わり
 			while (s.tpos < fe.size() && fe[s.tpos].rel)
 				s.tpos++;
-			if (s.tpos < fe.size() && s.tstart + fe[s.tpos].at < next)
-				next = s.tstart + fe[s.tpos].at;
+			if (s.tpos < fe.size() &&
+			    u64(s64(s.tstart + fe[s.tpos].at) + EG_LAG) < next)
+				next = u64(s64(s.tstart + fe[s.tpos].at) + EG_LAG);
 		}
 		m_traj = live > 0;
 		m_traj_next = next;
