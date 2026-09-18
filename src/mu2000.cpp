@@ -993,6 +993,7 @@ void mu2000::set_native_engine(int mode)
 		n = nmidi();
 	m_ne_samples.store(0, std::memory_order_relaxed);
 	m_ne_fw_samples.store(0, std::memory_order_relaxed);
+	m_ne_stats = native_stats();
 	if (!mode) {
 		set_swp_watch(nullptr);
 		return;
@@ -1011,7 +1012,10 @@ void mu2000::native_learn_start(u32 rec)
 	m_learn_first.clear();
 	m_learn_last.clear();
 	m_learn_mask = m_learn_keyed = 0;
-	m_learn_left = 44100 / 25;          // 40ms ぶん見る
+	// レジスタは鍵を押した所でまとめて書かれるので、短くてよい。
+	// 長くすると、その間の音が全部 firmware に回ってしまう。
+	// ただし短すぎると 0x01（鳴らしてから上がっていく）が落ち着く前に切れる
+	m_learn_left = 44100 / 50;          // 20ms ぶん見る
 	set_swp_watch([this](bool master, u32 reg, u16 value) {
 		if (!master)
 			return;
@@ -1037,6 +1041,16 @@ void mu2000::native_learn_finish()
 	m_learning = false;
 	if (!m_learn_keyed || !m_prog)
 		return;
+	// 波形の番地まで取れていなければ、写し取りとして使えない（次の音でやり直す）
+	{
+		bool ok = false;
+		for (int ch = 0; ch < 64 && !ok; ch++)
+			if ((m_learn_keyed & (u64(1) << ch)) &&
+			    m_learn_last.count(u32(ch) * 64 + 0x16) && m_learn_last.count(u32(ch) * 64 + 0x17))
+				ok = true;
+		if (!ok)
+			return;
+	}
 	const u8 *rom = m_prog->data();
 	const int nel = xg::nv::element_count(rom, m_learn_rec);
 	std::vector<xg::nv::voice_cal> cals;
@@ -1084,7 +1098,9 @@ bool mu2000::native_midi(u8 byte, int port)
 	if (byte & 0x80) {
 		if (byte >= 0xf0) {              // SysEx など。以後は firmware に任せる
 			n.status = 0;
-			m_fw_hold = 44100 / 20;
+			// **長めに回す**。エフェクトの種類を変える SysEx は、MEG のプログラムを
+			// 1 万件以上書き直す。その途中で止めると音が出なくなる
+			m_fw_hold = 44100 / 2;
 			return false;
 		}
 		n.status = byte;
@@ -1092,6 +1108,7 @@ bool mu2000::native_midi(u8 byte, int port)
 		// 鍵の上げ下げ以外は、この場で firmware に渡す
 		const u8 kind = byte & 0xf0;
 		if (kind != 0x80 && kind != 0x90) {
+			m_ne_stats.other++;
 			m_fw_hold = 44100 / 50;
 			return false;
 		}
@@ -1115,13 +1132,17 @@ bool mu2000::native_midi(u8 byte, int port)
 		replay_note(n.status, u8(note), u8(vel), port);
 		return true;
 	}
-	if (m_ndrv.note_on(part, note, vel))
+	if (m_ndrv.note_on(part, note, vel)) {
+		m_ne_stats.note_native++;
 		return true;
+	}
+	m_ne_stats.note_fw++;
 	// まだ写し取っていない音色。firmware に鳴らさせて、そのときの値を覚える
 	const u32 rec = m_ndrv.record_of(part);
 	if (rec && !m_learning) {
 		m_learn_note = note;
 		m_learn_vel = vel;
+		m_ne_stats.learn++;
 		native_learn_start(rec);
 	}
 	m_fw_hold = std::max(m_fw_hold, u32(44100 / 20));

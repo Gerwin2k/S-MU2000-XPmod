@@ -315,6 +315,10 @@ public:
 	// 1: 鍵の上げ下げを native driver でさばき、CPU はその間止める
 	void set_native_engine(int mode);
 	int native_engine() const { return m_native_engine; }
+	// native の口の内訳（調べ用）
+	struct native_stats { u64 note_native = 0, note_fw = 0, learn = 0, other = 0; };
+	native_stats native_counts() const { return m_ne_stats; }
+
 	// native の口が、いま firmware を回している割合（0-1。小さいほど軽い）
 	double native_firmware_share() const
 	{
@@ -353,6 +357,7 @@ private:
 	nmidi m_nmidi[MIDI_PORTS];
 
 	int  m_learn_note = 60, m_learn_vel = 100;
+	native_stats m_ne_stats;
 
 	bool native_midi(u8 byte, int port);
 	void replay_note(u8 status, u8 d0, u8 d1, int port);

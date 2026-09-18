@@ -526,6 +526,12 @@ int main(int argc, char **argv)
 	if (native_engine)
 		std::printf("native の口: 演奏中に firmware を回したのは %.1f%%\n",
 		            100.0 * mu.native_firmware_share());
+	if (native_engine) {
+		const mu2000::native_stats st = mu.native_counts();
+		std::printf("  鍵: native %llu / firmware %llu（うち写し取り %llu）、そのほかの MIDI %llu\n",
+		            (unsigned long long)st.note_native, (unsigned long long)st.note_fw,
+		            (unsigned long long)st.learn, (unsigned long long)st.other);
+	}
 	std::printf("書き出した: %s（%.1f 秒）\n", wav.c_str(), double(total) / rate);
 	return 0;
 }
