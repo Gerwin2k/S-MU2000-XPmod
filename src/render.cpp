@@ -550,6 +550,7 @@ int main(int argc, char **argv)
 			            100.0 * double(w.by_other) / double(w.total));
 	}
 	if (native_engine) {
+		std::printf("  いちばん多いときのスロット: %d / 64\n", mu.native_peak_slots());
 		const mu2000::native_stats st = mu.native_counts();
 		std::printf("  鍵: native %llu / firmware %llu（うち写し取り %llu）、そのほかの MIDI %llu\n",
 		            (unsigned long long)st.note_native, (unsigned long long)st.note_fw,

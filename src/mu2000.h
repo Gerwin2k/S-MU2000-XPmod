@@ -336,6 +336,7 @@ public:
 	std::vector<u8> native_cal_save() const;
 	bool native_cal_load(const u8 *data, size_t n);
 	size_t native_cal_count() const { return m_ndrv.cal_count(); }
+	int native_peak_slots() const { return m_ndrv.peak_slots(); }
 
 	struct native_why { u64 total, by_note, by_sysex, by_other, by_learn, by_midi; };
 	native_why native_why_counts() const

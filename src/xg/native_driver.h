@@ -121,6 +121,7 @@ public:
 	const std::unordered_map<u32, std::vector<nv::voice_cal>> &cal_map() const { return m_cal; }
 	const std::unordered_map<u64, std::vector<nv::voice_cal>> &drum_map() const { return m_drum; }
 	size_t cal_count() const { return m_cal.size() + m_drum.size(); }
+	int peak_slots() const { return m_peak; }
 
 	// 写し取りの最中は、段が後から増えるので毎サンプル見る
 	void set_recording(bool on) { m_rec = on; m_traj_next = 0; }
@@ -576,6 +577,8 @@ public:
 			const int slot = take_slot(part, note);
 			if (slot < 0)
 				break;
+			if (busy() > m_peak)
+				m_peak = busy();
 			slot_use &su = m_slot[slot];
 			su.elem = el;
 			su.wave = we;
@@ -688,6 +691,8 @@ public:
 					                           : c.reg[i])))));
 
 			su.drum_rel = c.has(9) ? u16(c.reg[9]) : 0;
+			if (busy() > m_peak)
+				m_peak = busy();
 			if (debug_on())
 				std::fprintf(stderr, "drum part=%d note=%d vel=%d/%d att=%d->%d 段 %d 写し %016llx%s",
 				             part, note, vel, c.cal_vel, att0, att,
@@ -702,6 +707,16 @@ public:
 
 private:
 
+	// いちばん多いときに、いくつのスロットを使ったか（取り合いを見るため）
+	int busy() const
+	{
+		int n = 0;
+		for (const slot_use &s : m_slot)
+			if (s.on)
+				n++;
+		return n;
+	}
+
 	slot_use fresh(int part, int note)
 	{
 		slot_use s;
@@ -713,14 +728,18 @@ private:
 		return s;
 	}
 
+	// **下の 8 スロットは firmware のために空けておく。**
+	// firmware は下から使うので、写し取りの 1 音目とぶつからない。
+	// dense（16 パート・60 音）でもこちらが使うのは 36 までなので足りる
+	static constexpr int FW_SLOTS = 8;
+
 	// 空きスロットを取る。無ければ一番古い声を止めて使う。
-	// **上から**取る。firmware は下から使うので、写し取りのために firmware が
-	// 鳴らしている音とぶつかりにくい
+	// **上から**取る（firmware は下から使うため）
 	int take_slot(int part, int note)
 	{
 		int oldest = -1;
 		u64 oldest_age = ~u64(0);
-		for (int n2 = 0; n2 < SLOTS; n2++) {
+		for (int n2 = 0; n2 < SLOTS - FW_SLOTS; n2++) {
 			const int i = SLOTS - 1 - n2;
 			if (!m_slot[i].on) {
 				m_slot[i] = fresh(part, note);
@@ -763,6 +782,7 @@ private:
 	std::array<u32, PARTS> m_recsel{};
 	std::array<s8, PARTS> m_recsel_drum{};
 	u64 m_clock = 0;
+	int m_peak = 0;
 	bool m_traj = false;
 	bool m_rec = false;            // 写し取りの最中（段が後から増える）
 	u64 m_traj_next = 0;           // つぎに段を書く時刻
