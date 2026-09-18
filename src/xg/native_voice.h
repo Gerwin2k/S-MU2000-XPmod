@@ -599,7 +599,10 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 実機はここに鍵と強さの倍率を掛ける（`0x127FA4`）が、その係数がまだ分からない。
 	// 倍率 1 として表を引くだけでも、開き切りよりはずっと実機に近い
 	r.set(0x00, u16(0x1000 | (rd16(rom, CUTOFF_TAB + u32(elem[37]) * 2) & 0x7ff)));
-	r.set(0x01, d.bypass);
+	// **鍵を押した瞬間の 0x01 は 0xFFFF**（実機は毎回そう書いて、最初の
+	// 包絡線の目で本当の値に置き換える）。14 音色を実機と突き合わせて
+	// 確かめた（doc/native-engine.md の 6.67）
+	r.set(0x01, 0xffff);
 	r.set(0x02, u16(0x8000 | elem[82]));       // 402 組の 97%
 	r.set(0x03, d.post);
 	// フィルタの第 2 パラメータ（共振）。firmware は byte35 を 1 ビット落として
