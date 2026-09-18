@@ -21,6 +21,7 @@
 #include "mame/video/hd44780.h"
 
 #include <cstdio>
+#include <functional>
 #include <cstring>
 #include <atomic>
 #include <array>
@@ -304,6 +305,10 @@ public:
 	void set_swp_trace(std::FILE *f, bool with_reads = false)
 	{ m_swp_trace = f; m_swp_trace_reads = with_reads; }
 
+	// SWP30 への書き込みを、その場で拾う（掃引の道具用。doc/native-engine.md の段 1）
+	using swp_watch_fn = std::function<void(bool master, u32 reg, u16 value)>;
+	void set_swp_watch(swp_watch_fn fn) { m_swp_watch = std::move(fn); }
+
 private:
 	void build_bus();
 	void start_devices();
@@ -366,6 +371,7 @@ private:
 	// 記録に入れるサンプル番号（0 起点。run_sample の頭で進めるので 1 引く）
 	u64 trace_sample() const { return m_sample_count ? m_sample_count - 1 : 0; }
 	u64         m_sample_count = 0;  // 電源投入から数えたサンプル数（記録と再生の目印）
+	swp_watch_fn m_swp_watch;
 	std::FILE  *m_swp_trace = nullptr;
 	bool        m_swp_trace_reads = false;
 

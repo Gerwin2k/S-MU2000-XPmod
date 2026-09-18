@@ -484,6 +484,10 @@ void mu2000::build_bus()
 				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f s=%llu\n",
 				             m_swp_trace_reads ? "W " : "", base, reg + 1, u16(v), m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0, (unsigned long long)trace_sample());
 			}
+			if (m_swp_watch) {
+				m_swp_watch(base == 0x800000, reg, u16(v >> 16));
+				m_swp_watch(base == 0x800000, reg + 1, u16(v));
+			}
 			dev.write16(reg, u16(v >> 16));
 			dev.write16(reg + 1, u16(v));
 			hold(reg);
@@ -493,6 +497,8 @@ void mu2000::build_bus()
 			if (m_swp_trace)
 				std::fprintf(m_swp_trace, "%s%08x %04x %04x  pc=%08x  t=%.6f s=%llu\n",
 				             m_swp_trace_reads ? "W " : "", base, (a - base) >> 1, v, m_cpu->pc(), double(m_cpu->total_cycles()) / 28000000.0, (unsigned long long)trace_sample());
+			if (m_swp_watch)
+				m_swp_watch(base == 0x800000, (a - base) >> 1, v);
 			dev.write16((a - base) >> 1, v);
 			hold((a - base) >> 1);
 		};
