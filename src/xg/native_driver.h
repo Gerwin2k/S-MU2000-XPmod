@@ -378,14 +378,19 @@ public:
 			// ポルタメント: 10ms ごとに残りのずれを step だけ 0 へ寄せて、
 			// 音程のレジスタを書き直す（6.41）
 			if (s.glide && s.elem && s.wave) {
+				bool moved = false;
 				while (s.glide && s.glide_next <= clock) {
 					if (s.glide > 0)
 						s.glide = s.glide > s.glide_step ? s.glide - s.glide_step : 0;
 					else
 						s.glide = -s.glide > s.glide_step ? s.glide + s.glide_step : 0;
 					s.glide_next += nv::PORTA_TICK;
+					moved = true;
 				}
-				m_poke(u32(i) * 64 + 0x11, pitch_of(s));
+				// **動いたときだけ書く**。前は段の輪が回るたびに書いていて、
+				// 1 音の滑りで 0x11 を 26000 回以上書いていた（6.82）
+				if (moved)
+					m_poke(u32(i) * 64 + 0x11, pitch_of(s));
 			}
 			if (s.glide && s.glide_next < next)
 				next = s.glide_next;
@@ -1162,8 +1167,11 @@ public:
 				if (su.glide_step > 0) {
 					su.glide = (src - note) * nv::key_follow(el) * 256;
 					// firmware の 10ms タイマは世界共通なので、鍵を押した時刻からで
-					// なく**格子**に乗せる（同時に鳴る音の滑りがそろう）
-					su.glide_next = (m_clock / nv::PORTA_TICK + 1) * nv::PORTA_TICK;
+					// なく**格子**に乗せる（同時に鳴る音の滑りがそろう）。
+					// 格子は包絡線と同じ（録画から取った実機の目）を使う（6.82）
+					su.glide_next = su.fnext > nv::PORTA_TICK
+					              ? su.fnext - nv::PORTA_TICK
+					              : (m_clock / nv::PORTA_TICK + 1) * nv::PORTA_TICK;
 				}
 			}
 			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,

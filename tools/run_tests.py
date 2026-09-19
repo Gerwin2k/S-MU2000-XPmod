@@ -258,7 +258,7 @@ def step_threading(rep, roms, first):
 SHAPE_MIN = {
     "piano":   0.98, "chord":  0.95, "drums": 0.85, "effects": 0.98,
     "dense":   0.40, "port_b": 0.98, "bend":  0.98, "lofi":    0.98,
-    "egcc":    0.98, "porta": -0.35, "at":    0.95, "sxparam": 0.95,
+    "egcc":    0.98, "porta":  0.38, "at":    0.95, "sxparam": 0.95,
 }
 
 
@@ -328,6 +328,9 @@ def step_native_shape(rep, cases):
         if not cs:
             continue
         med = sorted(cs)[len(cs) // 2]
+        if os.environ.get('SHAPE_VERBOSE'):
+            print('    %-10s 波形の相関 中央 %.0f%% 最小 %.0f%%'
+                  % (name, 100 * med, 100 * min(cs)))
         if med < worst:
             worst, worst_name = med, name
         if med < SHAPE_MIN.get(name, 0.9):
