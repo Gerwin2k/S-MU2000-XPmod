@@ -884,6 +884,100 @@ inline u16 voice_pan_reg(const u8 *rom, const u8 *elem, int note,
 	return u16((l << 8) | r);
 }
 
+// ---- **ドラムの 1 打**（doc/native-engine.md の 6.86・6.87）
+//
+// ドラムの記録は 42 バイトで、旋律の要素（84 バイト）とは別の並び。
+// 波形の記録（16 バイト）が +26 にそのまま埋まっている。
+//   +1  音程の微調（セント。64 が中央）   +10 減衰 2 の行き先
+//   +11 切る高さ（表の索引）              +12 共振（>> 2）
+//   +13 立ち上がりの速さ                  +14 減衰 1 の速さ
+//   +15 減衰 2 の速さ                      +20 フィルタの第 2 係数
+//   +26 音程の基準（半音。引く）           +27/+28 GM/XG の半音のずらし
+//   +30..+41 ループ前・ループ長・形式と番地
+constexpr u32 DRUM_PITCH_TAB = 0x1E9298;   // セント → 音程の目盛り（1200 = 1024）
+constexpr u32 DRUM_KIT_TABLE = 0x292250;   // キット → 鍵ごとのずれの表（4 バイト）
+constexpr u32 DRUM_RECORDS   = 0x283dd0;   // ずれの元になる番地
+constexpr u32 PART_KIT       = 0x110;      // パートの塊の中の、キットの番号
+
+// キットの番号と鍵から、ドラムの 1 打の記録（42 バイト）。無ければ nullptr。
+// 実機の `0x134DB8`
+inline const u8 *drum_record(const u8 *rom, int kit, int note)
+{
+	if (!rom || (kit & 0x80))
+		return nullptr;                 // bit7 が立つキットは別の道（未対応）
+	const u32 base = rd32(rom, DRUM_KIT_TABLE + u32(kit & 0x7f) * 4);
+	if (base < 0x200000 || base > 0x2ffff0)
+		return nullptr;
+	const u16 off = rd16(rom, base + u32(note & 0x7f) * 2);
+	return off == 0xffff ? nullptr : rom + DRUM_RECORDS + off;
+}
+
+// `SMU2000_DRUM_EXACT=1` で、ドラムを写し取りではなく式で組む
+inline bool drum_exact()
+{
+	static const bool on = std::getenv("SMU2000_DRUM_EXACT") != nullptr;
+	return on;
+}
+
+inline int drum_cents(const u8 *rec, int coarse = 64, int fine = 64, bool xg = true)
+{
+	const int semi = coarse + (xg ? s8(rec[28]) : int(rec[27])) - int(rec[26]);
+	return semi * 100 + (int(rec[1]) - 64) + (fine - 64);
+}
+
+inline u16 drum_pitch_reg(const u8 *rom, const u8 *rec, int cents)
+{
+	int c = cents < 0 ? -cents : cents;
+	if (c > 9600)
+		c = 9600;
+	const u16 t = rd16(rom, DRUM_PITCH_TAB + u32(c) * 2);
+	u16 v = cents < 0 ? u16((-int(t)) & 0x3fff) : u16(t & 0x3fff);
+	const u32 addr = u32(rec[38]) << 24 | u32(rec[39]) << 16 | u32(rec[40]) << 8 | rec[41];
+	if (((addr >> 30) & 3) == 3)
+		v = u16(v | 0x4000);
+	return v;
+}
+
+// ドラムの 1 打のレジスタを、記録だけから組む（写し取りを使わない）。
+// 4 打 × 全鍵 58 個で実機と一致したものだけを入れてある
+inline slot_regs drum_note(const u8 *rom, const u8 *rec, int att,
+                           const defaults &d = defaults(),
+                           int coarse = 64, int fine = 64)
+{
+	slot_regs r;
+	if (!rom || !rec)
+		return r;
+	r.set(0x00, u16(0x1000 | (rd16(rom, CUTOFF_TAB + u32(rec[11]) * 2) & 0x7ff)));
+	r.set(0x01, 0xffff);
+	r.set(0x02, u16(0x8000 | u16(std::min(0x7ff, int(rec[20]) * 16))));
+	r.set(0x03, d.post);
+	r.set(0x04, u16((rec[12] >> 2) << 11));
+	r.set(0x05, d.lfo_amp);
+	// **速さの表は 2 倍しない**（旋律は rate_scale で 2 倍する）
+	r.set(0x06, u16(u16(rom[ATTACK_TAB + u32(rec[13] & 0x7f)]) << 8
+	                | (rec[13] >= 0x7f ? 0x00 : 0x7e)));
+	r.set(0x07, u16(u16(rom[DECAY_TAB + u32(rec[14] & 0x7f)]) << 8 | 0x04));
+	r.set(0x08, u16(u16(rom[DECAY_TAB + u32(rec[15] & 0x7f)]) << 8
+	                | u16(((0x7f - int(rec[10])) * 2) & 0xff)));
+	r.set(0x09, u16(att & 0xff));
+	r.set(0x0a, 0x7000);
+	r.set(0x0b, 0x0000);
+	r.set(0x10, 0x0000);
+	r.set(0x11, drum_pitch_reg(rom, rec, drum_cents(rec, coarse, fine)));
+	const wave_info w = read_wave(rec + 26);
+	r.set(0x12, u16(w.pre_loop >> 16));
+	r.set(0x13, u16(w.pre_loop));
+	r.set(0x14, u16(w.loop_len >> 16));
+	r.set(0x15, u16(w.loop_len));
+	r.set(0x16, u16(w.format_addr >> 16));
+	r.set(0x17, u16(w.format_addr));
+	for (int i = 0; i < 6; i++)
+		r.set(0x20 + i * 2, d.iir[i]);
+	for (int i = 0; i < 6; i++)
+		r.set(0x32 + i, d.mix[i]);
+	return r;
+}
+
 // 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
 inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
                             const voice_cal *cal = nullptr,
