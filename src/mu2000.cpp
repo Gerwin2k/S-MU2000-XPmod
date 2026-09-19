@@ -471,11 +471,21 @@ void mu2000::build_bus()
 			note(a, v, 4);
 			return v;
 		};
-		// SMU2000_RAMWRITE=<番地16進> で、その番地に**書いた**命令の番地を出す
+		// SMU2000_RAMWRITE=<番地16進>[:<長さ16進>] で、その範囲に**書いた**命令の
+		// 番地を出す。長さを付けると、どのバイトが動いたか分からないときに
+		// 塊ごと見張れる（マスター移調を探すときに要った）
 		const char *wp = std::getenv("SMU2000_RAMWRITE");
-		const u32 wa = wp ? u32(std::strtoul(wp, nullptr, 16)) : 0xffffffffu;
-		auto notew = [this, wa](offs_t a, u32 v, int size) {
-			if (a <= wa && wa < a + u32(size))
+		u32 wa = 0xffffffffu, wlen = 1;
+		if (wp) {
+			char *end = nullptr;
+			wa = u32(std::strtoul(wp, &end, 16));
+			if (end && *end == ':')
+				wlen = u32(std::strtoul(end + 1, nullptr, 16));
+			if (!wlen)
+				wlen = 1;
+		}
+		auto notew = [this, wa, wlen](offs_t a, u32 v, int size) {
+			if (a < wa + wlen && wa < a + u32(size))
 				std::fprintf(stderr, "ramwrite s=%llu pc=%06x 番地=%06x = %x (%d bit)\n",
 				             (unsigned long long)trace_sample(),
 				             m_cpu ? m_cpu->pc() : 0, u32(a), v, size * 8);
