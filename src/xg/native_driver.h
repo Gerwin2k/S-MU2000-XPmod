@@ -657,14 +657,27 @@ public:
 	int part_pan(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0e]) : 64; }
 	int part_mod(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_MOD]) : 0; }
 	int part_rev(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x13]) : 40; }
-	// **そのパートの音量の目盛り**（0-128）。実機はパートの塊 +0x12F に持つ。
-	// 音量・エクスプレッションに**マスター音量も同じ形で掛かる**（実測。
-	// マスター 88 でパートの塊が 101 -> 70 ＝ (101 * 89) >> 7）
+	// **そのパートの音量の目盛り**（0-128）。実機はパートの塊 +0x12F に持ち、
+	// 音量の目盛りに掛ける（`0x12A4AA`）。中身は
+	//
+	//   ((音量+1)*(エクスプレッション+1))>>7 に、マスター音量が同じ形で掛かり、
+	//   **インサーションを通すとさらに下がる**（LO-FI で 101 -> 80）
+	//
+	// なので式では作れない。**実機の値を読んで、こちらが動かしたぶんだけ
+	// 比で直す**（つまみを動かしても firmware は 100ms 以内に追いつくが、
+	// その間も正しい値を出せる）。6.114
 	int vol_gain_of(int part, int vol, int expr) const
 	{
 		int g = nv::vol_gain(vol, expr);
-		if (m_ram)
+		if (m_ram) {
 			g = (g * (int(m_ram[ram::SYS_VOLUME]) + 1)) >> 7;
+			// RAM の値と、RAM のつまみから作った値の比で直す
+			const int g_ram = int(m_ram[ram::part_base(part) + ram::PART_GAIN]);
+			int g_calc = nv::vol_gain(part_vol(part), part_expr(part));
+			g_calc = (g_calc * (int(m_ram[ram::SYS_VOLUME]) + 1)) >> 7;
+			if (g_calc > 0)
+				g = g * g_ram / g_calc;
+		}
 		return g < 0 ? 0 : (g > 128 ? 128 : g);
 	}
 
@@ -1053,7 +1066,7 @@ private:
 	u16 pitch_of(const slot_use &s) const
 	{
 		const part_cc &pc = m_cc[s.part];
-		return nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(s.elem),
+		return nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(m_rom, s.elem),
 		                     nv::bend_cents(pc.bend, pc.range) + nv::elem_tune(s.elem)
 		                     + s.glide / 256, nv::key_pivot(s.elem));
 	}
@@ -1253,7 +1266,7 @@ public:
 			if (!nv::element_active(el, pnote, pvel))
 				continue;
 			// 波形の番地で、写し取ったスロットと結び付ける
-			const u8 *we = nv::wave_entry(m_rom, nv::wave_set(el), nv::wave_note(el, pnote));
+			const u8 *we = nv::wave_entry(m_rom, nv::wave_set(el), nv::wave_note(m_rom, el, pnote));
 			const nv::voice_cal *c =
 			    we ? nv::match_cal(cals, nv::read_wave(we).format_addr, &taken) : nullptr;
 			if (!c && size_t(used) < cals.size()) {
@@ -1281,7 +1294,7 @@ public:
 				m_traj = true;
 				m_traj_next = 0;       // つぎの tick で見直す
 			}
-			su.lvl0  = nv::volume_level(m_rom, el, c ? c->base_level : 64, pnote);
+			su.lvl0  = nv::volume_level(m_rom, rec, el, pnote, c ? c->base_level : 0);
 			su.arest = nv::volume_rest(m_rom, el, pnote, pvel);
 			su.att   = nv::clamp_att(nv::volume_att_from(
 			    m_rom, su.lvl0, su.arest,
@@ -1300,7 +1313,7 @@ public:
 			if (pc.porta_on && src >= 0 && src != note) {
 				su.glide_step = nv::porta_step(m_rom, pc.porta_time);
 				if (su.glide_step > 0) {
-					su.glide = (src - note) * nv::key_follow(el) * 256;
+					su.glide = (src - note) * nv::key_follow(m_rom, el) * 256;
 					// firmware の 10ms タイマは世界共通なので、鍵を押した時刻からで
 					// なく**格子**に乗せる（同時に鳴る音の滑りがそろう）。
 					// 格子は包絡線と同じ（録画から取った実機の目）を使う（6.82）

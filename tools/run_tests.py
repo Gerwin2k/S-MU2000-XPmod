@@ -260,6 +260,10 @@ SHAPE_MIN = {
     "dense":   0.40, "port_b": 0.98, "bend":  0.98, "lofi":    0.98,
     "egcc":    0.98, "porta":  0.38, "at":    0.95, "sxparam": 0.95,
     "pedals":  0.95, "partsx": 0.95,
+    # keylevel は**鍵 84 の穴**を含む（SoundTrk・Rain が 10dB 静かになる。
+    # doc/native-engine.md の 6.115）。直るまでは低い下限で「もっと悪く
+    # ならないこと」だけを見る
+    "keylevel": 0.40,
 }
 
 

@@ -1354,7 +1354,7 @@ void mu2000::native_learn_finish()
 					continue;
 				const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
 				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2),
-				                                  xg::nv::wave_note(e2, learn_note_shifted()));
+				                                  xg::nv::wave_note(rom, e2, learn_note_shifted()));
 				if (w2 && xg::nv::read_wave(w2).format_addr == want) {
 					idx = k;
 					used_elem |= 1u << k;
@@ -1389,14 +1389,18 @@ void mu2000::native_learn_finish()
 			const int fwl = xg::nv::fw_voice_level(m_ram.data(), ch);
 			// **検算**: 読んだ目盛りから組み直した減衰が、実機が書いた 0x09 と
 			// 合うか。合わなければ塊が別の声のものなので、逆引きに落とす
-			const bool good = fwl > 0 &&
-			    xg::nv::volume_att_from(rom, fwl, rest, gain) == att_ref;
-			cal.base_level = good
-			    ? xg::nv::base_level_from_fw(rom, el0, fwl, learn_note_shifted())
-			    : xg::nv::calibrate_level(rom, el0, att_ref, learn_note_shifted(),
-			                              learn_vel_sensed(), gain);
-			if (!good && fwl > 0)
-				m_ne_lvl_miss++;
+			// **目盛りは ROM から出す**（6.113）。ここで覚えるのは、実機の
+			// ボイスの塊 +118 とのずれだけ（普通は 0）。**頭打ち（0 か 128）に
+			// なっている鍵では差が取れない**ので、そのときは 0 のままにする
+			const int mine = xg::nv::volume_level(rom, m_learn_rec, el0,
+			                                      learn_note_shifted(), 0);
+			cal.base_level = 0;
+			if (fwl >= 1 && fwl <= 127 && mine >= 1 && mine <= 127
+			    && xg::nv::volume_att_from(rom, fwl, rest, gain) == att_ref) {
+				cal.base_level = fwl - mine;
+				if (cal.base_level)
+					m_ne_lvl_miss++;
+			}
 		}
 		// **減衰の目盛りのずれを覚える**。実機が書いた 0x07・0x08 の上位から
 		// 目盛りを引き直し、こちらの式で出した目盛りとの差を取る。
@@ -1444,19 +1448,20 @@ void mu2000::native_learn_finish()
 		for (int k = 0; k < ncal; k++) {
 			const xg::nv::voice_cal &c = cals[size_t(k)];
 			const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
-			const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), xg::nv::wave_note(e2, m_learn_note));
+			const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2),
+			                                  xg::nv::wave_note(rom, e2, m_learn_note));
 						std::fprintf(stderr, "  写し%d 0x11=%04x 0x32=%04x 0x09=%04x 波形=%08x"
 			                     " / 式 0x11=%04x 要素b18=%d b0=%d b1=%d\n",
 			             k, c.reg[0x11], c.reg[0x32], c.reg[0x09], c.wave_addr(),
 			             w2 ? xg::nv::pitch_reg(xg::nv::read_wave(w2), m_learn_note,
-			                                    xg::nv::key_follow(e2), 0,
+			                                    xg::nv::key_follow(rom, e2), 0,
 			                                    xg::nv::key_pivot(e2)) : 0,
 			             e2[18], e2[0], e2[1]);
 			if (w2)
 				std::fprintf(stderr, "        こちらの波形=%08x 基準鍵=%d 微調=%d 上限鍵=%d 追従=%d 組=%d%s",
 				             xg::nv::read_wave(w2).format_addr, xg::nv::read_wave(w2).base_key,
 				             xg::nv::read_wave(w2).fine_cents, xg::nv::read_wave(w2).key_max,
-				             xg::nv::key_follow(e2), xg::nv::wave_set(e2), "\n");
+				             xg::nv::key_follow(rom, e2), xg::nv::wave_set(e2), "\n");
 		}
 	}
 	const u32 learn_ctx = cals.empty() ? 0 : cals[0].cal_ctx;
