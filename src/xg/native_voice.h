@@ -403,9 +403,21 @@ inline int peg_rate_vel_adj(const u8 *elem, int vel)
 
 // 速さのレジスタ（`0x0b` の上位バイト）。実機の `0x12BCF0`。
 // 途中で何度も符号つき 1 バイトに切り詰めている
-inline int peg_rate_idx(const u8 *elem, int note, int vel, int part_rate = 64)
+// 段ごとの生の速さ（段 0 は byte26、段 1 は byte27、段 2 は byte28、離しは byte29）
+inline int peg_rate_raw(const u8 *elem, int stage)
 {
-	int r = int(elem[26]) + (int(s8(u8(64 - part_rate))) >> 2);
+	return int(elem[26 + (stage < 0 ? 0 : (stage > 3 ? 3 : stage))]);
+}
+
+// 段ごとの行き先の高さ（段 0 は byte31、段 1 は byte32、段 2 は byte33、離しは byte34）
+inline int peg_level_of(const u8 *elem, int stage)
+{
+	return int(elem[31 + (stage < 0 ? 0 : (stage > 3 ? 3 : stage))]);
+}
+
+inline int peg_rate_idx_of(const u8 *elem, int raw, int note, int vel, int part_rate = 64)
+{
+	int r = raw + (int(s8(u8(64 - part_rate))) >> 2);
 	if (s8(u8(r)) > 63) r = 63;
 	if (s8(u8(r)) < 0)  r = 0;
 	r += peg_rate_key_adj(elem, note);
@@ -417,10 +429,23 @@ inline int peg_rate_idx(const u8 *elem, int note, int vel, int part_rate = 64)
 	return r;
 }
 
+inline int peg_rate_idx(const u8 *elem, int note, int vel, int part_rate = 64)
+{
+	return peg_rate_idx_of(elem, int(elem[26]), note, vel, part_rate);
+}
+
 inline int peg_rate_reg(const u8 *rom, const u8 *elem, int note = 60, int vel = 100,
                         int part_rate = 64)
 {
 	return rd16s(rom, PEG_RATE_TAB + u32(peg_rate_idx(elem, note, vel, part_rate)) * 2);
+}
+
+// 段 stage の速さのレジスタ
+inline int peg_rate_reg_stage(const u8 *rom, const u8 *elem, int stage, int note, int vel,
+                              int part_rate = 64)
+{
+	const int i = peg_rate_idx_of(elem, peg_rate_raw(elem, stage), note, vel, part_rate);
+	return rd16s(rom, PEG_RATE_TAB + u32(i) * 2);
 }
 
 // `SMU2000_NO_PEG` を立てると音程の包絡線をやめる（比べるための逃げ道）
