@@ -369,13 +369,22 @@ inline int vel_sense(int vel, int depth, int offset)
 //
 //   減衰 = 表2[0x1E6798 + 表1[0x1E5E5E + 曲線*128 + 強さ]]
 //
-// 曲線は音色ごと（普通は 0 ＝ そのまま）。GrandPno の強さ 1-127 の全段で、
-// 実機の値とぴったり一致する。
+// **曲線は要素の byte68 で選ぶ**（6.109）。表は 7 行しかない
+// （0x1E5E5E から 0x1E61DE まで ＝ 128 × 7）。byte68 が 7 以上の要素も
+// あるが、そこは別の使われ方をしているようなので行 0 に倒す。
+// 行 0 は素通し、行 1 は少し丸い曲線。Bottle(76) と SoundTrk(97) が行 1 で、
+// 実機のボイスの塊 +119 が強さ 40/100/127 で 22/4/0（行 0 なら 26/5/0）
+constexpr int VEL_CURVE_ROWS = 7;
+
 inline int velocity_att(const u8 *rom, int vel, int curve = 0)
 {
-	const int i = rom[VEL_CURVE + u32(curve) * 128 + u32(vel & 0x7f)];
+	const u32 c = u32(curve >= 0 && curve < VEL_CURVE_ROWS ? curve : 0);
+	const int i = rom[VEL_CURVE + c * 128 + u32(vel & 0x7f)];
 	return rom[LEVEL_TAB + u32(i & 0x7f)];
 }
+
+// その要素の強さの曲線の行（byte68）
+inline int vel_curve_of(const u8 *elem) { return int(elem[68]); }
 
 inline int rd16s(const u8 *rom, u32 a)
 {
@@ -682,16 +691,19 @@ inline int wave_level(const u8 *rom, const u8 *elem, int note)
 	return we ? int(we[0]) : 0;
 }
 
-// 鍵の曲線が音量の目盛りに効く倍率。**分数で持つ**（1 倍でも 2 倍でもない）。
-// `nativeplay --levelcheck` で音色ごとに総当たりすると、外れがいちばん少なく
-// なるのはどれも 6/4 = 1.5 倍のあたりに集まった（16 音色で確かめた）。
-// 1 倍や 2 倍にすると、鍵 60 から離れたところでずれる
-constexpr int LEVEL_CURVE_NUM = 6;
-constexpr int LEVEL_CURVE_DEN = 4;
-
+// 鍵の曲線が音量の目盛りに効く倍率は **2 倍**。実機（`0x12C1D8`）は表を
+// 引いた値を 1 ビット左へ寄せ、**符号付き 1 バイト**にして持つ（`setup[8]`)。
+// それを目盛りに足す（`0x12AC0E`）。
+//
+// 前は 6/4 = 1.5 倍にしていた。当時は写し取った減衰から目盛りを逆に引いて
+// いたので、表の段の幅にずれが埋もれて 1.5 倍がいちばん「マシ」に見えた。
+// 実機の目盛り（ボイスの塊 +118。6.102）を直に読めるようにしたら、Bottle の
+// 鍵 36/42/48/60 が 1/19/39/65 で、曲線の差 -32/-23/-13/0 のちょうど 2 倍と
+// 分かった（1.5 倍だと鍵 36 で 40 段ぶん明るすぎた ＝ 35dB 違っていた）
 inline int level_curve_scaled(const u8 *rom, const u8 *elem, int note)
 {
-	return level_key_curve(rom, elem, note) * LEVEL_CURVE_NUM / LEVEL_CURVE_DEN;
+	const int v = level_key_curve(rom, elem, note) * 2;
+	return int(s8(u8(v)));                  // 実機は 1 バイトに詰めて持つ
 }
 
 // 写し取ったときのつまみの位置（既定のパート: 音量 100・エクスプレッション 127）
@@ -716,7 +728,8 @@ inline int fw_voice_level(const u8 *ram, int slot)
 inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref,
                            int vel_ref, int gain_ref = VOL_GAIN_DEF)
 {
-	const int rest = att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref);
+	const int rest = att_ref / 2 - velocity_att(rom, vel_ref, vel_curve_of(elem))
+	               - wave_level(rom, elem, note_ref);
 	// **つまみのぶんを割り戻す**。base_level が持つのは「掛ける前の目盛り」で、
 	// 鳴らすときに `level_with_gain` でそのときの音量を掛け直す（6.102）。
 	//
@@ -761,7 +774,7 @@ inline int volume_level(const u8 *rom, const u8 *elem, int base_level, int note)
 // 段の変わり目で 1.5dB ほど動くので、これを入れないと段ごとにずれる
 inline int volume_rest(const u8 *rom, const u8 *elem, int note, int vel)
 {
-	return velocity_att(rom, vel) + wave_level(rom, elem, note);
+	return velocity_att(rom, vel, vel_curve_of(elem)) + wave_level(rom, elem, note);
 }
 
 // 目盛り・残り・そのときの音量から、0x09 に入れる減衰。
