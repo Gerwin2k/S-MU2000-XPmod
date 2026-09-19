@@ -260,6 +260,58 @@ def case_sxparam():
     return [track(seq(ev))], 6.5
 
 
+# pedals の回で使う生のイベント
+PROG48     = b'\xc0\x30'
+DAMPER_ON  = b'\xb0\x40\x7f'
+DAMPER_OFF = b'\xb0\x40\x00'
+SOST_ON    = b'\xb0\x42\x7f'
+SOST_OFF   = b'\xb0\x42\x00'
+SOFT_ON    = b'\xb0\x43\x7f'
+SOFT_OFF   = b'\xb0\x43\x00'
+KEY64_ON   = b'\x90\x40\x64'
+KEY64_OFF  = b'\x80\x40\x00'
+VIB_RATE_A = b'\xb0\x4c\x20'
+VIB_DEPTH_A= b'\xb0\x4d\x60'
+VIB_DELAY_A= b'\xb0\x4e\x10'
+VIB_RATE_B = b'\xb0\x4c\x40'
+VIB_DEPTH_B= b'\xb0\x4d\x40'
+VIB_DELAY_B= b'\xb0\x4e\x40'
+
+
+def case_pedals():
+    """ペダルとビブラート。
+
+    CC64（ダンパー）・CC66（ソステヌート）・CC67（ソフト）と、
+    CC76-78（ビブラートの速さ・深さ・遅れ）。
+
+    ソステヌートは**踏んだ時点で鳴っている音だけ**を待たせるので、踏んだあとに
+    押した鍵は普通に離れる。native の口がそこを取り違えると、あとの音が
+    鳴りっぱなしになるか、待たせるはずの音が切れる。
+    ビブラートの 3 つは式が起こせていないので**写し取り直し**で合わせている
+    （doc/native-engine.md の 6.103）。印に混ぜ忘れると、つまみが効かない"""
+    ev = head()
+    ev += [(1.0, PROG48)]                            # Strings（伸びる音）
+    ev += note(0, 60, 100, 1.2, 0.5)                 # 1 音目。ここで写し取る
+    # ダンパー: 踏んでいる間は離しても鳴りつづける
+    ev += [(1.9, DAMPER_ON)]
+    ev += note(0, 62, 100, 2.0, 0.3)
+    ev += [(2.6, DAMPER_OFF)]                        # 離す → ここで切れる
+    # ソステヌート: 踏んだ時点の音だけ待たせる
+    ev += [(3.0, KEY64_ON), (3.2, SOST_ON), (3.4, KEY64_OFF)]
+    ev += note(0, 67, 100, 3.5, 0.3)                 # これは普通に離れる
+    ev += [(4.2, SOST_OFF)]                          # 離す → 鍵 64 が切れる
+    # ソフトペダル
+    ev += [(4.5, SOFT_ON)]
+    ev += note(0, 60, 100, 4.6, 0.4)
+    ev += [(5.1, SOFT_OFF)]
+    # ビブラート（次の音から効く）
+    ev += [(5.3, VIB_RATE_A), (5.3, VIB_DEPTH_A), (5.3, VIB_DELAY_A)]
+    ev += note(0, 64, 100, 5.5, 0.8)
+    ev += [(6.5, VIB_RATE_B), (6.5, VIB_DEPTH_B), (6.5, VIB_DELAY_B)]
+    ev += note(0, 64, 100, 6.7, 0.8)
+    return [track(seq(ev))], 8.0
+
+
 CASES = {
     "piano":   case_piano,
     "chord":   case_chord,
@@ -273,6 +325,7 @@ CASES = {
     "porta":   case_porta,
     "at":      case_at,
     "sxparam": case_sxparam,
+    "pedals":  case_pedals,
 }
 
 

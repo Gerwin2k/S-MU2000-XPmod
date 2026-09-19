@@ -68,6 +68,7 @@ public:
 		u32 tpos = 0;                   // フィルタの包絡線の、つぎに書く段
 		u64 tstart = 0;                 // 鳴らし始めた時刻
 		bool held = false;              // ダンパーで離しを待たせている
+		bool sost = false;              // ソステヌート（CC66）で離しを待たせている
 		// **離しの最中**（on は落ちたが、まだ鳴り終わっていない）。
 		// 実機はこの間もつまみの動きを反映するので、こちらも追う必要がある。
 		// 追わないと、曲の終わりの CC7 のフェードアウトで、離したばかりの
@@ -535,7 +536,8 @@ public:
 		// 黙って無視すると、ポルタメントや EG の設定が効かない音になる
 		u32 unknown = 0;
 		int bend = 8192, range = 2;            // ピッチベンドと、その幅（半音）
-		bool damper = false;                   // CC64
+		bool damper = false;
+		bool sost_on = false;          // CC66（ソステヌート）                   // CC64
 	};
 
 	// firmware を回したあとに、パートの音量・表現・パンをワーク RAM から取り直す。
@@ -592,6 +594,13 @@ public:
 		const u8 *b = m_ram + ram::part_base(part);
 		mix(b[0x11]);
 		mix(b[0x14]);
+		// **ビブラート（08 pp 15 速さ・16 深さ・17 遅れ ＝ CC76・77・78）**。
+		// これも式が起こせていない（`0x0a` の上位と下位の両方を動かす）ので、
+		// EG のつまみと同じく**写し取り直し**で合わせる。既定の 64 のままなら
+		// 印は変わらないので、写し取りが余計に走ることは無い
+		mix(b[0x15]);
+		mix(b[0x16]);
+		mix(b[0x17]);
 		// EG のつまみ（CC73 アタック +0x1a・CC75 ディケイ +0x1b・CC72 リリース +0x1c）。
 		// この 3 つは式が起こせていない（CC73 は 0x06 だけでなく 0x00・0x07・0x0b も
 		// 動かす多目標のつまみだった）。**式の代わりに写し取り直す**：
@@ -737,6 +746,21 @@ public:
 			p.damper = value >= 64;
 			if (!p.damper)
 				release_held(part);
+			return true;
+		case 0x42:                             // ソステヌート
+			// ダンパーと違って、**踏んだ時点で鳴っている音だけ**を待たせる。
+			// あとから押した鍵は普通に離れる
+			if (value >= 64) {
+				p.sost_on = true;
+				for (int i = 0; i < SLOTS; i++) {
+					slot_use &s2 = m_slot[i];
+					if (s2.on && s2.part == part)
+						s2.sost = true;
+				}
+			} else {
+				p.sost_on = false;
+				release_sost(part);
+			}
 			return true;
 		case 0x78: case 0x7b:                  // 音を全部切る
 			all_off(part);
@@ -984,6 +1008,19 @@ private:
 			if (s.on && s.held && s.part == part) {
 				s.held = false;
 				note_off(part, s.note);
+			}
+		}
+	}
+
+	// ソステヌートを離したとき、待たせていた音を切る
+	void release_sost(int part)
+	{
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (s.sost && s.part == part) {
+				s.sost = false;
+				if (s.on)
+					note_off(part, s.note);
 			}
 		}
 	}
@@ -1275,6 +1312,10 @@ public:
 				any = true;
 				continue;
 			}
+			if (s.sost) {                  // ソステヌートで待たせている音
+				any = true;
+				continue;
+			}
 			// 減衰は**いまのつまみで**出す。s.att は鳴らし始めたときの値なので、
 			// 途中で音量を絞られた音を離すと、絞る前の大きさで鳴り終わってしまう
 			if (s.elem)
@@ -1313,6 +1354,7 @@ public:
 				m_poke(u32(i) * 64 + 9, nv::release_reg(m_rom, s.elem, s.note, s.att));
 			s.on = false;
 			s.held = false;
+			s.sost = false;
 		}
 		m_pend.clear();
 		m_traj = false;
