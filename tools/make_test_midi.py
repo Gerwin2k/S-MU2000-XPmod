@@ -484,6 +484,52 @@ def case_mono():
     return [track(seq(ev))], 7.0
 
 
+def case_ports():
+    """**MIDI IN A-D の 4 口**（パート 1-64）。C と D は USB でしか来ないので、
+    `run_tests.py` は `--usb` で鳴らす（`step_usb`）。
+
+    口ごとの振り分け・パートの番号の付け方・64 パートぶんのスロットの
+    取り合いを一度に見る。ここが壊れると、3 口目から先が無音になるか、
+    別のパートの音で鳴る"""
+    tracks = []
+    progs = (0x00, 0x30, 0x50, 0x0b)
+    keys = (48, 55, 62, 69)
+    for port in range(4):
+        ev = head() if port == 0 else []
+        ev += [(1.0, bytes([0xc0, progs[port]]))]
+        ev += note(0, keys[port], 100, 1.3 + port * 0.12, 1.4)
+        # 2 音目は native が鳴らす
+        ev += note(0, keys[port] + 3, 100, 3.0 + port * 0.12, 1.2)
+        tracks.append(track(seq(ev), port=port))
+    return tracks, 5.5
+
+
+def case_ctlreset():
+    """**CC120 オールサウンドオフ・CC121 コントローラリセット・CC123 オールノートオフ**。
+
+    * CC123 は押している鍵を**離す**（離しの尾は残る）
+    * CC120 は**その場で切る**（尾も残らない）
+    * CC121 はつまみを既定に戻す（音量・パン・ベンドなど）
+
+    ここが壊れると、曲の切り替わりで音が残るか、逆に切れすぎる"""
+    ev = head()
+    ev += [(1.0, b'\xc0\x30')]                      # Strings（尾が長い）
+    ev += note(0, 60, 100, 1.2, 0.8)                 # 1 音目。ここで写し取る
+    # CC123 オールノートオフ（離す）
+    ev += [(2.1, bytes([0x90, 64, 100])), (2.1, bytes([0x90, 67, 100]))]
+    ev += [(2.6, b'\xb0\x7b\x00')]
+    # CC120 オールサウンドオフ（その場で切る）
+    ev += [(3.4, bytes([0x90, 60, 100])), (3.4, bytes([0x90, 64, 100]))]
+    ev += [(3.9, b'\xb0\x78\x00')]
+    # つまみを動かしてから CC121 で戻す
+    ev += [(4.5, b'\xb0\x07\x40'), (4.55, b'\xb0\x0a\x20'),
+           (4.6, b'\xe0\x00\x60')]
+    ev += note(0, 62, 100, 4.8, 0.8)
+    ev += [(5.8, b'\xb0\x79\x00')]                  # CC121 リセット
+    ev += note(0, 62, 100, 6.0, 0.8)                 # 既定に戻っているはず
+    return [track(seq(ev))], 7.5
+
+
 CASES = {
     "piano":   case_piano,
     "chord":   case_chord,
@@ -502,6 +548,8 @@ CASES = {
     "keylevel": case_keylevel,
     "rpn":     case_rpn,
     "mono":    case_mono,
+    "ctlreset": case_ctlreset,
+    "ports":   case_ports,
 }
 
 

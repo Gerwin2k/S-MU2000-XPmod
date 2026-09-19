@@ -96,6 +96,7 @@ public:
 		// **フィルタの包絡線**（doc/native-engine.md の 6.63）。
 		// 写し取った録画の代わりに、こちらで式から動かす
 		int facc = 0, ftgt = 0, finc = 0, fstage = 0, fadj = 0, fvel = 100;
+		bool hard = false;              // オールサウンドオフで切った（離しを最速に）
 		u64 fnext = 0;                  // つぎに 1 段進める時刻
 		// **音程の包絡線の行き先**。実機はキーオンの直後にこれを書いて、
 		// あとはチップに任せる（doc/native-engine.md の 6.68）。
@@ -885,7 +886,7 @@ public:
 		return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01 ||
 		       cc == 0x5b || cc == 0x5d || cc == 0x4a || cc == 0x47 ||
 		       cc == 0x05 || cc == 0x41 || cc == 0x54 ||
-		       cc == 0x7e || cc == 0x7f;
+		       cc == 0x7e || cc == 0x7f || cc == 0x79;
 	}
 
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
@@ -938,7 +939,28 @@ public:
 				release_sost(part);
 			}
 			return true;
-		case 0x78: case 0x7b:                  // 音を全部切る
+		// **CC121 コントローラリセット**（6.126）。ベンド・モジュレーション・
+		// エクスプレッション・ダンパー・ポルタメントを既定へ戻す。
+		// 音量とパンと送りは**戻らない**（XG も MIDI もそう決まっている）。
+		// 入れるまではベンドが残って、リセット後の音が半音ずれていた
+		case 0x79:
+			p.bend = 8192;
+			p.mod = 0;
+			p.expr = 127;
+			p.damper = false;
+			p.sost_on = false;
+			p.porta_on = false;
+			p.porta_src = -1;
+			p.unknown &= ~((1u << 26) | (1u << 27));
+			release_held(part);
+			release_sost(part);
+			apply_bend(part);
+			apply_cc(part);
+			return false;
+		case 0x78:                             // CC120 オールサウンドオフ
+			all_off(part, true);
+			return false;
+		case 0x7b:                             // CC123 オールノートオフ
 			all_off(part);
 			return false;
 		default: {
@@ -1024,8 +1046,7 @@ private:
 			if (!s.on) {
 				if (!s.rel || m_clock - s.rel_at > REL_FOLLOW)
 					continue;
-				m_poke(u32(i) * 64 + 9,
-				       nv::release_reg(m_rom, s.elem, s.note, note_att(s, part)));
+				m_poke(u32(i) * 64 + 9, release_of(s, part, s.note));
 				continue;
 			}
 			m_poke(u32(i) * 64 + 9, u16(note_att(s, part)));
@@ -1584,8 +1605,7 @@ public:
 			// 減衰は**いまのつまみで**出す。s.att は鳴らし始めたときの値なので、
 			// 途中で音量を絞られた音を離すと、絞る前の大きさで鳴り終わってしまう
 			if (s.elem)
-				m_poke(u32(i) * 64 + 9,
-				       nv::release_reg(m_rom, s.elem, note, note_att(s, part)));
+				m_poke(u32(i) * 64 + 9, release_of(s, part, note));
 			// ドラムは離しでも音を切らない（実機も打ったら鳴りきる）
 			s.on = false;
 			// **ドラムも「鳴っている」ことにする**。離しの段は無いが、
@@ -1629,11 +1649,32 @@ public:
 		m_traj_next = 0;
 	}
 
-	void all_off(int part)
+	// 離しの `0x09`。**オールサウンドオフ（CC120）は速さを最大にする**
+	// （実機は上位に `0xf0` を書く。6.126）。ふつうの離しは音色の速さ
+	u16 release_of(const slot_use &s, int part, int note) const
 	{
-		for (int i = 0; i < SLOTS; i++)
-			if (m_slot[i].on && m_slot[i].part == part)
-				note_off(part, m_slot[i].keynote);
+		const u16 v = nv::release_reg(m_rom, s.elem, note, note_att(s, part));
+		return s.hard ? u16(0xf000 | (v & 0xff)) : v;
+	}
+
+	// CC123（オールノートオフ）は離す。CC120（オールサウンドオフ）は
+	// ダンパーも無視して、離しを最速にして切る
+	void all_off(int part, bool hard = false)
+	{
+		for (int i = 0; i < SLOTS; i++) {
+			slot_use &s = m_slot[i];
+			if (s.part != part)
+				continue;
+			if (hard && (s.on || s.rel)) {
+				s.hard = true;
+				s.held = false;
+				s.sost = false;
+				if (!s.on && s.elem)       // もう離している音も切り直す
+					m_poke(u32(i) * 64 + 9, release_of(s, part, s.note));
+			}
+			if (s.on)
+				note_off(part, s.keynote);
+		}
 	}
 
 	// ドラムの 1 打。写し取った値をそのまま使い、音量だけ強さで動かす
