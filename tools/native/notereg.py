@@ -77,12 +77,76 @@ def state(rows, slots, upto):
     return st
 
 
+def pair_slots(sa, sb, ea, eb):
+    """要素の並びはスロット番号の順とは限らない。波形の番地で組み直す"""
+    left = list(eb)
+    out = []
+    for x in ea:
+        va = sa.get(x, {})
+        wa = (va.get(0x16), va.get(0x17))
+        # 波形の番地が同じものから選び、**いちばん本数が合うもの**を取る
+        # （重ねの音色は 2 つの要素が同じ波形を使うので、番地だけでは決まらない）
+        cand = [y for y in left
+                if (sb.get(y, {}).get(0x16), sb.get(y, {}).get(0x17)) == wa] or left
+        best = None
+        if cand:
+            best = max(cand, key=lambda y: sum(1 for r in va
+                                               if r in sb.get(y, {})
+                                               and va[r] == sb[y][r]))
+            left.remove(best)
+        out.append((x, best))
+    return out
+
+
+def report_all(a, ka, ra, kb, rb):
+    """キーオンを全部見て、レジスタが何本合っているかをまとめる"""
+    n = min(len(ka), len(kb))
+    tot = same = 0
+    bad = collections.Counter()
+    events = 0
+    for i in range(n):
+        ea, eb = ka[i], kb[i]
+        if len(ea[1]) != len(eb[1]):
+            continue
+        events += 1
+        sa = state(ra, ea[1], ea[0] + int(a.at * 44100))
+        sb = state(rb, eb[1], eb[0] + int(a.at * 44100))
+        for x, y in pair_slots(sa, sb, ea[1], eb[1]):
+            if y is None:
+                continue
+            va, vb = sa.get(x, {}), sb.get(y, {})
+            miss = []
+            for r in va:
+                if r not in vb:
+                    continue
+                tot += 1
+                if va[r] == vb[r]:
+                    same += 1
+                else:
+                    bad[r] += 1
+                    miss.append('0x%02x(%04x/%04x)' % (r, va[r], vb[r]))
+            if miss:
+                print('  %8.4f 秒 slot%-3d ⇔ %-3d  %s'
+                      % (ea[0] / 44100.0, x, y, ' '.join(miss[:6])))
+    if not tot:
+        print('比べられるキーオンが無い')
+        return
+    print('%s  キーオン %d 件（%d 件は声の数が違うので飛ばした）'
+          % (a.name, events, min(len(ka), len(kb)) - events))
+    print('  レジスタ %d 本中 %d 本が一致（%.1f%%）' % (tot, same, 100.0 * same / tot))
+    for r, c in bad.most_common(8):
+        print('    0x%02x が %d 本違う' % (r, c))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('roms')
     ap.add_argument('name')
     ap.add_argument('secs')
-    ap.add_argument('when', type=float, help='この時刻に近いキーオンを見る（秒）')
+    ap.add_argument('when', type=float, nargs='?', default=None,
+                    help='この時刻に近いキーオンを見る（秒）。--all なら要らない')
+    ap.add_argument('--all', action='store_true',
+                    help='キーオンを全部見て、合っている本数をまとめる')
     ap.add_argument('--at', type=float, default=0.05, help='キーオンから何秒後の値か')
     ap.add_argument('--usb', action='store_true')
     a = ap.parse_args()
@@ -96,6 +160,11 @@ def main():
     if not ka or not kb:
         sys.exit('キーオンが見つからない')
 
+    if a.all:
+        report_all(a, ka, ra, kb, rb)
+        return
+    if a.when is None:
+        sys.exit('時刻を渡すか --all を付ける')
     target = a.when * 44100
     ea = min(ka, key=lambda k: abs(k[0] - target))
     eb = min(kb, key=lambda k: abs(k[0] - target))

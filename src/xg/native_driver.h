@@ -1111,7 +1111,13 @@ private:
 		// 明るさ（CC71）は写し取りとの差ではなく、そのまま足す
 		if (s.cal && !nv::cut_exact())
 			return cutoff_reg(base, *s.cal, s.part, s.elem, s.note);
-		const int now = m_cc[s.part].bri;
+		return cut_plain(base, s.part);
+	}
+
+	// 式で出した `0x00` に、明るさ（CC71）だけを足す
+	u16 cut_plain(u16 base, int part) const
+	{
+		const int now = m_cc[part].bri;
 		if (now < 0 || now == 64)
 			return base;
 		int v = int(base & 0xfff) + nv::bright_shift(now);
@@ -1423,7 +1429,11 @@ public:
 			su.cut = sr.v[0x00];
 			if (c) {
 				sr.set(0x0a, lfo_reg(su.lfo, *c, part));
-				sr.set(0x00, cutoff_reg(su.cut, *c, part, el, note));
+				// 式で出した値なら鍵の追従はもう入っている（6.123）。
+				// 明るさ（CC71）だけを、写し取りとの差ではなくそのまま足す
+				sr.set(0x00, nv::cut_exact()
+				             ? cut_plain(su.cut, part)
+				             : cutoff_reg(su.cut, *c, part, el, note));
 				// **共振は式で出した値に CC71 の差ぶんを乗せる**（写し取った
 				// 値ではない。強さで変わるので写し取りは使えない。6.69）
 				sr.set(0x04, reso_reg(sr.v[0x04], *c, part));
