@@ -999,11 +999,23 @@ inline int fenv_init(const u8 *rom, const u8 *elem, int vel)
 //   そこへ包絡線の初めの値（>>2）を足して下 11bit を取る
 // 包絡線の今の値（facc）を渡すと、そのときの `0x00` を返す。
 // 実機は 10ms ごとにこれを書き直している
-// `SMU2000_CUT_EXACT=1` で、鍵を押した瞬間の `0x00` を実機と同じ式にする。
-// 既定は切（上の但し書きを見よ）
+// 鍵を押した瞬間の `0x00` を**実機と同じ式で出す**。
+//
+// **2026-09-20 から既定で入**（6.116）。以前は「写し取りの無いスロットは
+// フィルタの包絡線が動かないので試し曲が 0.36dB 明るくなる」ので切って
+// いたが、そのあとの直し（送り・パン・音量・鍵の曲線・強さの曲線・
+// 鍵の追従）で前提が変わり、入れたほうが良くなった:
+//
+//   `native の口` のいちばん悪い値   切 -0.41dB -> 入 **-0.05dB**
+//   SoundTrk の鍵 84                切 -10dB   -> 入 **+0.25dB**
+//
+// `SMU2000_CUT_EXACT=0` で前の道に戻せる
 inline bool cut_exact()
 {
-	static const bool on = std::getenv("SMU2000_CUT_EXACT") != nullptr;
+	static const bool on = [] {
+		const char *e = std::getenv("SMU2000_CUT_EXACT");
+		return !e || (e[0] != '0' || e[1]);
+	}();
 	return on;
 }
 
@@ -1197,10 +1209,8 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 0-0xFFF に収める。鍵の追従を入れていなかったので、Flute のように
 	// 曲線を持つ音色で鍵を押した瞬間の値がずれていた（6.71）
 	// **鍵を押した瞬間の値そのもの**は `cutoff_keyon` が出せる（14 音色 ×
-	// 鍵 5 通り × 強さ 3 通りで実機と完全に一致）。けれども今はまだ既定で
-	// 使えない: 写し取りの無いスロットはフィルタの包絡線が動かないので、
-	// 包絡線の初めのぶんだけ開いたままになり、試し曲が 0.36dB 明るくなる。
-	// `SMU2000_CUT_EXACT=1` で試せる（doc/native-engine.md の 6.71）
+	// 鍵 5 通り × 強さ 3 通りで実機と完全に一致）。**既定で入**（6.116）。
+	// `SMU2000_CUT_EXACT=0` で写し取り前提の前の道に戻せる
 	r.set(0x00, cut_exact()
 	            ? cutoff_keyon(rom, elem, note, vel)
 	            : u16(0x1000 | (rd16(rom, CUTOFF_TAB + u32(elem[37]) * 2) & 0x7ff)));
