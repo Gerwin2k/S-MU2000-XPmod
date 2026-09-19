@@ -1362,9 +1362,28 @@ void mu2000::native_learn_finish()
 			}
 			idx = int(cals.size()) < nel ? int(cals.size()) : 0;
 		}
-		cal.base_level = xg::nv::calibrate_level(rom, xg::nv::element(rom, m_learn_rec, idx),
-		                                         cal.has(9) ? (cal.reg[9] & 0xff) : 64,
-		                                         m_learn_note, m_learn_vel);
+		// **音量の目盛りは実機の塊から直に取る**（6.102）。減衰の表は同じ値が
+		// 3-4 段つづくので、減衰から目盛りを逆に引くと幅でしか分からない。
+		// 掛ける前の目盛りは実機がボイスの塊 +118 に持っているので、それを
+		// そのまま使えば当て推量が要らない。取れなければ逆引きに落とす
+		{
+			const u8 *el0 = xg::nv::element(rom, m_learn_rec, idx);
+			const int att_ref = cal.has(9) ? (cal.reg[9] & 0xff) : 64;
+			const int gain = xg::nv::vol_gain(m_ndrv.part_vol(m_learn_part),
+			                                  m_ndrv.part_expr(m_learn_part));
+			const int rest = xg::nv::volume_rest(rom, el0, m_learn_note, m_learn_vel);
+			const int fwl = xg::nv::fw_voice_level(m_ram.data(), ch);
+			// **検算**: 読んだ目盛りから組み直した減衰が、実機が書いた 0x09 と
+			// 合うか。合わなければ塊が別の声のものなので、逆引きに落とす
+			const bool good = fwl > 0 &&
+			    xg::nv::volume_att_from(rom, fwl, rest, gain) == att_ref;
+			cal.base_level = good
+			    ? xg::nv::base_level_from_fw(rom, el0, fwl, m_learn_note)
+			    : xg::nv::calibrate_level(rom, el0, att_ref, m_learn_note,
+			                              m_learn_vel, gain);
+			if (!good && fwl > 0)
+				m_ne_lvl_miss++;
+		}
 		// **減衰の目盛りのずれを覚える**。実機が書いた 0x07・0x08 の上位から
 		// 目盛りを引き直し、こちらの式で出した目盛りとの差を取る。
 		// 同じ値が並ぶ表なので、こちらの目盛りにいちばん近いものを選ぶ

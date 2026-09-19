@@ -197,7 +197,41 @@ inline int vol_gain(int vol, int expr)
 {
 	const int v = vol < 0 ? 100 : (vol > 127 ? 127 : vol);
 	const int e = expr < 0 ? 127 : (expr > 127 ? 127 : expr);
+	// **音量 0 は素通しで 0**。式どおりなら ((0+1)*(127+1))>>7 = 1 になるが、
+	// 実機のパートの塊 +0x12F は CC7=0 で 0 になる（実測）
+	if (v == 0)
+		return 0;
 	return ((v + 1) * (e + 1)) >> 7;        // 0-128
+}
+
+// **音量の目盛りに掛ける**（実機の `0x12A4AA`）。パートの塊の +0x12F が
+// この線形の値（0-128）で、実測で `((音量+1) * (エクスプレッション+1)) >> 7`
+// そのもの（CC7 と CC11 を 0-127 まで振って 256 点すべて一致）。
+// 実機は**目盛りに掛けてから** 1 回だけ減衰の表を引く（6.102）。
+// 掛けた結果が 0 になったら 1（`0x12A4C0`）。掛ける値が 0 なら目盛りごと 0
+inline int level_with_gain(int level, int gain)
+{
+	if (gain <= 0 || level <= 0)
+		return 0;
+	int v = (level * (gain > 128 ? 128 : gain)) >> 7;
+	if (v <= 0)
+		v = 1;
+	return v > 128 ? 128 : v;
+}
+
+// その逆。写し取ったときの目盛りから、掛ける前の目盛りを取り戻す。
+// `(A * gain) >> 7 == l` になる A は幅を持つので**真ん中**を取る
+// （写し取ったときの値はそのまま戻り、ほかの音量でのずれがいちばん小さい）
+inline int level_without_gain(int l, int gain)
+{
+	if (gain <= 0)
+		return 0;
+	if (gain >= 128 || l <= 0)
+		return l < 0 ? 0 : l;
+	const int lo = (l * 128 + gain - 1) / gain;
+	const int hi = ((l + 1) * 128 - 1) / gain;
+	const int a = (lo + (hi < lo ? lo : hi)) / 2;
+	return a > 128 ? 128 : a;
 }
 
 // その線形の値（0-128）を減衰に直す
@@ -644,23 +678,93 @@ inline int level_curve_scaled(const u8 *rom, const u8 *elem, int note)
 	return level_key_curve(rom, elem, note) * LEVEL_CURVE_NUM / LEVEL_CURVE_DEN;
 }
 
-inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref, int vel_ref)
+// 写し取ったときのつまみの位置（既定のパート: 音量 100・エクスプレッション 127）
+constexpr int VOL_GAIN_DEF = ((100 + 1) * (127 + 1)) >> 7;      // = 101
+
+// **実機のボイスの塊**。0x94 バイトずつ並んでいて、番号はスロットの番号と
+// 同じ（和音を鳴らして +32 の読み先を見た: 424384 / 424418 / 4244AC）。
+// +118 が「掛ける前の音量の目盛り」（0x12AC2C が書く。6.102）
+constexpr u32 VBLK_BASE   = 0x424364;
+constexpr u32 VBLK_STRIDE = 0x94;
+constexpr u32 VBLK_LEVEL  = 118;
+
+inline int fw_voice_level(const u8 *ram, int slot)
 {
-	const int rest = att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref);
-	return level_from_att(rom, rest) - level_curve_scaled(rom, elem, note_ref);
+	if (!ram || slot < 0 || slot >= 64)
+		return -1;
+	const u32 a = VBLK_BASE + u32(slot) * VBLK_STRIDE + VBLK_LEVEL - 0x400000;
+	const int v = int(ram[a]);
+	return (v >= 1 && v <= 128) ? v : -1;
 }
 
-// 校正した素の音量から、その鍵・強さの減衰（0x09 に入れる値）
-inline int volume_att(const u8 *rom, const u8 *elem, int base_level, int note, int vel)
+inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_ref,
+                           int vel_ref, int gain_ref = VOL_GAIN_DEF)
+{
+	const int rest = att_ref / 2 - velocity_att(rom, vel_ref) - wave_level(rom, elem, note_ref);
+	// **つまみのぶんを割り戻す**。base_level が持つのは「掛ける前の目盛り」で、
+	// 鳴らすときに `level_with_gain` でそのときの音量を掛け直す（6.102）。
+	//
+	// 表は同じ減衰が 3-4 段つづくので、逆に引くと目盛りは**幅**でしか分から
+	// ない。掛ける前の目盛りに直すと幅はさらに広がるので、その**真ん中**を
+	// 取る（端を取ると、音量を上げ下げしたときに片側へ 1 段ずれる）
+	int lo = -1, hi = -1;
+	for (int i = 0; i < 128; i++)
+		if (int(rom[LEVEL_TAB + 0x80 + i]) == rest) {
+			if (lo < 0) lo = i;
+			hi = i;
+		}
+	int l;
+	if (lo < 0) {
+		l = level_without_gain(64, gain_ref);
+	} else {
+		const int g = gain_ref <= 0 ? 1 : (gain_ref > 128 ? 128 : gain_ref);
+		const int alo = (lo * 128 + g - 1) / g;
+		int ahi = ((hi + 1) * 128 - 1) / g;
+		if (ahi > 128) ahi = 128;
+		l = ahi < alo ? alo : (alo + ahi) / 2;
+	}
+	return l - level_curve_scaled(rom, elem, note_ref);
+}
+
+// 実機のボイスの塊から取った目盛りを base_level に直す（逆引きが要らない道）
+inline int base_level_from_fw(const u8 *rom, const u8 *elem, int fw_level, int note_ref)
+{
+	return fw_level - level_curve_scaled(rom, elem, note_ref);
+}
+
+// 掛ける前の音量の目盛り（鍵の曲線まで入れたもの）
+inline int volume_level(const u8 *rom, const u8 *elem, int base_level, int note)
 {
 	int l = base_level + level_curve_scaled(rom, elem, note);
 	if (l < 0) l = 0;
-	if (l > 127) l = 127;
-	// 波形の記録の先頭のバイトが、その段ぶんの減衰。多段サンプルの音色では
-	// 段の変わり目で 1.5dB ほど動くので、これを入れないと段ごとにずれる
-	const int a = rom[LEVEL_TAB + 0x80 + u32(l)] + velocity_att(rom, vel)
-	            + wave_level(rom, elem, note);
-	return std::min(0xff, a * 2);
+	return l > 128 ? 128 : l;
+}
+
+// 目盛りに乗らない側の減衰（強さと、波形の段ぶん）。
+// 波形の記録の先頭のバイトが、その段ぶんの減衰。多段サンプルの音色では
+// 段の変わり目で 1.5dB ほど動くので、これを入れないと段ごとにずれる
+inline int volume_rest(const u8 *rom, const u8 *elem, int note, int vel)
+{
+	return velocity_att(rom, vel) + wave_level(rom, elem, note);
+}
+
+// 目盛り・残り・そのときの音量から、0x09 に入れる減衰。
+// 実機（`0x12A538`-`0x12A55A`）は **127 で頭打ちにしてから 2 倍**する
+inline int volume_att_from(const u8 *rom, int level, int rest, int gain)
+{
+	const int l = level_with_gain(level, gain);
+	int a = int(rom[LEVEL_TAB + 0x80 + u32(l)]) + rest;
+	if (a > 127) a = 127;
+	if (a < 0) a = 0;
+	return a * 2;
+}
+
+// 校正した素の音量から、その鍵・強さの減衰（0x09 に入れる値）
+inline int volume_att(const u8 *rom, const u8 *elem, int base_level, int note, int vel,
+                      int gain = VOL_GAIN_DEF)
+{
+	return volume_att_from(rom, volume_level(rom, elem, base_level, note),
+	                       volume_rest(rom, elem, note, vel), gain);
 }
 
 // 減衰・離しの速さに乗る、鍵による補正（firmware の 0x12ADD0）

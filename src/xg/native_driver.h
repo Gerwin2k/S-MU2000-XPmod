@@ -77,6 +77,10 @@ public:
 		u32  rpos = 0;                  // 離してからの段の、つぎに書く位置
 		int  rel_att = 0;               // 離しのときに書いた減衰（戻さないための下限）
 		int part = -1, note = -1, att = 0;
+		// **音量の目盛り**（つまみを掛ける前）と、目盛りに乗らない側の減衰。
+		// 実機は目盛りに音量を掛けてから 1 回だけ表を引くので、CC7・CC11 が
+		// 動いたらこの 2 つから作り直す（doc/native-engine.md の 6.102）
+		int lvl0 = 0, arest = 0;
 		const u8 *elem = nullptr;
 		const u8 *wave = nullptr;       // ベンドで音程を作り直すのに要る
 		const nv::voice_cal *cal = nullptr;
@@ -984,19 +988,26 @@ private:
 		}
 	}
 
-	// つまみのぶんを足した減衰
+	// そのスロットの、いまのつまみでの減衰。
+	// **掛けてから一度だけ減衰に直す**（実機の `0x12A4AA`。6.102）。
+	// 触られていない側は写し取ったときの値のまま
 	int note_att(const slot_use &s, int part) const
 	{
 		const part_cc &p = m_cc[part];
 		const nv::voice_cal *c = s.cal;
+		if (!m_rom || (p.vol < 0 && p.expr < 0))
+			return nv::clamp_att(s.att);
+		const int vol  = p.vol  >= 0 ? p.vol  : (c ? c->cal_vol  : 100);
+		const int expr = p.expr >= 0 ? p.expr : (c ? c->cal_expr : 127);
+		if (s.lvl0 > 0)
+			return nv::clamp_att(nv::volume_att_from(m_rom, s.lvl0, s.arest,
+			                                         nv::vol_gain(vol, expr)));
+		// **ドラムには目盛りが無い**（要素を持たず、写し取った減衰をそのまま
+		// 使う道）。そこは今までどおり、減衰の差ぶんで動かす
 		int a = s.att;
-		if (c && (p.vol >= 0 || p.expr >= 0)) {
-			// **掛けてから一度だけ減衰に直す**（nv::vol_gain を見よ）。
-			// 触られていない側は写し取ったときの値のまま
-			const int now = nv::vol_gain(p.vol >= 0 ? p.vol : c->cal_vol,
-			                             p.expr >= 0 ? p.expr : c->cal_expr);
-			const int was = nv::vol_gain(c->cal_vol, c->cal_expr);
-			a += nv::gain_att(m_rom, now) - nv::gain_att(m_rom, was);
+		if (c) {
+			a += nv::gain_att(m_rom, nv::vol_gain(vol, expr))
+			   - nv::gain_att(m_rom, nv::vol_gain(c->cal_vol, c->cal_expr));
 		}
 		return nv::clamp_att(a);
 	}
@@ -1158,7 +1169,14 @@ public:
 				m_traj = true;
 				m_traj_next = 0;       // つぎの tick で見直す
 			}
-			su.att = nv::volume_att(m_rom, el, c ? c->base_level : 64, note, vel);
+			su.lvl0  = nv::volume_level(m_rom, el, c ? c->base_level : 64, note);
+			su.arest = nv::volume_rest(m_rom, el, note, vel);
+			su.att   = nv::volume_att_from(m_rom, su.lvl0, su.arest,
+			                               nv::vol_gain(
+			                                   m_cc[part].vol  >= 0 ? m_cc[part].vol
+			                                                        : (c ? c->cal_vol : 100),
+			                                   m_cc[part].expr >= 0 ? m_cc[part].expr
+			                                                        : (c ? c->cal_expr : 127)));
 			const part_cc &pc = m_cc[part];
 			// **ポルタメント**（6.41）。前の鍵（CC84 があればその鍵）の音程で
 			// 鳴らし始めて、10ms ごとに寄せていく。残りのずれはセント × 256 で持つ。
