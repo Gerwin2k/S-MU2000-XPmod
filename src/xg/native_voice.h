@@ -1060,8 +1060,16 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 離調は重ねの音色で 2 つの層をずらすのに使う。入れないと層がぴったり重なって
 	// 打ち消し合わず、3dB ほど大きくなる（doc/native-engine.md の 6.18）
 	r.set(0x11, pitch_reg(w, note, key_follow(elem), cents_extra + elem_tune(elem)));
-	r.set(0x12, u16(w.pre_loop >> 16));
-	r.set(0x13, u16(w.pre_loop));
+	// **鳴らし始める位置をずらす**（実機の `0x12A9C8`）。要素の byte79 が
+	// 128 サンプル単位、byte80 が 1 サンプル単位の下駄で、ループ前の長さから
+	// 引く。Oboe(7→896)・Clarinet(2→256)・Bagpipe(8→1024) で実機と一致した。
+	// 入れていなかったので、その 3 音色は波形がまるで合っていなかった
+	{
+		const u32 skip = u32(elem[79]) * 128 + elem[80];
+		const u32 pre = w.pre_loop > skip ? w.pre_loop - skip : 0;
+		r.set(0x12, u16(pre >> 16));
+		r.set(0x13, u16(pre));
+	}
 	r.set(0x14, u16(w.loop_len >> 16));
 	r.set(0x15, u16(w.loop_len));
 	r.set(0x16, u16(w.format_addr >> 16));
