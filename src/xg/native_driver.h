@@ -1183,7 +1183,7 @@ public:
 			                                  vel);
 			// 音程の包絡線の行き先（byte31）。初めの高さと同じなら書かない
 			{
-				const u16 tgt = nv::peg_reg(m_rom, nv::peg_cents(el, el[31], vel));
+				const u16 tgt = nv::peg_reg(m_rom, nv::peg_cents(el, el[31], vel), el);
 				su.peg_tgt = tgt == sr.v[0x10] ? 0xffff : tgt;
 			}
 			// **段 0 から始める**。実機は 10ms ごとに「着いたか」を見て次の段へ
@@ -1476,7 +1476,7 @@ private:
 		const int lvl  = nv::peg_level_of(s.elem, s.pstage);
 		m_poke(u32(i) * 64 + 0x0b, u16(rate << 8));
 		m_poke(u32(i) * 64 + 0x10,
-		       nv::peg_reg(m_rom, nv::peg_cents(s.elem, lvl, s.pvel)));
+		       nv::peg_reg(m_rom, nv::peg_cents(s.elem, lvl, s.pvel), s.elem));
 	}
 
 	void key_on(u64 mask)

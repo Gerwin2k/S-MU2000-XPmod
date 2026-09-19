@@ -455,12 +455,14 @@ inline bool peg_on()
 	return on;
 }
 
-// `0x10` に書く値（セントを渡す）
-inline u16 peg_reg(const u8 *rom, int cents)
+// `0x10` に書く値（セントを渡す）。**ビット 14 は byte10 で決まる**
+// （実機の `0x12AD2E`。byte10 が 0 の音色は立てない。PanFlute・BirdTweet）
+inline u16 peg_reg(const u8 *rom, int cents, const u8 *elem = nullptr)
 {
+	const u16 flag = (!elem || elem[10]) ? 0x4000 : 0;
 	if (!peg_on())
-		return 0x4000;
-	return u16(0x4000 | (u16(cents_to_pitch(rom, cents)) & 0x3fff));
+		return flag;
+	return u16(flag | (u16(cents_to_pitch(rom, cents)) & 0x3fff));
 }
 
 // ---- **フィルタの包絡線**（doc/native-engine.md の 6.63）
@@ -1031,7 +1033,7 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 音程の包絡線。速さが 127（即到達）のときだけ初めの高さは byte31 を使う
 	const int prate = peg_rate_reg(rom, elem, note, vel);
 	r.set(0x0b, u16(prate << 8));
-	r.set(0x10, peg_reg(rom, peg_cents(elem, prate == 127 ? elem[31] : elem[30], vel)));
+	r.set(0x10, peg_reg(rom, peg_cents(elem, prate == 127 ? elem[31] : elem[30], vel), elem));
 
 	// --- 包絡線（doc/native-engine.md の 6.3・6.4）
 	//
