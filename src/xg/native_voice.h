@@ -903,8 +903,12 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// Vibes（byte12=0・byte13=0・byte16=2）は 4、Koto（byte12=48）は 0
 	r.set(0x05, u16((d.lfo_amp & 0xff00)
 	                | u16((elem[12] || elem[13]) ? 0 : ((elem[16] * 2) & 0x7f))));
-	// LFO の型と刻み。上位は 0x40 | byte11（402 組で例外なし）、下位（音程の深さ）は 0
-	r.set(0x0a, u16((0x40 | (elem[11] & 0x3f)) << 8));
+	// LFO の型と刻み。上位は byte11 に**byte9 が 0 でなければ** 0x40 を足したもの
+	// （Rain は byte9=0 で `2d`）。下位は**音程の深さ = byte14 × 3**
+	// （PanFlute の byte14=1 で 3、ChiffLead・TnklBell・Helicopter の 2 で 6）
+	// 深さは `0x05` と同じく、**遅れ（byte12）と byte13 がどちらも 0 のとき**だけ
+	r.set(0x0a, u16(((((elem[9] ? 0x40 : 0) | (elem[11] & 0x3f)) << 8))
+	                | u16((elem[12] || elem[13]) ? 0 : ((elem[14] * 3) & 0x7f))));
 	// 音程の包絡線。速さが 127（即到達）のときだけ初めの高さは byte31 を使う
 	const int prate = peg_rate_reg(rom, elem, note, vel);
 	r.set(0x0b, u16(prate << 8));
