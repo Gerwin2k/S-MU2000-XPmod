@@ -596,6 +596,47 @@ inline int rate_scale(int raw, int corr)
 	return v * 2;
 }
 
+// **減衰 2 だけは下限が 0**（実機の `0x127338`。減衰 1 の `0x1272F4` は 1）。
+// 表の頭は 1,1,2,2,… なので、0 と 1 で値が変わる。byte75 が 0 の音色
+// （Trumpet・BrssSec・SquareLd）で実機は 1、こちらは 2 になっていた
+inline int rate_scale2(int raw, int corr)
+{
+	int v = raw + corr;
+	if (v < 0) v = 0;
+	if (v > 63) v = 63;
+	return v * 2;
+}
+
+// ---- **共振**（レジスタ `0x04`）。実機の `0x12806A` と `0x12810A`
+//
+//   目減り = (18 × |byte81 - 64| × (byte81>64 ? 0x80-強さ : 強さ)) & 0xffff >> 8
+//   値     = max(byte35 - 目減り, 0)
+//   パート（+25）の下駄を足して、>>1 して 5bit に収める
+//
+// 18 音色 × 強さ 30/100/127 の 54 通りで実機と一致した（EPiano1 は強さで
+// 要素が切り替わる音色で、鳴っている側の要素で計算すれば合う）
+inline int reso_vel_drop(const u8 *elem, int vel)
+{
+	const int d = int(elem[81]) - 64;
+	if (!d)
+		return 0;
+	const int x = 18 * (d > 0 ? d : -d);
+	const int m = d > 0 ? (0x80 - (vel & 0x7f)) : (vel & 0x7f);
+	return int((u32(x * m) & 0xffff) >> 8);
+}
+
+inline int reso_level(const u8 *elem, int vel, int part_res = 64)
+{
+	int v = int(elem[35]) - reso_vel_drop(elem, vel);
+	if (v < 0)
+		v = 0;
+	const int p = part_res - 64;
+	int r = p >= 0 ? (p >= v ? p : v) : p + v;
+	if (r < 0)
+		r = 0;
+	return (r >> 1) & 31;
+}
+
 // 鍵を離すときに 0x09 へ入れる値。
 // 上位のビット 15 が「離せ」の印で、残りが離しの速さ（swp30.cpp の release_glo_w）。
 // 速さは減衰と同じ表を **byte76** で引き、鍵の補正も同じだけ乗る
@@ -701,9 +742,9 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	r.set(0x01, 0xffff);
 	r.set(0x02, u16(0x8000 | elem[82]));       // 402 組の 97%
 	r.set(0x03, d.post);
-	// フィルタの第 2 パラメータ（共振）。firmware は byte35 を 1 ビット落として
-	// 5bit にし、レジスタの上 5bit に置く（0x1280FC）。402 組の 90% が一致
-	r.set(0x04, u16((((elem[35] >> 1) & 31) << 11)));
+	// フィルタの第 2 パラメータ（共振）。byte35 から強さぶんを引いて（byte81）、
+	// 1 ビット落として 5bit にする（0x12806A）。18 音色 × 強さ 3 通りで一致
+	r.set(0x04, u16(reso_level(elem, vel) << 11));
 	r.set(0x05, d.lfo_amp);
 	// LFO の型と刻み。上位は 0x40 | byte11（402 組で例外なし）、下位（音程の深さ）は 0
 	r.set(0x0a, u16((0x40 | (elem[11] & 0x3f)) << 8));
@@ -725,7 +766,7 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	const int a1 = cal && cal->have ? cal->dec_adj[0] : 0;
 	const int a2 = cal && cal->have ? cal->dec_adj[1] : 0;
 	const u8 dc1 = rom[DECAY_TAB  + clamp_idx(rate_scale(elem[74], corr) + a1)];
-	const u8 dc2 = rom[DECAY_TAB  + clamp_idx(rate_scale(elem[75], corr) + a2)];
+	const u8 dc2 = rom[DECAY_TAB  + clamp_idx(rate_scale2(elem[75], corr) + a2)];
 	// はじめの音量。アタックが最速（63）のときだけ 0 で、あとは 0x7e
 	r.set(0x06, u16(atk << 8 | (elem[73] >= 0x3f ? 0x00 : 0x7e)));
 	r.set(0x07, u16(dc1 << 8 | (((0x7f - elem[77]) * 2) & 0xff)));
@@ -765,7 +806,7 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 		// **0x0b・0x10 はもう写し取らない**。音程の包絡線を式で出すようになった
 		// （写し取りは包絡線が終わったあとの値を拾うので、入れると出だしの
 		//  しゃくりが丸ごと消えていた。doc/native-engine.md の 6.68）
-		static const int COPY[] = { 0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x0a,
+		static const int COPY[] = { 0x00, 0x01, 0x02, 0x05, 0x06, 0x0a,
 		                            0x20, 0x22, 0x24, 0x26, 0x28, 0x2a,
 		                            0x32, 0x33, 0x34, 0x35, 0x36, 0x37 };
 		for (int i : COPY)

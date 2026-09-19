@@ -307,7 +307,8 @@ public:
 					if (!re[s.rpos].rel) { s.rpos++; continue; }
 					if (u64(s64(s.rel_at + re[s.rpos].at) + EG_LAG) > clock)
 						break;
-					if (fenv_on() && re[s.rpos].reg == 0x00) {
+					if ((fenv_on() && re[s.rpos].reg == 0x00)
+					    || re[s.rpos].reg == 0x04) {
 						s.rpos++;         // 式で出すので録画の分は捨てる
 						continue;
 					}
@@ -370,7 +371,8 @@ public:
 			while (s.tpos < fe.size() && !fe[s.tpos].rel &&
 			       u64(s64(s.tstart + fe[s.tpos].at) + EG_LAG) <= clock) {
 				u16 v = fe[s.tpos].v;
-				if (fenv_on() && fe[s.tpos].reg == 0x00) {
+				if ((fenv_on() && fe[s.tpos].reg == 0x00)
+				    || fe[s.tpos].reg == 0x04) {
 					s.tpos++;          // 式で出すので、録画の分は捨てる
 					continue;
 				}
@@ -1129,8 +1131,9 @@ public:
 			if (c) {
 				sr.set(0x0a, lfo_reg(su.lfo, *c, part));
 				sr.set(0x00, cutoff_reg(su.cut, *c, part, el, note));
-				if (c->has(0x04))
-					sr.set(0x04, reso_reg(c->reg[0x04], *c, part));
+				// **共振は式で出した値に CC71 の差ぶんを乗せる**（写し取った
+				// 値ではない。強さで変わるので写し取りは使えない。6.69）
+				sr.set(0x04, reso_reg(sr.v[0x04], *c, part));
 				if (c->has(0x33))
 					sr.set(0x33, send_reg(*c, 0x33, false, pc.rev, c->cal_rev));
 				if (c->has(0x34))
