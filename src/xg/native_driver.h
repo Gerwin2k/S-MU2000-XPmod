@@ -144,6 +144,7 @@ public:
 		m_rec = false;
 		m_traj_next = 0;
 		m_pend.clear();
+		m_busy = 0;
 		m_age = 0;
 	}
 
@@ -273,14 +274,19 @@ public:
 	{
 		m_clock = clock;
 		if (!m_pend.empty()) {
+			// **同じ時刻のものは 1 回で押す**。実機も要素をまとめて
+			// 押すので、要素ごとに分けると合図が 2 回になってしまう
 			size_t w = 0;
+			u64 now = 0;
 			for (size_t i = 0; i < m_pend.size(); i++) {
 				if (m_pend[i].at <= clock)
-					key_on(m_pend[i].mask);
+					now |= m_pend[i].mask;
 				else
 					m_pend[w++] = m_pend[i];
 			}
 			m_pend.resize(w);
+			if (now)
+				key_on(now);
 		}
 		if (!m_traj)
 			return;
@@ -1261,6 +1267,8 @@ public:
 		bool any = false;
 		u32 taken = 0;                   // もう使った写し取りの印
 		int used = 0;
+		int nwrote = 0;                  // レジスタを書いた要素の数
+		std::vector<std::pair<u64, u32>> pend;   // スロット → byte72 の遅れ
 		for (int k = 0; k < nelem; k++) {
 			const u8 *el = nv::element(m_rom, rec, k);
 			if (!nv::element_active(el, pnote, pvel))
@@ -1363,16 +1371,21 @@ public:
 				             part, note, vel, pc.vol, c ? c->cal_vol : -9, pc.expr, c ? c->cal_expr : -9,
 				             pc.pan, c ? c->cal_pan : -9, su.att, note_att(su, part));
 			// byte72 が 0 でなければ、その要素は遅れて鳴る
-			const u32 dly = nv::elem_delay(el);
-			if (dly)
-				m_pend.push_back({ u64(1) << slot, m_clock + dly });
-			else
-				keymask |= u64(1) << slot;
+			pend.push_back({ u64(1) << slot, nv::elem_delay(el) });
+			nwrote++;
 			any = true;
 		}
 		if (any) {
 			m_cc[part].last = note;      // つぎの音はここから滑る
 			m_cc[part].porta_src = -1;   // CC84 の指定は 1 度で使い切る
+		}
+		// **要素を書き終えてから鍵を押す**（6.117）
+		const u64 at = write_done(nwrote);
+		for (const auto &p : pend) {
+			if (p.second || at > m_clock)
+				m_pend.push_back({ p.first, at + p.second });
+			else
+				keymask |= p.first;
 		}
 		if (!keymask)
 			return any;                  // 遅らせた要素だけの音もある
@@ -1448,6 +1461,7 @@ public:
 			s.sost = false;
 		}
 		m_pend.clear();
+		m_busy = 0;
 		m_traj = false;
 		m_traj_next = 0;
 	}
@@ -1632,6 +1646,35 @@ private:
 		       nv::peg_reg(m_rom, nv::peg_cents(s.elem, lvl, s.pvel), s.elem));
 	}
 
+	// **要素 1 つぶんのレジスタを書く時間**（1/64 サンプル単位）。
+	// 実機は要素のレジスタを **1 要素 34 本**書き、**全部書き終えてから**
+	// 鍵を押す。SWP30 への書き込みは 1 本 440 サイクル待たされるので
+	// （＋命令のぶんで 1 本あたり約 560 サイクル）、34 本でちょうど
+	// **30 サンプル**かかる。要素が 1 つ増えるごとに鍵がそのぶん遅れる。
+	// こちらは一度に書いて即座に押していたので、2 要素の音色
+	// （Square Lead など）が 30 サンプル早く鳴っていた
+	// （doc/native-engine.md の 6.117）。`SMU2000_ELEM_COST` で振れる
+	static u32 elem_cost64()
+	{
+		static const u32 v = std::getenv("SMU2000_ELEM_COST")
+		                   ? u32(std::atoi(std::getenv("SMU2000_ELEM_COST"))) : 30 * 64;
+		return v;
+	}
+	// **要素を全部書き終える時刻**を返す（サンプル）。実機は 1 つの
+	// CPU で順番に書くので、前の音がまだ書き終わっていなければその
+	// あとに並ぶ。和音や密な曲では、あとの音ほど遅れて鳴る
+	u64 write_done(int nwrote)
+	{
+		const u64 cost = elem_cost64();
+		const u64 now = m_clock * 64;
+		// こちらが呼ばれる時刻は「1 要素を書き終えた時刻」なので、
+		// 書き始めはその 1 要素ぶん手前
+		const u64 t0 = now > cost ? now - cost : 0;
+		const u64 start = t0 > m_busy ? t0 : m_busy;
+		m_busy = start + u64(nwrote < 1 ? 1 : nwrote) * cost;
+		return (m_busy + 32) / 64;
+	}
+
 	void key_on(u64 mask)
 	{
 		static const u32 MASK_REG[4] = { 0x1cf, 0x1ce, 0x18f, 0x18e };
@@ -1682,6 +1725,8 @@ private:
 	// 遅らせて鳴らす要素（byte72）。時が来たら key_on する
 	struct pending_key { u64 mask; u64 at; };
 	std::vector<pending_key> m_pend;
+	// firmware がレジスタを書き終える時刻（1/64 サンプル単位）
+	u64 m_busy = 0;
 	u64 m_age = 0;
 };
 

@@ -254,11 +254,12 @@ def step_threading(rep, roms, first):
 
 # **波形の相関の下限**（試験ごと）。いま出ている値から少し余裕を引いたもの。
 # ここを下回ったら落ちる ＝ 形が崩れたら気づける。
-# porta と dense がまだ低いのは分かっている不具合（doc/native-engine.md の 6.82）
+# dense がまだ低いのは分かっている不具合（写し取りの音だけ、実機の側が
+# 混み具合で遅れる。doc/native-engine.md の 6.90）
 SHAPE_MIN = {
-    "piano":   0.98, "chord":  0.95, "drums": 0.85, "effects": 0.98,
-    "dense":   0.40, "port_b": 0.98, "bend":  0.98, "lofi":    0.98,
-    "egcc":    0.98, "porta":  0.38, "at":    0.95, "sxparam": 0.95,
+    "piano":   0.98, "chord":  0.95, "drums": 0.90, "effects": 0.98,
+    "dense":   0.50, "port_b": 0.98, "bend":  0.98, "lofi":    0.98,
+    "egcc":    0.98, "porta":  0.70, "at":    0.95, "sxparam": 0.95,
     "pedals":  0.95, "partsx": 0.95,
     # keylevel は鍵と強さで音量が大きく動く音色ばかりなので、鍵を押す時刻の
     # ばらつき（6.90）が相関に出やすい。**音量のほうは `native の口` が見る**
