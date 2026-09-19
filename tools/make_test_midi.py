@@ -530,6 +530,60 @@ def case_ctlreset():
     return [track(seq(ev))], 7.5
 
 
+def case_scale():
+    """**スケールチューニング**（XG の 08 pp 41-4C。C から B まで 12 個、
+    64 が 0 セント）と**パートの EQ**（08 pp 6A-6F）。
+
+    スケールチューニングは音名ごとに音程をずらす（純正律などを作るためのもの）。
+    パートの EQ は写し取りの「経路の印」に入っているので、動かしたら
+    取り直しが走るはず。ここが壊れると、和音の中の特定の音だけ音程が違う"""
+    ev = head()
+    ev += [(1.0, b'\xc0\x50')]                       # Square Lead
+    ev += note(0, 60, 100, 1.2, 0.8)                  # 1 音目。ここで写し取る
+    # C を +30 セント、E を -20 セント、G を +50 セント
+    t = 2.1
+    for lo, val in ((0x41, 64 + 30), (0x45, 64 - 20), (0x48, 64 + 50)):
+        ev += [(t, xg([0x08, 0x00, lo, val]))]
+        t += 0.05
+    for i, k in enumerate((60, 64, 67)):
+        ev += note(0, k, 100, t + i * 0.7, 0.6)
+    t += 2.2
+    # 戻す
+    for lo in (0x41, 0x45, 0x48):
+        ev += [(t, xg([0x08, 0x00, lo, 64]))]
+        t += 0.05
+    ev += note(0, 60, 100, t + 0.2, 0.6)              # 最初の写しが効くはず
+    t += 1.0
+    # パートの EQ（低域を上げる・高域を下げる）
+    ev += [(t, xg([0x08, 0x00, 0x72, 64 + 12]))]      # EQ 低域のゲイン
+    ev += [(t + 0.05, xg([0x08, 0x00, 0x73, 64 - 12]))]  # EQ 高域のゲイン
+    ev += note(0, 60, 100, t + 0.3, 0.8)
+    return [track(seq(ev))], t + 2.0
+
+
+def case_kits():
+    """**ドラムキットの切り替え**（バンク MSB 127）と**SFX バンク**（MSB 64）。
+
+    キットごとに 1 打の記録が別の場所にあるので、引き方が壊れると
+    別の音が鳴るか無音になる。SFX バンクは旋律の音色と同じ引き方だが
+    組が違う（doc/native-engine.md の 6.111）"""
+    ev = head()
+    # ドラム（チャンネル 10）でキットを替えながら打つ
+    t = 1.0
+    for kit in (0, 8, 16, 32, 40):
+        ev += [(t, b'\xb9\x00\x7f'), (t + 0.02, b'\xb9\x20\x00'),
+               (t + 0.04, bytes([0xc9, kit]))]
+        for i, k in enumerate((36, 38, 42)):
+            ev += note(9, k, 110, t + 0.2 + i * 0.2, 0.1)
+        t += 1.0
+    # SFX バンク（MSB 64）をチャンネル 1 で
+    ev += [(t, b'\xb0\x00\x40'), (t + 0.02, b'\xb0\x20\x00'),
+           (t + 0.04, b'\xc0\x7c')]                  # Telephone 系
+    ev += note(0, 60, 100, t + 0.3, 0.8)
+    ev += note(0, 67, 100, t + 1.3, 0.8)
+    return [track(seq(ev))], t + 3.0
+
+
 CASES = {
     "piano":   case_piano,
     "chord":   case_chord,
@@ -550,6 +604,8 @@ CASES = {
     "mono":    case_mono,
     "ctlreset": case_ctlreset,
     "ports":   case_ports,
+    "scale":   case_scale,
+    "kits":    case_kits,
 }
 
 
