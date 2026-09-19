@@ -215,7 +215,7 @@ inline int vol_gain(int vol, int expr)
 // **音量の目盛りに掛ける**（実機の `0x12A4AA`）。パートの塊の +0x12F が
 // この線形の値（0-128）で、実測で `((音量+1) * (エクスプレッション+1)) >> 7`
 // そのもの（CC7 と CC11 を 0-127 まで振って 256 点すべて一致）。
-// 実機は**目盛りに掛けてから** 1 回だけ減衰の表を引く（6.102）。
+// 実機は**目盛りに掛けてから** 1 回だけ減衰の表を引く（6.101）。
 // 掛けた結果が 0 になったら 1（`0x12A4C0`）。掛ける値が 0 なら目盛りごと 0
 inline int level_with_gain(int level, int gain)
 {
@@ -705,7 +705,7 @@ inline int wave_level(const u8 *rom, const u8 *elem, int note)
 //
 // 前は 6/4 = 1.5 倍にしていた。当時は写し取った減衰から目盛りを逆に引いて
 // いたので、表の段の幅にずれが埋もれて 1.5 倍がいちばん「マシ」に見えた。
-// 実機の目盛り（ボイスの塊 +118。6.102）を直に読めるようにしたら、Bottle の
+// 実機の目盛り（ボイスの塊 +118。6.101）を直に読めるようにしたら、Bottle の
 // 鍵 36/42/48/60 が 1/19/39/65 で、曲線の差 -32/-23/-13/0 のちょうど 2 倍と
 // 分かった（1.5 倍だと鍵 36 で 40 段ぶん明るすぎた ＝ 35dB 違っていた）
 inline int level_curve_scaled(const u8 *rom, const u8 *elem, int note)
@@ -719,7 +719,7 @@ constexpr int VOL_GAIN_DEF = ((100 + 1) * (127 + 1)) >> 7;      // = 101
 
 // **実機のボイスの塊**。0x94 バイトずつ並んでいて、番号はスロットの番号と
 // 同じ（和音を鳴らして +32 の読み先を見た: 424384 / 424418 / 4244AC）。
-// +118 が「掛ける前の音量の目盛り」（0x12AC2C が書く。6.102）
+// +118 が「掛ける前の音量の目盛り」（0x12AC2C が書く。6.101）
 constexpr u32 VBLK_BASE   = 0x424364;
 constexpr u32 VBLK_STRIDE = 0x94;
 constexpr u32 VBLK_LEVEL  = 118;
@@ -739,7 +739,7 @@ inline int calibrate_level(const u8 *rom, const u8 *elem, int att_ref, int note_
 	const int rest = att_ref / 2 - velocity_att(rom, vel_ref, vel_curve_of(elem))
 	               - wave_level(rom, elem, note_ref);
 	// **つまみのぶんを割り戻す**。base_level が持つのは「掛ける前の目盛り」で、
-	// 鳴らすときに `level_with_gain` でそのときの音量を掛け直す（6.102）。
+	// 鳴らすときに `level_with_gain` でそのときの音量を掛け直す（6.101）。
 	//
 	// 表は同じ減衰が 3-4 段つづくので、逆に引くと目盛りは**幅**でしか分から
 	// ない。掛ける前の目盛りに直すと幅はさらに広がるので、その**真ん中**を

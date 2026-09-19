@@ -83,7 +83,7 @@ public:
 		int keynote = -1;
 		// **音量の目盛り**（つまみを掛ける前）と、目盛りに乗らない側の減衰。
 		// 実機は目盛りに音量を掛けてから 1 回だけ表を引くので、CC7・CC11 が
-		// 動いたらこの 2 つから作り直す（doc/native-engine.md の 6.102）
+		// 動いたらこの 2 つから作り直す（doc/native-engine.md の 6.101）
 		int lvl0 = 0, arest = 0;
 		const u8 *elem = nullptr;
 		const u8 *wave = nullptr;       // ベンドで音程を作り直すのに要る
@@ -1094,7 +1094,7 @@ private:
 	}
 
 	// そのスロットの、いまのつまみでの減衰。
-	// **掛けてから一度だけ減衰に直す**（実機の `0x12A4AA`。6.102）。
+	// **掛けてから一度だけ減衰に直す**（実機の `0x12A4AA`。6.101）。
 	// 触られていない側は写し取ったときの値のまま
 	int note_att(const slot_use &s, int part) const
 	{
