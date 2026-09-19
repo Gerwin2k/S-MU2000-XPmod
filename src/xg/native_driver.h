@@ -439,6 +439,25 @@ public:
 		m_traj_next = next;
 	}
 
+	// **その鍵のドラムセットアップの印**（XG の `3n rr nn`）。
+	// 音の高さ・音量・パン・送りなどが全部ここに入る。式は起こせていないので、
+	// EG のつまみ（6.14）と同じく**値が変わったら写し取り直す**。
+	// 組は 4 つあってパートモードで選ばれるが、どれが使われるか見分けるより
+	// 4 組ぶん混ぜるほうが確実（1 鍵あたり 32 バイト）
+	u32 drum_ctx(int note) const
+	{
+		if (!m_ram || note < ram::DRUM_SETUP_NOTE0
+		    || note >= ram::DRUM_SETUP_NOTE0 + int(ram::DRUM_SETUP_NOTES))
+			return 0;
+		u32 h = 2166136261u;
+		for (int s = 0; s < ram::DRUM_SETUP_SETS; s++)
+			for (int p = 0; p < 8; p++) {
+				h ^= m_ram[ram::drum_setup(s, note, p)];
+				h *= 16777619u;
+			}
+		return h;
+	}
+
 	// ドラムの覚え先の鍵（バンクとプログラムと音の高さ）
 	u64 drum_key(int part, int note) const
 	{
@@ -446,7 +465,7 @@ public:
 			return 0;
 		const u8 *p = m_ram + ram::part_base(part);
 		return u64(p[1]) << 24 | u64(p[2]) << 16 | u64(p[3]) << 8 | u64(note & 0x7f) |
-		       (u64(part_ctx(part)) << 32);
+		       (u64(part_ctx(part) ^ drum_ctx(note)) << 32);
 	}
 	bool drum_known(int part, int note) const
 	{
