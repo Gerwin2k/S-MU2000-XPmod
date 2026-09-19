@@ -451,6 +451,11 @@ private:
 	void traj_step();               // 1 サンプルぶん進める
 	void traj_watch(u32 reg, u16 value);
 	bool m_traj_rec = false;        // どれか 1 本でも録っているか（native_driver へ渡す用）
+	// **写し取ったスロット → 写し取りの並びの番号**。写し取りを組むときに
+	// 覚えておき、段の録画（traj）でそのまま使う。前はキーオンの順で
+	// 数え直していたので、途中で捨てたスロットがあるとずれていた
+	// （ドラムは 1 段も録れていなかった。doc/native-engine.md の 6.88）
+	s8 m_learn_chan[64] = {};
 	void traj_start(u32 rec, u64 drum_key, int ncal, u32 ctx);
 	void traj_finish_one(int i);
 
