@@ -1214,6 +1214,10 @@ void mu2000::native_learn_start(u32 rec)
 		// 鍵を押したあとのフィルタ・LFO の動きを、時刻つきで控えておく
 		if (m_learn_key_clock) {
 			const int r2 = int(reg % 64);
+			// **10ms タイマの位相をここで学ぶ**（6.118）。実機が 0x00 を
+			// 書いた時刻そのものが、firmware の 10ms 割り込みの目
+			if (r2 == 0x00 && reg < 0x1000)
+				m_ndrv.set_eg_phase(u32(m_ne_clock));
 			if ((r2 == 0x00 || r2 == 0x01 || r2 == 0x04 || r2 == 0x05 || r2 == 0x0a) &&
 			    reg < 0x1000 && m_learn_traj.size() < 512)
 				m_learn_traj.push_back({ int(reg / 64),
@@ -1668,6 +1672,8 @@ void mu2000::traj_watch(u32 reg, u16 value)
 		// LFO は「かけ始めるまでの間」や深さの増やし方を firmware がソフトでやっている
 		if (r != 0x00 && r != 0x01 && r != 0x04 && r != 0x05 && r != 0x0a)
 			continue;
+		if (r == 0x00)
+			m_ndrv.set_eg_phase(u32(m_ne_clock));
 		if (t.n >= 4096 || size_t(t.chan[ch]) >= t.cals->size())
 			continue;
 		// **その場で**写し取りに足す。いま鳴っている native の音も、

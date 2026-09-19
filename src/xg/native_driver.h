@@ -209,7 +209,44 @@ public:
 	// 進む（doc/native-engine.md の 6.60）。その位相は起動から決まっているので、
 	// native の口が始まる前に firmware が書いた 0x00 の時刻から拾っておく。
 	// native の口が始まったあとは firmware の時間が遅れるので、拾い直さない
-	void set_eg_phase(u32 sample) { m_eg_phase = sample % FENV_TICK; }
+	// **10ms タイマの位相を実機から学ぶ**（6.118）。firmware の 10ms 割り込みは
+	// 世界共通なので、包絡線も滑りも「鍵を押した時刻」ではなくこの格子に乗る。
+	// 実機が書く時刻はタイマの目より少し後ろにばらつく（混み具合で 0-13
+	// サンプル）ので、**いちばん早いもの**を目とみなす
+	void set_eg_phase(u32 sample)
+	{
+		const u32 p = sample % FENV_TICK;
+		if (!m_eg_have) {
+			m_eg_phase = p;
+			m_eg_have = true;
+			return;
+		}
+		s32 d = s32(p) - s32(m_eg_phase);
+		if (d < -s32(FENV_TICK / 2))
+			d += s32(FENV_TICK);
+		else if (d > s32(FENV_TICK / 2))
+			d -= s32(FENV_TICK);
+		if (d < 0)
+			m_eg_phase = p;
+	}
+	// **まだ既定にできない**（6.118）。`SMU2000_EG_GRID=1` で試せる。
+	// 格子に乗せると滑り（`0x11`）は実機と 1 サンプルまで合うのに、
+	// 音の相関は porta で 81% → 29% と落ちる。レジスタの値も書く時刻も
+	// 7 サンプル以内で合っているので、原因はまだ分かっていない
+	static bool eg_grid()
+	{
+		static const bool on = [] {
+			const char *e = std::getenv("SMU2000_EG_GRID");
+			return e && (e[0] != '0' || e[1]);
+		}();
+		return on;
+	}
+	// x 以降でいちばん早い格子の目
+	u64 eg_after(u64 x) const
+	{
+		const u64 base = x - (x % FENV_TICK) + m_eg_phase;
+		return base >= x ? base : base + FENV_TICK;
+	}
 
 	// そのスロットを firmware がまだ使っていそうか
 	bool fw_recent(int slot) const
@@ -1006,7 +1043,13 @@ private:
 			if (e.reg == 0x00 && !e.rel) { at0 = e.at; break; }
 		// 鍵を押した直後の 1 目は、実機も値を動かさない（張った値を書くだけ）。
 		// だから 1 目ぶん遅らせて進め始める
-		s.fnext = u64(s64(s.tstart + at0 + FENV_TICK) + EG_LAG);
+		// **実機の 10ms 割り込みは世界共通**（6.118）。鍵を押したあと最初に
+		// 来る目が 1 目め。写し取りの at0 は写し取った音の鍵からの相対なので、
+		// そのまま足すと鍵ごとに位相がずれる（実機の位相は 304、こちらは
+		// 曲ごとに 86-308 とばらばらだった）。位相をまだ学べていない間だけ at0 を使う
+		s.fnext = (m_eg_have && eg_grid())
+		        ? eg_after(u64(s64(s.tstart) + EG_LAG)) + FENV_TICK
+		        : u64(s64(s.tstart + at0 + FENV_TICK) + EG_LAG);
 	}
 
 	// **離しの段**。鍵を離すと、実機はもう 1 段張って 0 へ向かう。
@@ -1715,6 +1758,7 @@ private:
 	// 実機の包絡線は 441 サンプル（10ms）の格子で進む
 	static constexpr u64 FENV_TICK = 441;
 	u32 m_eg_phase = 0;
+	bool m_eg_have = false;
 	std::array<u32, PARTS> m_recsel{};
 	std::array<s8, PARTS> m_recsel_drum{};
 	u64 m_clock = 0;
