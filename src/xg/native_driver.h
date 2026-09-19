@@ -145,6 +145,8 @@ public:
 		m_traj_next = 0;
 		m_pend.clear();
 		m_busy = 0;
+		m_bend_due.fill(0);
+		m_bend_next = ~u64(0);
 		m_age = 0;
 	}
 
@@ -338,6 +340,21 @@ public:
 			m_pend.resize(w);
 			if (now)
 				key_on(now);
+		}
+		// **格子に乗せたベンド**（6.125）
+		if (clock >= m_bend_next) {
+			u64 next2 = ~u64(0);
+			for (int p = 0; p < PARTS; p++) {
+				if (!m_bend_due[p])
+					continue;
+				if (m_bend_due[p] <= clock) {
+					m_bend_due[p] = 0;
+					apply_bend(p);
+				} else if (m_bend_due[p] < next2) {
+					next2 = m_bend_due[p];
+				}
+			}
+			m_bend_next = next2;
 		}
 		if (!m_traj)
 			return;
@@ -620,6 +637,7 @@ public:
 		// 黙って無視すると、ポルタメントや EG の設定が効かない音になる
 		u32 unknown = 0;
 		int bend = 8192, range = 2;            // ピッチベンドと、その幅（半音）
+		bool mono = false;                     // CC126 モノ / CC127 ポリ
 		bool damper = false;
 		bool sost_on = false;          // CC66（ソステヌート）                   // CC64
 	};
@@ -749,6 +767,17 @@ public:
 
 	// **ノートシフト**（08 pp 08。64 が 0 半音、±24 まで）。実機は鍵を移して
 	// から音色を選ぶので、要素の鍵域も波形の選び方も移した鍵で決まる
+	// **RPN 1（微調）**（6.125）。パートの塊 +0xCC に「14bit の値 − 8192」が
+	// 入る（8192 で 100 セント）。音程のレジスタにだけ出る
+	int part_fine_cents(int part) const
+	{
+		if (!m_ram || part < 0 || part >= PARTS)
+			return 0;
+		const u8 *b = m_ram + ram::part_base(part);
+		const int fine = int(s16(u16(u16(b[ram::PART_FINE]) << 8 | b[ram::PART_FINE + 1])));
+		return fine * 100 / 8192;
+	}
+
 	int part_shift(int part) const
 	{
 		if (!m_ram)
@@ -760,6 +789,9 @@ public:
 		// いない（既定では 0 のはずだが、確かめていない）
 		int v = int(m_ram[ram::part_base(part) + 0x08]) - 64;
 		v += int(m_ram[ram::SYS_TRANSPOSE]) - 64;
+		// **+0xC9 は RPN 2（粗調）**（6.125）。実機の式に入っているのに
+		// 何なのか分からず外していた。RPN 2 を送ると符号つきの半音がここに入る
+		v += int(s8(m_ram[ram::part_base(part) + ram::PART_COARSE]));
 		return v;
 	}
 	int part_cho(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x12]) : 0; }
@@ -852,7 +884,8 @@ public:
 	{
 		return cc == 0x07 || cc == 0x0b || cc == 0x0a || cc == 0x40 || cc == 0x01 ||
 		       cc == 0x5b || cc == 0x5d || cc == 0x4a || cc == 0x47 ||
-		       cc == 0x05 || cc == 0x41 || cc == 0x54;
+		       cc == 0x05 || cc == 0x41 || cc == 0x54 ||
+		       cc == 0x7e || cc == 0x7f;
 	}
 
 	// CC を受ける。native でさばけたら true（firmware にも短く回す）
@@ -877,6 +910,11 @@ public:
 		case 0x5d: p.cho = value; break;
 		case 0x4a: p.bri = value; break;
 		case 0x47: p.res = value; break;
+		// **モノ / ポリ**（6.125）。モノのパートは、つぎの鍵を押すと
+		// 前の音を**離す**（実機は古いスロットへ離しの `0x09` を書く）。
+		// 入れるまでは前の音が鳴り続けて、重なったぶん 0.8dB 大きかった
+		case 0x7e: p.mono = true; return true;
+		case 0x7f: p.mono = false; return true;
 		case 0x05: p.porta_time = value; return true;     // ポルタメントの速さ
 		case 0x41: p.porta_on = value >= 64; return true; // ポルタメント 入切
 		case 0x54: p.porta_src = value & 0x7f; return true;   // 滑り出す鍵を指定
@@ -926,12 +964,33 @@ public:
 		if (part < 0 || part >= PARTS)
 			return;
 		m_cc[part].bend = value14;
+		// （下で格子に乗せて流す）
 		// ベンドの割り当て（音程以外）が動いていると、こちらの式が合わない
 		if (value14 != 8192 && !bend_idle(part))
 			m_cc[part].unknown |= 1u << 26;
 		else
 			m_cc[part].unknown &= ~(1u << 26);
-		apply_bend(part);
+		// **ベンドは実機の 10ms 格子で効く**（6.125）。firmware は CC を
+		// 受けた瞬間ではなく、つぎの 10ms 割り込みでレジスタを書き直す
+		// （実測で `0x11` の書き込みがいつも位相 304 に乗る）。こちらは
+		// その場で書いていたので、大きく曲げる曲で 5ms ぶん先走っていた
+		if (m_eg_have && bend_grid()) {
+			const u64 due = eg_after(m_clock);
+			m_bend_due[part] = due;
+			if (due < m_bend_next)
+				m_bend_next = due;
+		} else {
+			apply_bend(part);
+		}
+	}
+
+	static bool bend_grid()
+	{
+		static const bool on = [] {
+			const char *e = std::getenv("SMU2000_BEND_GRID");
+			return !e || (e[0] != '0' || e[1]);
+		}();
+		return on;
 	}
 
 	void set_bend_range(int part, int semitones)
@@ -1143,7 +1202,8 @@ private:
 		const part_cc &pc = m_cc[s.part];
 		return nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(m_rom, s.elem),
 		                     nv::bend_cents(pc.bend, pc.range) + nv::elem_tune(s.elem)
-		                     + s.glide / 256, nv::key_pivot(s.elem));
+		                     + part_fine_cents(s.part) + s.glide / 256,
+		                     nv::key_pivot(s.elem));
 	}
 
 	void apply_bend(int part)
@@ -1154,6 +1214,26 @@ private:
 				continue;
 			m_poke(u32(i) * 64 + 0x11, pitch_of(s));
 		}
+	}
+
+	// モノのパートで、いま鳴っている別の鍵を離す
+	void mono_cut(int part, int except)
+	{
+		int keys[SLOTS];
+		int n = 0;
+		for (int i = 0; i < SLOTS; i++) {
+			const slot_use &s = m_slot[i];
+			if (!s.on || s.part != part || s.keynote == except)
+				continue;
+			bool seen = false;
+			for (int k = 0; k < n; k++)
+				if (keys[k] == s.keynote)
+					seen = true;
+			if (!seen)
+				keys[n++] = s.keynote;
+		}
+		for (int k = 0; k < n; k++)
+			note_off(part, keys[k]);
 	}
 
 	// ダンパーを離したとき、待たせていた音を切る
@@ -1324,6 +1404,9 @@ public:
 			return false;
 		const std::vector<nv::voice_cal> &cals = it->second;
 
+		// **モノなら前の音を離す**（6.125）
+		if (m_cc[part].mono)
+			mono_cut(part, note);
 		const int nelem = nv::element_count(m_rom, rec);
 		// **ノートシフト**（08 pp 08）。実機は鍵を移してから音色を選ぶので、
 		// ここから先はぜんぶ移した鍵で決める。離すときの照合だけ元の鍵
@@ -1407,7 +1490,8 @@ public:
 			// 渡していたので、ノートシフトやマスター移調が音程・波形に効かなかった
 			nv::slot_regs sr = nv::build_note(m_rom, el, pnote, note_att(su, part), c,
 			                                  nv::defaults(),
-			                                  nv::bend_cents(pc.bend, pc.range) + su.glide / 256,
+			                                  nv::bend_cents(pc.bend, pc.range)
+			                                  + part_fine_cents(part) + su.glide / 256,
 			                                  pvel);
 			// 音程の包絡線の行き先（byte31）。初めの高さと同じなら書かない
 			{
@@ -1539,6 +1623,8 @@ public:
 		}
 		m_pend.clear();
 		m_busy = 0;
+		m_bend_due.fill(0);
+		m_bend_next = ~u64(0);
 		m_traj = false;
 		m_traj_next = 0;
 	}
@@ -1807,6 +1893,9 @@ private:
 	std::vector<pending_key> m_pend;
 	// firmware がレジスタを書き終える時刻（1/64 サンプル単位）
 	u64 m_busy = 0;
+	// 格子に乗せたベンドの、パートごとの流す時刻（0 は無し）
+	std::array<u64, PARTS> m_bend_due{};
+	u64 m_bend_next = ~u64(0);
 	u64 m_age = 0;
 };
 
