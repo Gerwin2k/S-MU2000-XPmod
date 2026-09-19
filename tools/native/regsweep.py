@@ -85,12 +85,12 @@ def fw_regs(roms, msb, lsb, prog, note, vel):
             elif reg == 0x1ce: mask = (mask & ~(0xffff << 16)) | (val << 16)
             elif reg == 0x1cf: mask = (mask & ~0xffff) | val
             elif reg == 0x20e:
-                for i in range(64):
-                    if (mask >> i) & 1 and cur.get(i):
-                        return dict(cur[i])
+                got = [dict(cur[i]) for i in range(64) if (mask >> i) & 1 and cur.get(i)]
+                if got:
+                    return got
             elif reg < 0x1000 and reg % 64 not in SKIP:
                 cur[reg // 64][reg % 64] = val
-    return {}
+    return []
 
 
 def nv_regs(roms, msb, lsb, prog, note, vel):
@@ -132,13 +132,20 @@ def main():
     for msb, lsb, prog in cases:
         for note in notes:
             for vel in vels:
-                f = fw_regs(roms, msb, lsb, prog, note, vel)
+                slots = fw_regs(roms, msb, lsb, prog, note, vel)
                 n = nv_regs(roms, msb, lsb, prog, note, vel)
-                if not f or not n:
+                if not slots or not n:
                     print("%d,%d,%-3d 鍵%-3d 強さ%-4d 測れず" % (msb, lsb, prog, note, vel))
                     continue
                 ncase += 1
-                diff = [r for r in sorted(f) if r in n and f[r] != n[r]]
+                # **多要素の音色**は、実機が鳴らしたスロットのどれかと合えばよい
+                # （こちらが組むのは 1 要素ぶんで、実機がどの順で並べるかは別）
+                best, bestd = None, None
+                for f in slots:
+                    d = [r for r in sorted(f) if r in n and f[r] != n[r]]
+                    if bestd is None or len(d) < len(bestd):
+                        best, bestd = f, d
+                f, diff = best, bestd
                 miss = [r for r in sorted(f) if r not in n]
                 for r in diff:
                     bad[r] += 1
