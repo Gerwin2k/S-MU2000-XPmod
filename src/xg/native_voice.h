@@ -14,6 +14,7 @@
 
 #include "compat/mamecompat.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -740,12 +741,18 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 包絡線の目で本当の値に置き換える）。14 音色を実機と突き合わせて
 	// 確かめた（doc/native-engine.md の 6.67）
 	r.set(0x01, 0xffff);
-	r.set(0x02, u16(0x8000 | elem[82]));       // 402 組の 97%
+	// フィルタの第 2 係数。実機（0x12AFCE）は **byte82 を 16 倍**して
+	// 0x800 の下駄を履かせ、0x800-0xFFF に収めてから下 11bit を取る。
+	// つまり素直に byte82 * 16 で、0x7FF で頭打ち（DistGtr の 0x180、
+	// Kitayama の 0x570 が実機と一致した）
+	r.set(0x02, u16(0x8000 | u16(std::min(0x7ff, int(elem[82]) * 16))));
 	r.set(0x03, d.post);
 	// フィルタの第 2 パラメータ（共振）。byte35 から強さぶんを引いて（byte81）、
 	// 1 ビット落として 5bit にする（0x12806A）。18 音色 × 強さ 3 通りで一致
 	r.set(0x04, u16(reso_level(elem, vel) << 11));
-	r.set(0x05, d.lfo_amp);
+	// LFO の深さ（音量側）。実機（0x129B34）は byte16 を 2 倍して下位に置く。
+	// 既定の音色はほとんど 0 で、Vibes だけ byte16=2 → 下位 4
+	r.set(0x05, u16((d.lfo_amp & 0xff00) | u16((elem[16] * 2) & 0x7f)));
 	// LFO の型と刻み。上位は 0x40 | byte11（402 組で例外なし）、下位（音程の深さ）は 0
 	r.set(0x0a, u16((0x40 | (elem[11] & 0x3f)) << 8));
 	// 音程の包絡線。速さが 127（即到達）のときだけ初めの高さは byte31 を使う
@@ -806,7 +813,7 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 		// **0x0b・0x10 はもう写し取らない**。音程の包絡線を式で出すようになった
 		// （写し取りは包絡線が終わったあとの値を拾うので、入れると出だしの
 		//  しゃくりが丸ごと消えていた。doc/native-engine.md の 6.68）
-		static const int COPY[] = { 0x00, 0x01, 0x02, 0x05, 0x06, 0x0a,
+		static const int COPY[] = { 0x00, 0x01, 0x06, 0x0a,
 		                            0x20, 0x22, 0x24, 0x26, 0x28, 0x2a,
 		                            0x32, 0x33, 0x34, 0x35, 0x36, 0x37 };
 		for (int i : COPY)
