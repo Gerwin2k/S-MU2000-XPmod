@@ -112,6 +112,11 @@ inline int key_follow(const u8 *elem)
 	return F[elem[19] & 3];
 }
 
+// **鍵の追従の支点**（byte20）。ほとんどの要素は 60（中央のド）だが、
+// Bottle の 75 や Applause の 57 のように別の鍵を支点にするものがある。
+// 支点が 60 でないと、追従が 100 でない音色では鍵 60 でも値がずれる（6.96）
+inline int key_pivot(const u8 *elem) { return elem[20]; }
+
 // 要素を**遅らせて鳴らす**段（byte72）。実測（段 0,1,2,3 → 0,311,752,1634 サンプル）は
 // 441 * 2^(n-1) - 130 でぴったり。MusicBox は 2 つ目の要素を 37ms 遅らせている
 inline u32 elem_delay(const u8 *elem)
@@ -153,14 +158,17 @@ inline int porta_step(const u8 *rom, int cc5)
 	return cc5 < 24 ? raw * 512 : raw * 2;
 }
 
-inline u16 pitch_reg(const wave_info &w, int note, int follow = 100, int cents_extra = 0)
+inline u16 pitch_reg(const wave_info &w, int note, int follow = 100,
+                     int cents_extra = 0, int pivot = 60)
 {
 	// 整数で計算する（firmware と同じ丸めになる。0 の側へ切り捨て）。
-	// **鍵の追従は鍵 60 を支点にする**（波形の基準鍵ではない）。追従が 100 の
-	// ときは同じ式になるが、50 や 20 の音色では基準鍵とのずれぶん食い違う
-	// （Woodblock で 749 セント、TaikoDrum で 1700 セント。どちらも
-	//  50 * (60 - 基準鍵) でぴったり）
-	const int cents = (note - 60) * follow + (60 - w.base_key) * 100
+	// **鍵の追従は要素の支点（byte20）を軸にする**（波形の基準鍵ではない）。
+	// 追従が 100 のときは同じ式になるが、50 や 20 の音色では基準鍵との
+	// ずれぶん食い違う（Woodblock で 749 セント、TaikoDrum で 1700 セント。
+	// どちらも 50 * (60 - 基準鍵) でぴったり）。
+	// 支点はほとんどの要素で 60 なので長らく定数で足りていたが、Bottle（75）
+	// と Applause（57）だけ違っていて、鍵 60 でも値がずれていた（6.96）
+	const int cents = (note - pivot) * follow + (pivot - w.base_key) * 100
 	                + w.fine_cents + cents_extra;
 	const int v = cents * 1024 / 1200;
 	// ビット 14 は波形の**形式**で決まる（形式 3 のときだけ立つ。402 組で確かめた）
@@ -817,12 +825,14 @@ inline u16 cutoff_of(const u8 *rom, const u8 *elem, int note, int vel, int facc)
 	        + cutoff_key_curve(rom, elem, note);
 	cut = cut < 0 ? 0 : (cut > 0xfff ? 0xfff : cut);
 	cut += facc >> 2;
-	// 実機（0x127E08）は足したあとも 0xFFF で頭打ちにして、下 11bit を取る。
-	// そのうえで `0x12E79C` が「**共振が 4 未満なら 0x7C0 で頭打ち**」を掛ける
-	// （EPiano1 は強さ 100 で共振 0 → 0x7C0、強さ 127 で共振 4 → 0x7FF）
+	// **0x800 は下駄**。実機（`0x127E84`）は「0x800 以下なら 1」＝閉じ切りに
+	// してから 0xFFF で頭打ちにし、下 11bit を取る。SynBrass1 は表 0x6d4 に
+	// 鍵の追従 +96、包絡線 -224 で 0x654 ＝ 下駄より下なので、実機は 1 を書く
+	if (cut <= 0x800) cut = 1;
 	if (cut > 0xfff) cut = 0xfff;
 	cut &= 0x7ff;
-	if (cut < 0) cut = 0;
+	// そのうえで `0x12E79C` が「**共振が 4 未満なら 0x7C0 で頭打ち**」を掛ける
+	// （EPiano1 は強さ 100 で共振 0 → 0x7C0、強さ 127 で共振 4 → 0x7FF）
 	if (reso_level(elem, vel) < 4 && cut > CUTOFF_MAX)
 		cut = CUTOFF_MAX;
 	return u16(0x1000 | u16(cut));
@@ -1027,9 +1037,18 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// LFO の型と刻み。上位は byte11 に**byte9 が 0 でなければ** 0x40 を足したもの
 	// （Rain は byte9=0 で `2d`）。下位は**音程の深さ = byte14 × 3**
 	// （PanFlute の byte14=1 で 3、ChiffLead・TnklBell・Helicopter の 2 で 6）
-	// 深さは `0x05` と同じく、**遅れ（byte12）と byte13 がどちらも 0 のとき**だけ
+	// 深さは `0x05` と同じく、**遅れ（byte12）と byte13 がどちらも 0 のとき**だけ。
+	//
+	// そのうえで **byte9 が 2 だと音程の深さは 0** になる（6.95）。音色の記録
+	// 全部（962 件）で byte12・byte13 が 0 かつ byte14 が 0 でない要素は
+	// BirdTweet（byte9=2・byte14=6）と Choral（byte9=2・byte14=1）の 2 つだけ
+	// で、実機はどちらも 0 を書く。byte10=0 の組（JumpBrss・StdiumOr）は
+	// ちゃんと深さを書くので、効いているのは byte10 ではなく byte9 のほう。
+	// **音量側（0x05）は 0 にならない**（Choral の byte16=13 → 26 が一致）
+	const int plfo = (elem[12] || elem[13] || elem[9] >= 2)
+	                 ? 0 : ((elem[14] * 3) & 0x7f);
 	r.set(0x0a, u16(((((elem[9] ? 0x40 : 0) | (elem[11] & 0x3f)) << 8))
-	                | u16((elem[12] || elem[13]) ? 0 : ((elem[14] * 3) & 0x7f))));
+	                | u16(plfo)));
 	// 音程の包絡線。速さが 127（即到達）のときだけ初めの高さは byte31 を使う
 	const int prate = peg_rate_reg(rom, elem, note, vel);
 	r.set(0x0b, u16(prate << 8));
@@ -1059,7 +1078,8 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// 要素の byte17 は**半音単位の粗調**、byte18 は**セント単位の離調**（どちらも 64 が中央）。
 	// 離調は重ねの音色で 2 つの層をずらすのに使う。入れないと層がぴったり重なって
 	// 打ち消し合わず、3dB ほど大きくなる（doc/native-engine.md の 6.18）
-	r.set(0x11, pitch_reg(w, note, key_follow(elem), cents_extra + elem_tune(elem)));
+	r.set(0x11, pitch_reg(w, note, key_follow(elem), cents_extra + elem_tune(elem),
+	                      key_pivot(elem)));
 	// **鳴らし始める位置をずらす**（実機の `0x12A9C8`）。要素の byte79 が
 	// 128 サンプル単位、byte80 が 1 サンプル単位の下駄で、ループ前の長さから
 	// 引く。Oboe(7→896)・Clarinet(2→256)・Bagpipe(8→1024) で実機と一致した。

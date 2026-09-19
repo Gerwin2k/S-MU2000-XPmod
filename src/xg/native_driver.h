@@ -959,7 +959,7 @@ private:
 		const part_cc &pc = m_cc[s.part];
 		return nv::pitch_reg(nv::read_wave(s.wave), s.note, nv::key_follow(s.elem),
 		                     nv::bend_cents(pc.bend, pc.range) + nv::elem_tune(s.elem)
-		                     + s.glide / 256);
+		                     + s.glide / 256, nv::key_pivot(s.elem));
 	}
 
 	void apply_bend(int part)
