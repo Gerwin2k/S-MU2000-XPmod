@@ -238,13 +238,20 @@ inline int bright_shift(int cc) { return 16 * (cc - 64); }
 inline int reso_shift(int cc) { return (cc - 64) / 2; }
 
 // 送り（CC91 リバーブ・CC93 コーラス）→ レジスタ 0x33・0x34 の下位（減衰）。
-// 実測は **16 + level→減衰の表** で、音色によらない（GrandPno・Strings・Flute で同じ）。
-// 使うのは差ぶんだけなので、下駄の 16 は要らない
+// 実測は **16 + 送りの表** で、音色によらない（GrandPno・Strings・Flute で同じ）。
+// 使うのは差ぶんだけなので、下駄の 16 は要らない。
+//
+// **表は `LEVEL_TAB` ではない**（6.99）。音量の表（0x1E6798）は同じ曲線を
+// 切り捨てで持っていて、送りの表（0x1B99B9）は四捨五入で持っている。
+// 1 きざみずつ違うので、CC91 を振ると 1 ずれた値を書いていた。
+// 実測 49 点（CC 1-127）が 0x1B99B9 と 1 つ残らず合う
+constexpr u32 SEND_TAB = 0x1B99B9;      // 0-127 → 送りの減衰（127 バイト。番号 0 が CC1）
+
 inline int send_att(const u8 *rom, int cc)
 {
 	if (cc <= 0)
 		return 255;
-	return int(rom[LEVEL_TAB + u32(std::min(127, cc) - 1)]);
+	return int(rom[SEND_TAB + u32(std::min(127, cc) - 1)]);
 }
 
 // モジュレーション（CC1）→ レジスタ 0x0a の下位（LFO の深さ）に足す。
