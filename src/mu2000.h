@@ -296,7 +296,11 @@ public:
 	// firmware は 2.5ms ごとにここを読み、**A が立っていれば 1 目盛り**、
 	// 向きは B（0 で増、1 で減）で決める。実測でそう決まっている。
 	// 走査 1 回につき 1 目盛りなので、最大 400 目盛り/秒
-	void turn_encoder(int detents) { m_enc_pending += detents; }
+	void turn_encoder(int detents)
+	{
+		m_enc_pending += detents;
+		panel_touched();
+	}
 	bool encoder_busy() const { return m_enc_pending != 0; }
 
 	// パネルの LED 10 個。MAME の mulcd_device::set_leds と同じ並び
@@ -325,6 +329,7 @@ public:
 	std::atomic<u64> m_ne_by_learn{0};   // 写し取り（その音色の 1 音目）
 	std::atomic<u64> m_ne_by_midi{0};    // 渡した MIDI を受け取らせている
 	std::atomic<u64> m_ne_by_keep{0};    // 止めきらないために細く回している
+	std::atomic<u64> m_ne_by_panel{0};   // パネル（ボタン・ダイヤル・液晶）を触っている
 	u8   m_fw_why = 0;                   // いまの hold の理由（1 SysEx / 2 そのほか）
 	// SysEx の頭を少し覚えて、長く回す必要があるかを見分ける
 	int  m_sx_pos = -1;
@@ -532,6 +537,27 @@ private:
 	u64  m_fw_keymask = 0;     // firmware がつぎに鳴らすスロットのマスク
 	// firmware を細く回し続ける刻み（100ms ごとに 5ms）。止めきると液晶・
 	// ボタン・firmware 自身の後始末が全部止まる
+	// **パネルを触っている間は firmware を全速で回す**（doc/native-engine.md の 6.119）。
+	// native の口では firmware を 100ms につき 5ms しか回さないので、
+	// firmware の中の時間は 20 分の 1 でしか進まない。液晶もボタンも
+	// ダイヤルも firmware の仕事なので、そのままだと
+	//   * ダイヤルが毎秒 20 目盛りしか進まない（実機は 400）
+	//   * 画面が変わるまでひと呼吸かかる
+	// になる。触ってから この長さだけ全速で回すと、実機と同じ手触りになる。
+	// 触っていない間は今までどおり細く回すだけ（CPU は増えない）
+	// `SMU2000_PANEL_RUN` で振れる（サンプル数。0 で前の道に戻る）
+	static u32 panel_run()
+	{
+		static const u32 v = std::getenv("SMU2000_PANEL_RUN")
+		                   ? u32(std::atoi(std::getenv("SMU2000_PANEL_RUN")))
+		                   : u32(44100 / 2);      // 0.5 秒
+		return v;
+	}
+	void panel_touched() { m_panel_hold = panel_run(); }
+	// 液晶を書き換えている間の延長ぶん（短くてよい。止まればすぐ戻る）
+	static constexpr u32 LCD_RUN = 44100 / 10;     // 0.1 秒
+	u32 m_panel_hold = 0;
+
 	static constexpr u32 KEEPALIVE_EVERY = 4410;
 	static constexpr u32 KEEPALIVE_RUN = 220;
 public:

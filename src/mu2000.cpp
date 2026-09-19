@@ -299,10 +299,14 @@ void mu2000::set_button(button b, bool pressed)
 	if (i < 0 || i >= int(button::count))
 		return;
 	const button_slot &s = BUTTONS[i];
+	const bool was = !BIT(m_sws[s.row], s.bit);
 	if (pressed)
 		m_sws[s.row] &= u8(~(1 << s.bit));
 	else
 		m_sws[s.row] |= u8(1 << s.bit);
+	// **押し離しが変わったときだけ**（毎こま同じ値で呼ばれても効かないように）
+	if (was != pressed)
+		panel_touched();
 }
 
 bool mu2000::button_pressed(button b) const
@@ -694,6 +698,15 @@ void mu2000::lcd_port_w(u16 data)
 				m_lcd.data_w(u8(data >> 8));
 			else
 				m_lcd.control_w(u8(data >> 8));
+			// **押したあと画面が動いている間は延ばす**（6.119）。ボタンを
+			// 押したあとの仕事が 0.5 秒で終わらないことがある（品書きの
+			// 読み込みなど）。書き換えが止まれば、すぐ細い回しに戻る。
+			// **触っていないときは延ばさない**。ここを「液晶が動いたら
+			// いつでも」にすると、曲を鳴らしている最中の表示更新でも
+			// firmware が全速になり、写し取りの中身まで変わってしまう
+			// （port_b 100% -> 97%、porta 81% -> 53%）
+			if (m_native_engine && m_panel_hold && m_panel_hold < LCD_RUN)
+				m_panel_hold = LCD_RUN;
 		}
 	}
 	m_pe = data;
@@ -1153,6 +1166,7 @@ void mu2000::set_native_engine(int mode)
 	m_ne_by_learn.store(0, std::memory_order_relaxed);
 	m_ne_by_midi.store(0, std::memory_order_relaxed);
 	m_ne_by_keep.store(0, std::memory_order_relaxed);
+	m_ne_by_panel.store(0, std::memory_order_relaxed);
 	m_fw_why = 0;
 	m_ne_stats = native_stats();
 	if (!mode) {
@@ -2254,6 +2268,17 @@ void mu2000::run_sample(s32 &left, s32 &right)
 			if (!m_fw_why)
 				m_fw_why = 5;
 		}
+		// **パネルを触っている間は全速**（6.119）。ボタン・ダイヤル・液晶は
+		// ぜんぶ firmware の仕事なので、細く回したままだと手触りが 20 分の 1 に
+		// なる。ダイヤルの目盛りが残っている間も回し続ける（実機は 2.5ms ごとに
+		// 1 目盛りしか読まないので、止めると入力が溜まったままになる）
+		if (m_panel_hold || m_enc_pending) {
+			if (m_panel_hold)
+				m_panel_hold--;
+			m_fw_hold = std::max(m_fw_hold, u32(2));
+			if (!m_fw_why)
+				m_fw_why = 6;
+		}
 		// 「溜まっている間は回す」はやめた。渡した MIDI は 1 バイト 14 サンプルかけて
 		// 線を流れるので、それを待つだけで実時間の 2 割を SH-2 に持っていかれていた。
 		// メッセージごとに置く待ち（下の native_midi）で足りる
@@ -2280,6 +2305,8 @@ void mu2000::run_sample(s32 &left, s32 &right)
 				m_ne_by_midi.fetch_add(1, std::memory_order_relaxed);
 			else if (m_fw_why == 5)
 				m_ne_by_keep.fetch_add(1, std::memory_order_relaxed);
+			else if (m_fw_why == 6)
+				m_ne_by_panel.fetch_add(1, std::memory_order_relaxed);
 			else
 				m_ne_by_other.fetch_add(1, std::memory_order_relaxed);
 		}

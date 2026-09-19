@@ -387,6 +387,48 @@ def step_sampling(rep, roms):
     rep.add("sampling", rc == 0, note)
 
 
+# パネルの試験で押すボタン（品書きを一巡りする）
+PANEL_KEYS = ("play,util,enter,value+,value+,exit,edit,enter,value+,exit,exit,"
+              "part+,mute,play,drum,piano,organ,select,edit,enter,enter,exit,exit")
+
+
+def step_panel(rep, roms):
+    """**native の口でもパネルが効くか**（doc/native-engine.md の 6.119）。
+    ボタン・ダイヤル・液晶はぜんぶ firmware の仕事なので、firmware を細く
+    回したままだと一切効かない。同じボタンの並びを firmware の道と native の
+    口で押して、液晶が 1 行残らず同じになるかを見る"""
+    exe = BUILD / ("panel" + EXE)
+    if not exe.exists():
+        rep.add("パネル", False, "%s が無い" % exe)
+        return
+    outs = []
+    for tag, extra in (("fw", []), ("ne", ["--native"])):
+        log = WORK / ("panel_%s.log" % tag)
+        rc = run([exe, roms, "--keys", PANEL_KEYS, "--trace"] + extra,
+                 out=log, err=log)
+        if rc != 0:
+            rep.add("パネル", False, "%s で鳴らせなかった" % tag)
+            return
+        txt = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        # `--trace` が出す「ボタン名 + 液晶 1 行」だけを取る
+        outs.append([l for l in txt if l.startswith("  ") and "|" in l])
+    if not outs[0]:
+        rep.add("パネル", False, "液晶が読めなかった")
+        return
+    bad = [i for i in range(min(len(outs[0]), len(outs[1])))
+           if outs[0][i] != outs[1][i]]
+    ok = not bad and len(outs[0]) == len(outs[1])
+    if ok:
+        note = "%d 行とも firmware と同じ" % len(outs[0])
+    elif bad:
+        note = "%d 行目から違う: %s / %s" % (bad[0] + 1,
+                                             outs[0][bad[0]].strip(),
+                                             outs[1][bad[0]].strip())
+    else:
+        note = "行数が違う（%d / %d）" % (len(outs[0]), len(outs[1]))
+    rep.add("パネル", ok, note)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -450,6 +492,10 @@ def main():
         print()
         print("== 7. サンプリング（録音して試聴する）")
         step_sampling(rep, roms)
+
+        print()
+        print("== 8. パネル（native の口でもボタンと液晶が効くか）")
+        step_panel(rep, roms)
 
     rep.show()
     return 1 if rep.bad else 0
