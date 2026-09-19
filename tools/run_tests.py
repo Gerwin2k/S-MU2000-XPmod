@@ -259,12 +259,13 @@ def step_threading(rep, roms, first):
 # 混み具合で遅れる。doc/native-engine.md の 6.90）
 SHAPE_MIN = {
     "piano":   0.98, "chord":  0.95, "drums": 0.90, "effects": 0.98,
-    "dense":   0.50, "port_b": 0.98, "bend":  0.98, "lofi":    0.98,
+    "dense":   0.55, "port_b": 0.98, "bend":  0.98, "lofi":    0.98,
     "egcc":    0.98, "porta":  0.95, "at":    0.95, "sxparam": 0.95,
     "pedals":  0.95, "partsx": 0.95,
     # keylevel は鍵と強さで音量が大きく動く音色ばかりなので、鍵を押す時刻の
-    # ばらつき（6.90）が相関に出やすい。**音量のほうは `native の口` が見る**
-    "keylevel": 0.50,
+    # ばらつき（6.90）が相関に出やすい。**音量のほうは `native の口` が見る**。
+    # 音 1 つずつは tools/native/notelevel.py で見られる
+    "keylevel": 0.95,
 }
 
 

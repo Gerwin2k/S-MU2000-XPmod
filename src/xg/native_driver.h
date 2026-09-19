@@ -1103,7 +1103,13 @@ private:
 	// 写し取りがあれば CC74 の差ぶん、無ければ 64 からの差ぶんを乗せる
 	u16 cut_with_cc(const slot_use &s, u16 base) const
 	{
-		if (s.cal)
+		// **式で出した値には、写し取りとの差を重ねてはいけない**（6.123）。
+		// `cutoff_of` は鍵の追従（`cutoff_key_curve`）をもう含んでいるのに、
+		// `cutoff_reg` は「いまの鍵 − 写し取った鍵」ぶんをさらに足すので、
+		// **鍵の追従が二重に掛かる**。Rain の第 2 要素は鍵 60・84 で
+		// 0x100 ぶん明るくなっていた（鍵 36 で写し取るので、そこだけ合う）。
+		// 明るさ（CC71）は写し取りとの差ではなく、そのまま足す
+		if (s.cal && !nv::cut_exact())
 			return cutoff_reg(base, *s.cal, s.part, s.elem, s.note);
 		const int now = m_cc[s.part].bri;
 		if (now < 0 || now == 64)
