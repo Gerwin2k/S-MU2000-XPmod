@@ -898,9 +898,11 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 	// フィルタの第 2 パラメータ（共振）。byte35 から強さぶんを引いて（byte81）、
 	// 1 ビット落として 5bit にする（0x12806A）。18 音色 × 強さ 3 通りで一致
 	r.set(0x04, u16(reso_level(elem, vel) << 11));
-	// LFO の深さ（音量側）。実機（0x129B34）は byte16 を 2 倍して下位に置く。
-	// 既定の音色はほとんど 0 で、Vibes だけ byte16=2 → 下位 4
-	r.set(0x05, u16((d.lfo_amp & 0xff00) | u16((elem[16] * 2) & 0x7f)));
+	// LFO の深さ（音量側）。実機（0x129B34）は byte16 を 2 倍して下位に置くが、
+	// **遅れ（byte12）と byte13 がどちらも 0 のときだけ**使う（0x127D18）。
+	// Vibes（byte12=0・byte13=0・byte16=2）は 4、Koto（byte12=48）は 0
+	r.set(0x05, u16((d.lfo_amp & 0xff00)
+	                | u16((elem[12] || elem[13]) ? 0 : ((elem[16] * 2) & 0x7f))));
 	// LFO の型と刻み。上位は 0x40 | byte11（402 組で例外なし）、下位（音程の深さ）は 0
 	r.set(0x0a, u16((0x40 | (elem[11] & 0x3f)) << 8));
 	// 音程の包絡線。速さが 127（即到達）のときだけ初めの高さは byte31 を使う
