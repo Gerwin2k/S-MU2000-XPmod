@@ -630,6 +630,17 @@ public:
 	int part_pan(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x0e]) : 64; }
 	int part_mod(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + ram::PART_MOD]) : 0; }
 	int part_rev(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x13]) : 40; }
+	// **そのパートの音量の目盛り**（0-128）。実機はパートの塊 +0x12F に持つ。
+	// 音量・エクスプレッションに**マスター音量も同じ形で掛かる**（実測。
+	// マスター 88 でパートの塊が 101 -> 70 ＝ (101 * 89) >> 7）
+	int vol_gain_of(int part, int vol, int expr) const
+	{
+		int g = nv::vol_gain(vol, expr);
+		if (m_ram)
+			g = (g * (int(m_ram[ram::SYS_VOLUME]) + 1)) >> 7;
+		return g < 0 ? 0 : (g > 128 ? 128 : g);
+	}
+
 	// **ベロシティ感度**（08 pp 0C 深さ・0D ずらし）を掛けた強さ
 	int part_vel(int part, int vel) const
 	{
@@ -645,8 +656,14 @@ public:
 	{
 		if (!m_ram)
 			return 0;
-		const int v = int(m_ram[ram::part_base(part) + 0x08]) - 64;
-		return v < -24 ? -24 : (v > 24 ? 24 : v);
+		int v = int(m_ram[ram::part_base(part) + 0x08]) - 64;
+		if (v < -24) v = -24;
+		if (v > 24) v = 24;
+		// **マスター移調（00 00 06）はここには入れない。** `SYS_TRANSPOSE` に
+		// 入るのは XG の値そのもので、firmware はそこを見て鳴らしているわけ
+		// ではない（マスター音量が `00 00 04` ではなくパートの塊 +0x12F に
+		// 効いていたのと同じ）。効かせている所がまだ見つかっていない（6.106）
+		return v;
 	}
 	int part_cho(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x12]) : 0; }
 	int part_bri(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x18]) : 64; }
@@ -1062,7 +1079,7 @@ private:
 		const int expr = p.expr >= 0 ? p.expr : (c ? c->cal_expr : 127);
 		if (s.lvl0 > 0)
 			return nv::clamp_att(nv::volume_att_from(m_rom, s.lvl0, s.arest,
-			                                         nv::vol_gain(vol, expr)));
+			                                         vol_gain_of(part, vol, expr)));
 		// **ドラムには目盛りが無い**（要素を持たず、写し取った減衰をそのまま
 		// 使う道）。そこは今までどおり、減衰の差ぶんで動かす
 		int a = s.att;
@@ -1239,12 +1256,13 @@ public:
 			}
 			su.lvl0  = nv::volume_level(m_rom, el, c ? c->base_level : 64, pnote);
 			su.arest = nv::volume_rest(m_rom, el, pnote, pvel);
-			su.att   = nv::volume_att_from(m_rom, su.lvl0, su.arest,
-			                               nv::vol_gain(
-			                                   m_cc[part].vol  >= 0 ? m_cc[part].vol
-			                                                        : (c ? c->cal_vol : 100),
-			                                   m_cc[part].expr >= 0 ? m_cc[part].expr
-			                                                        : (c ? c->cal_expr : 127)));
+			su.att   = nv::clamp_att(nv::volume_att_from(
+			    m_rom, su.lvl0, su.arest,
+			    vol_gain_of(part,
+			                m_cc[part].vol  >= 0 ? m_cc[part].vol
+			                                     : (c ? c->cal_vol : 100),
+			                m_cc[part].expr >= 0 ? m_cc[part].expr
+			                                     : (c ? c->cal_expr : 127))));
 			const part_cc &pc = m_cc[part];
 			// **ポルタメント**（6.41）。前の鍵（CC84 があればその鍵）の音程で
 			// 鳴らし始めて、10ms ごとに寄せていく。残りのずれはセント × 256 で持つ。

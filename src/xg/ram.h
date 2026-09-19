@@ -21,6 +21,8 @@ namespace ram {
 
 // ワーク RAM の先頭（0x400000）からの位置
 constexpr u32 SYSTEM   = 0x226c1;   // 00 00 00-06
+constexpr u32 SYS_VOLUME    = SYSTEM + 4;   // 00 00 04（マスター音量）
+constexpr u32 SYS_TRANSPOSE = SYSTEM + 6;   // 00 00 06（64 が 0 半音）
 constexpr u32 VOICE_MODE = 0x226bc; // 音色の引き方（1 が XG）。xg/voices.h の lookup に渡す
 constexpr u32 VOICE_SET  = 0x226de; // 音色の組の選び方（MU2000 の音色なら 1）
 constexpr u32 EFFECT   = 0x0cad8;   // 02 01 00 から。下の EFFECTS の並び

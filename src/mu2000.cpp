@@ -1371,8 +1371,9 @@ void mu2000::native_learn_finish()
 		{
 			const u8 *el0 = xg::nv::element(rom, m_learn_rec, idx);
 			const int att_ref = cal.has(9) ? (cal.reg[9] & 0xff) : 64;
-			const int gain = xg::nv::vol_gain(m_ndrv.part_vol(m_learn_part),
-			                                  m_ndrv.part_expr(m_learn_part));
+			const int gain = m_ndrv.vol_gain_of(m_learn_part,
+			                                    m_ndrv.part_vol(m_learn_part),
+			                                    m_ndrv.part_expr(m_learn_part));
 			const int rest = xg::nv::volume_rest(rom, el0, learn_note_shifted(),
 			                                     learn_vel_sensed());
 			const int fwl = xg::nv::fw_voice_level(m_ram.data(), ch);
