@@ -1,5 +1,8 @@
 // license:BSD-3-Clause
 
+// Modified by GB 2026 for Windows XP Compatibility of live.exe 
+// AI disclosure" assisted by GPT-5.6 Luna (ChatGPT.com).
+
 #include "midi_in.h"
 #include "mm_open.h"
 #include "text.h"
@@ -13,15 +16,139 @@ namespace ui {
 
 namespace {
 
+void CALLBACK cb(
+	HMIDIIN,
+	UINT msg,
+	DWORD_PTR user,
+	DWORD_PTR p1,
+	DWORD_PTR)
+{
+	midi_in *self =
+		reinterpret_cast<midi_in *>(user);
+
+	if (!self)
+		return;
+
+	if (msg == MIM_DATA) {
+		self->on_short(u32(p1));
+	}
+	else if (msg == MIM_LONGDATA) {
+		MIDIHDR *h =
+			reinterpret_cast<MIDIHDR *>(p1);
+
+		if (h) {
+			self->on_long(
+				reinterpret_cast<const u8 *>(h->lpData),
+				h->dwBytesRecorded);
+
+			self->requeue(h);
+		}
+	}
+}
+
+/*
+void CALLBACK cb(
+    HMIDIIN,
+    UINT msg,
+    DWORD_PTR user,
+    DWORD_PTR p1,
+    DWORD_PTR p2)
+{
+    midi_in *self =
+        reinterpret_cast<midi_in *>(user);
+
+//    std::printf(
+//        "MIDI CALLBACK: msg=%u p1=%08lX p2=%08lX\n",
+//        (unsigned)msg,
+//        (unsigned long)p1,
+//        (unsigned long)p2);
+
+//    std::fflush(stdout);
+
+    if (!self)
+        return;
+
+    if (msg == MIM_DATA) {
+        const u32 v = u32(p1);
+
+//        std::printf(
+//            "  MIM_DATA: %08lX  bytes=%02X %02X %02X\n",
+//            (unsigned long)v,
+//            (unsigned)(v & 0xff),
+//            (unsigned)((v >> 8) & 0xff),
+//            (unsigned)((v >> 16) & 0xff));
+
+//        std::fflush(stdout);
+
+        self->on_short(v);
+
+    } else if (msg == MIM_LONGDATA) {
+        MIDIHDR *h =
+            reinterpret_cast<MIDIHDR *>(p1);
+
+        std::printf(
+            "  MIM_LONGDATA: recorded=%lu flags=%08lX\n",
+            (unsigned long)(h ? h->dwBytesRecorded : 0),
+            (unsigned long)(h ? h->dwFlags : 0));
+
+        if (h && h->lpData) {
+            std::printf("  LONG:");
+
+            for (DWORD i = 0;
+                 i < h->dwBytesRecorded;
+                 ++i) {
+                std::printf(
+                    " %02X",
+                    (unsigned char)h->lpData[i]);
+            }
+
+            std::printf("\n");
+        }
+
+        std::fflush(stdout);
+
+        if (h) {
+            self->on_long(
+                reinterpret_cast<const u8 *>(h->lpData),
+                h->dwBytesRecorded);
+
+            self->requeue(h);
+        }
+    } else {
+        std::printf(
+            "  UNKNOWN MIDI MESSAGE: %u\n",
+            (unsigned)msg);
+
+        std::fflush(stdout);
+    }
+}
+*/
+/*
 void CALLBACK cb(HMIDIIN, UINT msg, DWORD_PTR user, DWORD_PTR p1, DWORD_PTR)
 {
 	midi_in *self = reinterpret_cast<midi_in *>(user);
 	if (!self)
 		return;
 
-	if (msg == MIM_DATA) {
-		self->on_short(u32(p1));
-	} else if (msg == MIM_LONGDATA) {
+//	if (msg == MIM_DATA) {
+//		self->on_short(u32(p1));
+//	}
+// GB 2026	
+if (msg == MIM_DATA) {
+    const u32 v = u32(p1);
+
+    std::printf(
+        "MIM_DATA: %08lX  bytes=%02X %02X %02X\n",
+        (unsigned long)v,
+        (unsigned)(v & 0xff),
+        (unsigned)((v >> 8) & 0xff),
+        (unsigned)((v >> 16) & 0xff));
+
+    std::fflush(stdout);	
+}
+	
+	
+	else if (msg == MIM_LONGDATA) {
 		MIDIHDR *h = reinterpret_cast<MIDIHDR *>(p1);
 		self->on_long(reinterpret_cast<const u8 *>(h->lpData), h->dwBytesRecorded);
 		// 使い終わった入れ物をすぐ返す。返さないと次の SysEx が受けられない。
@@ -30,6 +157,8 @@ void CALLBACK cb(HMIDIIN, UINT msg, DWORD_PTR user, DWORD_PTR p1, DWORD_PTR)
 		self->requeue(h);
 	}
 }
+
+*/
 
 } // namespace
 
@@ -48,64 +177,195 @@ std::vector<std::string> midi_in::list()
 	return out;
 }
 
+
+
+
+
+
 bool midi_in::open(int device, std::string &err)
 {
 	close();
+
 	if (device < 0)
 		return true;
+
 	if (UINT(device) >= midiInGetNumDevs()) {
 		err = "その番号の MIDI 入力は無い";
 		return false;
 	}
 
-	// 口の持ち主が固まっていると返ってこないので、時間を区切る（mm_open.h）。
-	// 開いただけでは MIM_DATA は来ない（midiInStart の前）ので、遅れて開けた口を
-	// 別の糸が閉じても、コールバックが this に触ることは無い
 	HMIDIIN h = nullptr;
-	const int r = open_with_timeout<HMIDIIN>(
-		[device, this](HMIDIIN &out) {
-			return unsigned(midiInOpen(&out, UINT(device), DWORD_PTR(cb), DWORD_PTR(this),
-			                           CALLBACK_FUNCTION));
-		},
-		[](HMIDIIN late) { midiInClose(late); }, h);
-	if (r == 2) {
-		err = "MIDI 入力が応答しない（loopMIDI やドライバが固まっているかもしれない。"
-		      "loopMIDI を起動し直すか、機器を挿し直す）";
+
+	const MMRESULT r = midiInOpen(
+		&h,
+		UINT(device),
+		DWORD_PTR(cb),
+		DWORD_PTR(this),
+		CALLBACK_FUNCTION);
+
+	if (r != MMSYSERR_NOERROR) {
+		char text[256] = {};
+
+		midiInGetErrorTextA(r, text, sizeof(text));
+
+		err = std::string("MIDI input could not be opened: ") + text;
 		return false;
 	}
-	if (r != 0) {
-		err = "MIDI 入力を開けない";
-		return false;
+
+	/*
+	 * Get the device name before publishing m_handle.
+	 */
+	MIDIINCAPSW caps = {};
+	if (midiInGetDevCapsW(
+			UINT(device),
+			&caps,
+			sizeof(caps)) == MMSYSERR_NOERROR) {
+		m_name = to_utf8(caps.szPname);
+	} else {
+		m_name = "?";
 	}
-	MIDIINCAPSW caps{};
-	midiInGetDevCapsW(UINT(device), &caps, sizeof(caps));
-	m_name = to_utf8(caps.szPname);
-	m_handle = h;
+
+	m_handle = reinterpret_cast<void *>(h);
 	m_closing.store(false, std::memory_order_release);
 	m_in_sysex = false;
 	rollback();
 
-	// SysEx の入れ物を Windows へ渡す。**これをやらないと SysEx は来ない**。
-	// 1 枚に収まらない長いものは何枚かに分かれて、順に届く
-	for (int i = 0; i < SYSEX_BUFFERS; i++) {
+	/*
+	 * SysEx input is deliberately independent from the short-message
+	 * path.
+	 *
+	 * A failure here must NOT prevent MIM_DATA from working.
+	 */
+	for (int i = 0; i < SYSEX_BUFFERS; ++i) {
 		m_sysex[i] = new u8[SYSEX_SIZE];
-		MIDIHDR *hdr = new MIDIHDR{};
-		hdr->lpData = reinterpret_cast<LPSTR>(m_sysex[i]);
+		m_hdr[i] = new MIDIHDR{};
+
+//		MIDIHDR *hdr = m_hdr[i];
+
+
+MIDIHDR *hdr =
+    reinterpret_cast<MIDIHDR *>(m_hdr[i]);
+
+
+		hdr->lpData =
+			reinterpret_cast<LPSTR>(m_sysex[i]);
 		hdr->dwBufferLength = DWORD(SYSEX_SIZE);
-		if (midiInPrepareHeader(h, hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR ||
-		    midiInAddBuffer(h, hdr, sizeof(MIDIHDR)) != MMSYSERR_NOERROR) {
-			delete hdr;
+		hdr->dwBytesRecorded = 0;
+		hdr->dwUser = 0;
+		hdr->dwFlags = 0;
+
+		const MMRESULT pr =
+			midiInPrepareHeader(
+				h,
+				hdr,
+				sizeof(MIDIHDR));
+
+		if (pr != MMSYSERR_NOERROR) {
+			char text[256] = {};
+
+			midiInGetErrorTextA(
+				pr,
+				text,
+				sizeof(text));
+
+			std::fprintf(
+				stderr,
+				"midiInPrepareHeader[%d] failed: %u (%s)\n",
+				i,
+				(unsigned)pr,
+				text);
+
+//			delete m_hdr[i];
+delete reinterpret_cast<MIDIHDR *>(m_hdr[i]);
+			m_hdr[i] = nullptr;
+
 			delete[] m_sysex[i];
 			m_sysex[i] = nullptr;
-			continue;                 // 音符は受けられるので、これだけで諦めはしない
+
+			continue;
 		}
-		m_hdr[i] = hdr;
+
+		const MMRESULT ar =
+			midiInAddBuffer(
+				h,
+				hdr,
+				sizeof(MIDIHDR));
+
+		if (ar != MMSYSERR_NOERROR) {
+			char text[256] = {};
+
+			midiInGetErrorTextA(
+				ar,
+				text,
+				sizeof(text));
+
+			std::fprintf(
+				stderr,
+				"midiInAddBuffer[%d] failed: %u (%s)\n",
+				i,
+				(unsigned)ar,
+				text);
+
+			midiInUnprepareHeader(
+				h,
+				hdr,
+				sizeof(MIDIHDR));
+
+			delete reinterpret_cast<MIDIHDR *>(m_hdr[i]);
+			m_hdr[i] = nullptr;
+
+			delete[] m_sysex[i];
+			m_sysex[i] = nullptr;
+
+			continue;
+		}
+
+        // GB 2026 diag
+		//std::printf("SysEx buffer %d armed (%lu bytes)\n",	i,	(unsigned long)SYSEX_SIZE);
+
+		std::fflush(stdout);
 	}
 
-	midiInStart(h);
+	/*
+	 * Short messages are independent of the SysEx buffers.
+	 * Therefore even zero successfully armed SysEx buffers is
+	 * not an open failure.
+	 */
+	const MMRESULT sr = midiInStart(h);
+
+	if (sr != MMSYSERR_NOERROR) {
+		char text[256] = {};
+
+		midiInGetErrorTextA(
+			sr,
+			text,
+			sizeof(text));
+
+		std::fprintf(
+			stderr,
+			"midiInStart() failed: %u (%s)\n",
+			(unsigned)sr,
+			text);
+
+		close();
+
+		err =
+			std::string("MIDI input could not be started: ") +
+			text;
+
+		return false;
+	}
+
+	std::printf(
+		"MIDI input started successfully: %s\n",
+		m_name.c_str());
+
+	std::fflush(stdout);
+
 	return true;
 }
 
+/*
 // コールバックから。使い終わった入れ物を返して、次の SysEx を待たせる
 void midi_in::requeue(void *hdr)
 {
@@ -114,6 +374,70 @@ void midi_in::requeue(void *hdr)
 	midiInAddBuffer(reinterpret_cast<HMIDIIN>(m_handle),
 	                reinterpret_cast<MIDIHDR *>(hdr), sizeof(MIDIHDR));
 }
+*/
+/*
+void midi_in::requeue(void *ptr)
+{
+	if (!ptr)
+		return;
+
+	if (!m_handle || closing())
+		return;
+
+	HMIDIIN h =
+		reinterpret_cast<HMIDIIN>(m_handle);
+
+	MIDIHDR *hdr =
+		reinterpret_cast<MIDIHDR *>(ptr);
+
+	hdr->dwBytesRecorded = 0;
+
+	const MMRESULT r =
+		midiInAddBuffer(
+			h,
+			hdr,
+			sizeof(MIDIHDR));
+
+	if (r != MMSYSERR_NOERROR) {
+		char text[256] = {};
+
+		midiInGetErrorTextA(
+			r,
+			text,
+			sizeof(text));
+
+		std::fprintf(
+			stderr,
+			"midiInAddBuffer(requeue) failed: %u (%s)\n",
+			(unsigned)r,
+			text);
+
+		std::fflush(stderr);
+	}
+}
+*/
+void midi_in::requeue(void *ptr)
+{
+	if (!ptr)
+		return;
+
+	if (!m_handle || closing())
+		return;
+
+	HMIDIIN h =
+		reinterpret_cast<HMIDIIN>(m_handle);
+
+	MIDIHDR *hdr =
+		reinterpret_cast<MIDIHDR *>(ptr);
+
+	hdr->dwBytesRecorded = 0;
+
+	midiInAddBuffer(
+		h,
+		hdr,
+		sizeof(MIDIHDR));
+}
+
 
 void midi_in::close()
 {
@@ -179,7 +503,7 @@ void midi_in::on_short(u32 p1)
 	int n = 3;
 	const u8 kind = status & 0xf0;
 	if (kind == 0xc0 || kind == 0xd0) n = 2;
-	if (status == 0xf1 || status == 0xf3 || status == 0xf5) n = 2;   // F5 nn はケーブルメッセージ
+	if (status == 0xf1 || status == 0xf3) n = 2;
 	else if (status == 0xf2) n = 3;
 	else if (status >= 0xf4 && status < 0xf8) n = 1;
 
