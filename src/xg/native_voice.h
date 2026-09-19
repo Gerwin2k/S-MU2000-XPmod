@@ -806,6 +806,42 @@ inline u16 cutoff_keyon(const u8 *rom, const u8 *elem, int note, int vel)
 	return cutoff_of(rom, elem, note, vel, fenv_init(rom, elem, vel));
 }
 
+// ---- **音色そのものが持つパン**（レジスタ `0x32`）。実機の `0x12AF40` と `0x12B794`
+//
+//   位置 = clamp(CC10 + 表 0x1E68DC[byte69] - 64, 0, 127)
+//          （byte69 が 15 のときだけ鍵で 0x1E68EB を引く）
+//   左 = 表 0x1E6B90[パート[14]] + 表 0x1E6C11[位置]
+//   右 = 表 0x1E6B90[0x80-パート[14]] + 表 0x1E6C11[0x80-位置]
+//   レジスタ = (左 << 8) | 右   （どちらも 255 で頭打ち）
+//
+// Warm Pad は 2 つの要素が byte69=2 と 12 で、表を引くと 13 と 115。
+// 実機は片方に `083c`、もう片方に `3c08` を書いていて、式と一致する
+constexpr u32 PAN_SEL_TAB   = 0x1E68DC;   // byte69 → パンの位置（16 個）
+constexpr u32 PAN_SEL_KEY   = 0x1E68EB;   // byte69 が 15 のとき、鍵で引く
+constexpr u32 PAN_BASE_TAB  = 0x1E6B90;   // パートのパン → 下駄（中央で 8 ＝ -3dB）
+constexpr u32 PAN_CURVE_TAB = 0x1E6C11;   // パンの位置 → 減衰（0-128）
+
+inline int elem_pan(const u8 *rom, const u8 *elem, int note)
+{
+	const int i = int(elem[69]);
+	return i == 15 ? int(rom[PAN_SEL_KEY + u32(note & 0x7f)])
+	               : int(rom[PAN_SEL_TAB + u32(i & 0xf)]);
+}
+
+inline u16 voice_pan_reg(const u8 *rom, const u8 *elem, int note,
+                         int cc10 = 64, int part_pan = 64)
+{
+	int p = cc10 + elem_pan(rom, elem, note) - 64;
+	p = p < 0 ? 0 : (p > 127 ? 127 : p);
+	const int q = part_pan & 0x7f;
+	int l = int(rom[PAN_BASE_TAB + u32(q)]) + int(rom[PAN_CURVE_TAB + u32(p)]);
+	int r = int(rom[PAN_BASE_TAB + u32(0x80 - q)])
+	      + int(rom[PAN_CURVE_TAB + u32(0x80 - p)]);
+	if (l > 255) l = 255;
+	if (r > 255) r = 255;
+	return u16((l << 8) | r);
+}
+
 // 1 音ぶんのレジスタを作る。att は 0x09 に入れる減衰（0-255。小さいほど大きい音）
 inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
                             const voice_cal *cal = nullptr,
@@ -892,6 +928,8 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 		r.set(0x20 + i * 2, d.iir[i]);
 	for (int i = 0; i < 6; i++)
 		r.set(0x32 + i, d.mix[i]);
+	// **音色そのものが持つパン**（byte69）。写し取りがあれば下で上書きされる
+	r.set(0x32, voice_pan_reg(rom, elem, note));
 
 	// --- 写し取った値で上書き。式が分かっていない所だけ
 	//
