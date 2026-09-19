@@ -6,9 +6,10 @@ native の音が実機より早い／遅いと、値がぜんぶ合っていて�
 落ちる。どの音が何サンプルずれているかを、ここで直に見る
 （doc/native-engine.md の 6.117 はこの道具で見つけた）。
 
-  python tools/native/keytime.py <ROM のディレクトリ> <試験の名前> <秒数> [--pairs]
+  python tools/native/keytime.py <ROM のディレクトリ> <試験の名前> <秒数> [--pairs] [--usb]
 
 `--pairs` を付けると 1 件ずつ並べる。付けなければずれの分布だけ出す。
+`--usb` は USB の口で鳴らす（プラグインの既定。バイトの速さが DIN と違う）。
 試験の MIDI は `build/tests/<名前>.mid`（`tools/make_test_midi.py` が作る）。
 """
 import argparse
@@ -27,12 +28,14 @@ MASK = {0x1cf: 0, 0x1ce: 1, 0x18f: 2, 0x18e: 3}
 KEYON = 0x20e                       # ここへ 1 を書くと、並べた鍵が鳴り出す
 
 
-def keyons(roms, mid, out, tag, native, secs):
+def keyons(roms, mid, out, tag, native, secs, usb=False):
     """1 回鳴らして、(サンプル, [スロット]) の並びを返す"""
     trc = out / ('keytime_%s.txt' % tag)
     cmd = [str(BUILD / 'render'), str(roms), str(mid),
            str(out / ('keytime_%s.wav' % tag)), str(secs),
            '--bootcache', '--trace-swp', str(trc)]
+    if usb:
+        cmd.append('--usb')
     if native:
         cmd.append('--native-engine')
     env = dict(os.environ)
@@ -64,14 +67,15 @@ def main():
     ap.add_argument('name')
     ap.add_argument('secs')
     ap.add_argument('--pairs', action='store_true')
+    ap.add_argument('--usb', action='store_true')
     a = ap.parse_args()
 
     mid = BUILD / 'tests' / (a.name + '.mid')
     if not mid.exists():
         sys.exit('%s が無い。先に python tools/make_test_midi.py' % mid)
     out = BUILD / 'tests'
-    fw = keyons(a.roms, mid, out, 'fw', False, a.secs)
-    nv = keyons(a.roms, mid, out, 'nv', True, a.secs)
+    fw = keyons(a.roms, mid, out, 'fw', False, a.secs, a.usb)
+    nv = keyons(a.roms, mid, out, 'nv', True, a.secs, a.usb)
     print('%s  実機 %d 回 / native %d 回' % (a.name, len(fw), len(nv)))
 
     if a.pairs:

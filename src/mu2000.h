@@ -414,7 +414,11 @@ private:
 		return v;
 	}
 	// 1 バイト（1/64 サンプル単位）。`SMU2000_RX_BYTE` で振れる（0 にすると
-	// 和音の音が全部同じ時刻に出る。相対のずれを調べる用。doc の 6.78）
+	// 和音の音が全部同じ時刻に出る。相対のずれを調べる用。doc の 6.78）。
+	// **DIN は 31250 baud で 1 バイト 10 ビット ＝ 14.1 サンプル**、
+	// **USB は実機で測った 19500 byte/s ＝ 2.26 サンプル**（doc/dump/usb.md）。
+	// USB の口なのに DIN の速さで並べていたので、プラグイン（USB が既定）では
+	// 音が 1 つにつき 37 サンプル遅れていた（doc/native-engine.md の 6.120）
 	static u64 rx_byte_tick()
 	{
 		static const u64 v = std::getenv("SMU2000_RX_BYTE")
@@ -474,12 +478,23 @@ private:
 	static constexpr int TRAJ_TRIES  = 4;
 	std::map<u64, int> m_traj_tries;
 	// そのバイトを受け終える時刻を進めて、鳴らすべき時刻（サンプル）を返す
+	// その口のバイトが USB を通るか（midi_in の振り分けと同じ見立て）
+	bool rx_usb(int port) const
+	{
+		return m_usb_host || m_cable[port] >= MIDI_DIN_PORTS;
+	}
+	static u64 rx_byte_tick_usb()
+	{
+		static const u64 v = std::getenv("SMU2000_RX_BYTE_USB")
+		                   ? u64(std::atoi(std::getenv("SMU2000_RX_BYTE_USB"))) : 145;
+		return v;
+	}
 	u64 rx_advance(int port)
 	{
 		const u64 now = m_ne_clock * 64;
 		if (m_rx_at[port] < now)
 			m_rx_at[port] = now;
-		m_rx_at[port] += rx_byte_tick();
+		m_rx_at[port] += rx_usb(port) ? rx_byte_tick_usb() : rx_byte_tick();
 		return (m_rx_at[port] + native_proc64()) / 64;
 	}
 	bool nown(int part, int note) const
