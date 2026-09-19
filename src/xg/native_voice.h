@@ -828,11 +828,28 @@ inline int elem_pan(const u8 *rom, const u8 *elem, int note)
 	               : int(rom[PAN_SEL_TAB + u32(i & 0xf)]);
 }
 
+// パンの位置（0-127）
+inline int voice_pan_pos(const u8 *rom, const u8 *elem, int note, int cc10 = 64)
+{
+	const int p = cc10 + elem_pan(rom, elem, note) - 64;
+	return p < 0 ? 0 : (p > 127 ? 127 : p);
+}
+
+// **送りはパンで目減りする**（実機の `0x12C3F8`）。真ん中で 16 を足し、
+// 左右に振るほど減る（表 0x1F2198）。Warm Pad は位置 13 で 4 なので
+// 既定の `2b` から 12 減って `1f`。実機と一致した
+constexpr u32 PAN_SEND_TAB = 0x1F2198;
+
+inline int pan_send_adj(const u8 *rom, int pan_pos)
+{
+	return int(rom[PAN_SEND_TAB + u32(pan_pos & 0x7f)])
+	     - int(rom[PAN_SEND_TAB + 64]);
+}
+
 inline u16 voice_pan_reg(const u8 *rom, const u8 *elem, int note,
                          int cc10 = 64, int part_pan = 64)
 {
-	int p = cc10 + elem_pan(rom, elem, note) - 64;
-	p = p < 0 ? 0 : (p > 127 ? 127 : p);
+	const int p = voice_pan_pos(rom, elem, note, cc10);
 	const int q = part_pan & 0x7f;
 	int l = int(rom[PAN_BASE_TAB + u32(q)]) + int(rom[PAN_CURVE_TAB + u32(p)]);
 	int r = int(rom[PAN_BASE_TAB + u32(0x80 - q)])
@@ -930,6 +947,19 @@ inline slot_regs build_note(const u8 *rom, const u8 *elem, int note, int att,
 		r.set(0x32 + i, d.mix[i]);
 	// **音色そのものが持つパン**（byte69）。写し取りがあれば下で上書きされる
 	r.set(0x32, voice_pan_reg(rom, elem, note));
+	// 送りはそのパンのぶん目減りする
+	{
+		const int adj = pan_send_adj(rom, voice_pan_pos(rom, elem, note));
+		for (int i = 0; i < 2; i++) {
+			// **切ってある送り（0xff）はそのまま**。実機も頭打ちなので、
+			// ここでパンのぶん引くと切ったはずの送りが開いてしまう
+			if ((d.mix[1 + i] & 0xff) >= 0xff)
+				continue;
+			int v = int(d.mix[1 + i] & 0xff) + adj;
+			v = v < 0 ? 0 : (v > 255 ? 255 : v);
+			r.set(0x33 + i, u16((d.mix[1 + i] & 0xff00) | u16(v)));
+		}
+	}
 
 	// --- 写し取った値で上書き。式が分かっていない所だけ
 	//
