@@ -628,9 +628,12 @@ public:
 		mix(b[0x15]);
 		mix(b[0x16]);
 		mix(b[0x17]);
-		// **ノートシフト**（08 pp 08）。写し取りは移したあとの鍵で取るので、
+		// **ノートシフト**（08 pp 08）と**マスター移調**（00 00 06）。
+		// 写し取りは移したあとの鍵で取る（波形の番地もその鍵で決まる）ので、
 		// 移し方が変わったら取り直す
 		mix(b[0x08]);
+		if (m_ram)
+			mix(m_ram[ram::SYS_TRANSPOSE]);
 		// EG のつまみ（CC73 アタック +0x1a・CC75 ディケイ +0x1b・CC72 リリース +0x1c）。
 		// この 3 つは式が起こせていない（CC73 は 0x06 だけでなく 0x00・0x07・0x0b も
 		// 動かす多目標のつまみだった）。**式の代わりに写し取り直す**：
@@ -680,13 +683,13 @@ public:
 	{
 		if (!m_ram)
 			return 0;
+		// 実機（`0x128D46`）は
+		//   鍵 + (パートの塊[8] - 64) + (マスター移調 - 64) + パートの塊[0xC9]
+		// を 0-127 に収める。`0x128D60` が読むのは `0x4226C7` ＝ SYSTEM + 6。
+		// 最後の `パートの塊[0xC9]` が何なのかはまだ分かっていないので入れて
+		// いない（既定では 0 のはずだが、確かめていない）
 		int v = int(m_ram[ram::part_base(part) + 0x08]) - 64;
-		if (v < -24) v = -24;
-		if (v > 24) v = 24;
-		// **マスター移調（00 00 06）はここには入れない。** `SYS_TRANSPOSE` に
-		// 入るのは XG の値そのもので、firmware はそこを見て鳴らしているわけ
-		// ではない（マスター音量が `00 00 04` ではなくパートの塊 +0x12F に
-		// 効いていたのと同じ）。効かせている所がまだ見つかっていない（6.106）
+		v += int(m_ram[ram::SYS_TRANSPOSE]) - 64;
 		return v;
 	}
 	int part_cho(int part) const  { return m_ram ? int(m_ram[ram::part_base(part) + 0x12]) : 0; }
@@ -1306,17 +1309,19 @@ public:
 					              : (m_clock / nv::PORTA_TICK + 1) * nv::PORTA_TICK;
 				}
 			}
-			nv::slot_regs sr = nv::build_note(m_rom, el, note, note_att(su, part), c,
+			// **移調した鍵と、感度を掛けた強さで組む**（6.104）。ここに元の鍵を
+			// 渡していたので、ノートシフトやマスター移調が音程・波形に効かなかった
+			nv::slot_regs sr = nv::build_note(m_rom, el, pnote, note_att(su, part), c,
 			                                  nv::defaults(),
 			                                  nv::bend_cents(pc.bend, pc.range) + su.glide / 256,
-			                                  vel);
+			                                  pvel);
 			// 音程の包絡線の行き先（byte31）。初めの高さと同じなら書かない
 			{
-				const u16 tgt = nv::peg_reg(m_rom, nv::peg_cents(el, el[31], vel), el);
+				const u16 tgt = nv::peg_reg(m_rom, nv::peg_cents(el, el[31], pvel), el);
 				su.peg_tgt = tgt == sr.v[0x10] ? 0xffff : tgt;
 			}
 			// **段 0 から始める**。実機は 10ms ごとに「着いたか」を見て次の段へ
-			su.pvel = vel;
+			su.pvel = pvel;
 			su.pstage = 0;
 			// **刻みはフィルタの包絡線と同じ**（実機はどちらも同じ 10ms の
 			// タイマで動いている）。録画から取った格子に乗せる
