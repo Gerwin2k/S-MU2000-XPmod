@@ -216,13 +216,22 @@ inline int cc_vol_att(const u8 *rom, int cc)
 }
 
 // パン（CC10）の減衰。中央で左右とも -3dB になる cos 則。
-// 右側は pan_att(128 - cc10)。128 点すべて実測と 0.1875dB 以内で合う
-inline int pan_att(int x)
+// 右側は pan_att(128 - cc10)。
+//
+// **ROM に表がある**（`0x1BBAD0` の 128 バイト。6.100）。cos の式で出すと
+// 14 点で 1 ずれていた（丸め方の違い）。この表だと CC 0-127 の左右 128 点が
+// 1 つ残らず実機と合う。`0x1E6B88` にも同じ曲線の**切り捨て**版があって、
+// 送りの表（6.99）と同じ組になっている
+constexpr u32 PAN_ATT_TAB = 0x1BBAD0;
+
+inline int pan_att(const u8 *rom, int x)
 {
 	if (x <= 0)
 		return 0;
 	if (x >= 127)
 		return 255;
+	if (rom)
+		return int(rom[PAN_ATT_TAB + u32(x)]);
 	const double c = std::cos(double(x) / 127.0 * 1.5707963267948966);
 	const int v = int(std::lround(-20.0 * std::log10(c) / 0.375));
 	return v < 0 ? 0 : (v > 255 ? 255 : v);
