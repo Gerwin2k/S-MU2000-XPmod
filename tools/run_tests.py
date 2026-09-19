@@ -24,6 +24,7 @@ ROM の置き場は --roms、環境変数 SMU2000_ROMS、roms/、../MU2000/roms 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -387,6 +388,57 @@ def step_sampling(rep, roms):
     rep.add("sampling", rc == 0, note)
 
 
+def step_warm(rep, roms, cases):
+    """**2 回目以降の音**（写し取りが済んだ状態）。
+    `dense` の相関が 57% で止まっているのは、60 声のうち半分が
+    **写し取りの音（実機が鳴らす音）**で、firmware の混み具合が
+    firmware の道と違うため（doc/native-engine.md の 6.117・6.121）。
+    写し取りが済めばその音も native が鳴らすので、実際に使うときの値は
+    こちらになる。1 回鳴らして写しを貯め、2 回目を比べる"""
+    import math
+    name = "dense"
+    if name not in cases:
+        rep.add("2 回目", True, "この回では見ない")
+        return
+    midi, seconds = cases[name]
+    home = WORK / "warmhome"
+    shutil.rmtree(home / "S-MU2000" / "voicecal", ignore_errors=True)
+    home.mkdir(parents=True, exist_ok=True)
+    env = {"LOCALAPPDATA": str(home), "XDG_DATA_HOME": str(home),
+           "HOME": str(home)}
+    extra = ["--native-engine", "--voicecache"]
+    if render(roms, "warm1", midi, seconds, extra=extra, env=env)[0] is None:
+        rep.add("2 回目", False, "1 回目が鳴らせなかった")
+        return
+    if render(roms, "warm2", midi, seconds, extra=extra, env=env)[0] is None:
+        rep.add("2 回目", False, "2 回目が鳴らせなかった")
+        return
+    base = WORK / ("%s.wav" % name)
+    if not base.exists():
+        rep.add("2 回目", True, "比べる相手が無い")
+        return
+    fa, ra, ca, _ = fpmod.load_wav(str(base))
+    fb, _, cb, _ = fpmod.load_wav(str(WORK / "warm2.wav"))
+    n = min(len(fa) // ca, len(fb) // cb)
+    skip = int(round(BOOT_AT * ra))
+    cs = []
+    for s0 in range(skip, n - ra, ra):
+        sa = fa[s0 * ca:(s0 + ra) * ca:ca]
+        sb = fb[s0 * cb:(s0 + ra) * cb:cb]
+        na = sum(float(x) * x for x in sa)
+        nb = sum(float(x) * x for x in sb)
+        if na < 1e4 or nb < 1e4:
+            continue
+        num = sum(float(x) * float(y) for x, y in zip(sa, sb))
+        cs.append(num / math.sqrt(na * nb))
+    if not cs:
+        rep.add("2 回目", False, "音が無い")
+        return
+    med = sorted(cs)[len(cs) // 2]
+    ok = med >= 0.70
+    rep.add("2 回目", ok, "%s の波形の相関 %.0f%%（1 回目は 57%%）" % (name, 100 * med))
+
+
 def step_usb(rep, roms, cases):
     """**USB の口でも native が firmware と同じ時刻で鳴るか**
     （doc/native-engine.md の 6.120）。プラグインは USB が既定なのに、
@@ -541,6 +593,10 @@ def main():
         print()
         print("== 9. USB の口（プラグインの既定）")
         step_usb(rep, roms, cases)
+
+        print()
+        print("== 10. 2 回目の音（写し取りが済んだ状態）")
+        step_warm(rep, roms, cases)
 
     rep.show()
     return 1 if rep.bad else 0
