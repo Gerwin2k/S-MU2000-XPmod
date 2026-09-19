@@ -320,9 +320,11 @@ public:
 					if (!re[s.rpos].rel) { s.rpos++; continue; }
 					if (u64(s64(s.rel_at + re[s.rpos].at) + EG_LAG) > clock)
 						break;
-					if ((fenv_on() && re[s.rpos].reg == 0x00)
-					    || re[s.rpos].reg == 0x04) {
-						s.rpos++;         // 式で出すので録画の分は捨てる
+					// **式で出せるときだけ録画を捨てる**。ドラムは要素を持たない
+					// ので式が動かない。捨てるとフィルタの包絡線が丸ごと消える
+					if (s.elem && ((fenv_on() && re[s.rpos].reg == 0x00)
+					               || re[s.rpos].reg == 0x04)) {
+						s.rpos++;
 						continue;
 					}
 					u16 v = re[s.rpos].v;
@@ -400,9 +402,10 @@ public:
 			while (s.tpos < fe.size() && !fe[s.tpos].rel &&
 			       u64(s64(s.tstart + fe[s.tpos].at) + EG_LAG) <= clock) {
 				u16 v = fe[s.tpos].v;
-				if ((fenv_on() && fe[s.tpos].reg == 0x00)
-				    || fe[s.tpos].reg == 0x04) {
-					s.tpos++;          // 式で出すので、録画の分は捨てる
+				// **式で出せるときだけ録画を捨てる**（上の但し書きを見よ）
+				if (s.elem && ((fenv_on() && fe[s.tpos].reg == 0x00)
+				               || fe[s.tpos].reg == 0x04)) {
+					s.tpos++;
 					continue;
 				}
 				if (fe[s.tpos].reg == 0x0a) {      // 深さにモジュレーションを足す
