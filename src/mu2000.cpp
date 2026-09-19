@@ -1180,7 +1180,8 @@ void mu2000::native_learn_start(u32 rec)
 		int n = 0;
 		const int nel = xg::nv::element_count(rom0, rec);
 		for (int k = 0; k < nel; k++)
-			if (xg::nv::element_active(xg::nv::element(rom0, rec, k), m_learn_note, m_learn_vel))
+			if (xg::nv::element_active(xg::nv::element(rom0, rec, k), learn_note_shifted(),
+			                           learn_vel_sensed()))
 				n++;
 		if (n > 0)
 			m_learn_want = n;
@@ -1282,8 +1283,8 @@ void mu2000::native_learn_finish()
 				continue;
 			if (int(cals.size()) >= m_learn_want)
 				break;
-			cal.cal_vel  = m_learn_vel;
-			cal.cal_note = m_learn_note;
+			cal.cal_vel  = learn_vel_sensed();
+			cal.cal_note = learn_note_shifted();
 			cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
 			cal.cal_expr = m_ndrv.part_expr(m_learn_part);
 			cal.cal_pan  = m_ndrv.part_pan(m_learn_part);
@@ -1342,7 +1343,8 @@ void mu2000::native_learn_finish()
 				if (used_elem & (1u << k))
 					continue;
 				const u8 *e2 = xg::nv::element(rom, m_learn_rec, k);
-				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2), xg::nv::wave_note(e2, m_learn_note));
+				const u8 *w2 = xg::nv::wave_entry(rom, xg::nv::wave_set(e2),
+				                                  xg::nv::wave_note(e2, learn_note_shifted()));
 				if (w2 && xg::nv::read_wave(w2).format_addr == want) {
 					idx = k;
 					used_elem |= 1u << k;
@@ -1371,16 +1373,17 @@ void mu2000::native_learn_finish()
 			const int att_ref = cal.has(9) ? (cal.reg[9] & 0xff) : 64;
 			const int gain = xg::nv::vol_gain(m_ndrv.part_vol(m_learn_part),
 			                                  m_ndrv.part_expr(m_learn_part));
-			const int rest = xg::nv::volume_rest(rom, el0, m_learn_note, m_learn_vel);
+			const int rest = xg::nv::volume_rest(rom, el0, learn_note_shifted(),
+			                                     learn_vel_sensed());
 			const int fwl = xg::nv::fw_voice_level(m_ram.data(), ch);
 			// **検算**: 読んだ目盛りから組み直した減衰が、実機が書いた 0x09 と
 			// 合うか。合わなければ塊が別の声のものなので、逆引きに落とす
 			const bool good = fwl > 0 &&
 			    xg::nv::volume_att_from(rom, fwl, rest, gain) == att_ref;
 			cal.base_level = good
-			    ? xg::nv::base_level_from_fw(rom, el0, fwl, m_learn_note)
-			    : xg::nv::calibrate_level(rom, el0, att_ref, m_learn_note,
-			                              m_learn_vel, gain);
+			    ? xg::nv::base_level_from_fw(rom, el0, fwl, learn_note_shifted())
+			    : xg::nv::calibrate_level(rom, el0, att_ref, learn_note_shifted(),
+			                              learn_vel_sensed(), gain);
 			if (!good && fwl > 0)
 				m_ne_lvl_miss++;
 		}
@@ -1389,7 +1392,7 @@ void mu2000::native_learn_finish()
 		// 同じ値が並ぶ表なので、こちらの目盛りにいちばん近いものを選ぶ
 		{
 			const u8 *el2 = xg::nv::element(rom, m_learn_rec, idx);
-			const int corr2 = xg::nv::rate_key_corr(el2, m_learn_note);
+			const int corr2 = xg::nv::rate_key_corr(el2, learn_note_shifted());
 			const int raw[2] = { int(el2[74]), int(el2[75]) };
 			for (int k = 0; k < 2; k++) {
 				if (!cal.has(0x07 + k))
@@ -1408,7 +1411,7 @@ void mu2000::native_learn_finish()
 			}
 		}
 		cal.cal_vel  = m_learn_vel;
-		cal.cal_note = m_learn_note;
+		cal.cal_note = learn_note_shifted();
 		cal.cal_vol  = m_ndrv.part_vol(m_learn_part);
 		cal.cal_expr = m_ndrv.part_expr(m_learn_part);
 		cal.cal_pan  = m_ndrv.part_pan(m_learn_part);

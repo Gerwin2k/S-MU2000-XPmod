@@ -513,6 +513,17 @@ private:
 	u32  m_ne_learn_dirty = 0;
 	// 写し取りで、その音色のものでないスロットを掴んで捨てた回数
 	u32  m_ne_learn_wrong = 0;
+	// **写し取りの鍵**。firmware は XG のノートシフト（08 pp 08）を足して
+	// から鳴らすので、こちらの式もその鍵で見ないと合わない
+	// **写し取りの強さ**。firmware はベロシティ感度（08 pp 0C・0D）を掛けて
+	// から鳴らすので、こちらの式もその強さで見る
+	int  learn_vel_sensed() const
+	{ return m_ndrv.part_vel(m_learn_part, m_learn_vel); }
+	int  learn_note_shifted() const
+	{
+		const int n = m_learn_note + m_ndrv.part_shift(m_learn_part);
+		return n < 0 ? 0 : (n > 127 ? 127 : n);
+	}
 	// 実機のボイスの塊から読んだ音量の目盛りが、写し取った 0x09 と合わなかった数
 	u32  m_ne_lvl_miss = 0;
 	// firmware が、こちらが鳴らしているスロットに書いた回数

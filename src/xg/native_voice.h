@@ -349,6 +349,22 @@ struct defaults {
 	u16 iir[6] = { 0xe05d, 0x1fa3, 0x2000, 0x0257, 0xfda9, 0x2000 };
 };
 
+// **ベロシティ感度**（XG の 08 pp 0C 深さ・0D ずらし。どちらも既定 64）。
+// 実測（Strings1・強さ 100 と 40）で
+//
+//   効く強さ = clamp(強さ * 深さ / 64 + (ずらし - 64) * 2, 1, 127)
+//
+// 深さ 16 で 100 -> 25、32 で 50、48 で 75、80 以上で頭打ち。
+// ずらし 32 で 100 -> 36、48 で 68、72 で 116、強さ 40 のときは 32 で 1
+inline int vel_sense(int vel, int depth, int offset)
+{
+	const int d = depth  < 0 ? 64 : (depth  > 127 ? 127 : depth);
+	const int o = offset < 0 ? 64 : (offset > 127 ? 127 : offset);
+	int v = vel * d / 64 + (o - 64) * 2;
+	if (v < 1) v = 1;
+	return v > 127 ? 127 : v;
+}
+
 // 強さから、音量レジスタに足す減衰を出す（firmware の 0x128DA0）。
 //
 //   減衰 = 表2[0x1E6798 + 表1[0x1E5E5E + 曲線*128 + 強さ]]
