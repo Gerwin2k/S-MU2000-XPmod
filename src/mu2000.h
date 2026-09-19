@@ -398,12 +398,14 @@ private:
 	// 内訳: MIDI は 1 バイト 10 ビット・31250 baud なので 14.1 サンプルかかる。
 	// 3 バイトの鍵で 42 サンプル、残り 32 サンプルが firmware の中の手間
 	static constexpr u32 NATIVE_DELAY = 74;
-	// **バイトを受け終えてから鳴るまで**。`SMU2000_NATIVE_PROC` で振れる
-	// （キーオンの時刻を実機と合わせる調べもの用。doc の 6.73）
-	static u32 native_proc()
+	// **バイトを受け終えてから鳴るまで**（1/64 サンプル単位）。
+	// 実機の遅れは 72 と 73 を行き来する ＝ 端数がある。整数で足していた
+	// ころは必ず 73 になり、1 サンプルずれる音が出ていた（doc の 6.92）。
+	// `SMU2000_NATIVE_PROC` で振れる（1/64 サンプル単位）
+	static u32 native_proc64()
 	{
 		static const u32 v = std::getenv("SMU2000_NATIVE_PROC")
-		                   ? u32(std::atoi(std::getenv("SMU2000_NATIVE_PROC"))) : 32;
+		                   ? u32(std::atoi(std::getenv("SMU2000_NATIVE_PROC"))) : 32 * 64;
 		return v;
 	}
 	// 1 バイト（1/64 サンプル単位）。`SMU2000_RX_BYTE` で振れる（0 にすると
@@ -473,7 +475,7 @@ private:
 		if (m_rx_at[port] < now)
 			m_rx_at[port] = now;
 		m_rx_at[port] += rx_byte_tick();
-		return m_rx_at[port] / 64 + native_proc();
+		return (m_rx_at[port] + native_proc64()) / 64;
 	}
 	bool nown(int part, int note) const
 	{ return (m_nown[part][(note >> 5) & 3] & (u32(1) << (note & 31))) != 0; }
