@@ -39,9 +39,10 @@
 #include <string>
 #include <vector>
 
-int diag;
 
 namespace {
+
+bool diag;
 
 constexpr u32 RATE = 44100;
 
@@ -292,7 +293,8 @@ struct generator {
                 ? 100.0 * busy / audio
                 : 0.0;
 		
-		if (diag)
+
+		if (diag==true)
 		{
 
         std::printf(
@@ -773,7 +775,7 @@ int main(int argc, char **argv)
     bool single = false;
     bool factory = false;
     bool fast_midi = false;
-	bool diag = false;
+	diag = false;
 
     // Current upstream engine options. These are applied using the same
     // mu2000 setters as current upstream live.cpp.
@@ -795,8 +797,7 @@ int main(int argc, char **argv)
             i + 1 < argc) {
             midi_dev = std::atoi(argv[++i]);
         }
-        else if (!std::strcmp(argv[i], "--diag") &&
-                 i + 1 < argc) {
+        else if (!std::strcmp(argv[i], "--diag")) {
             diag=true; // GB 2026
         }
         else if (!std::strcmp(argv[i], "--frames") &&
