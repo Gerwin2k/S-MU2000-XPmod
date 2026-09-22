@@ -304,19 +304,19 @@ struct generator {
             cpu);
 
         std::printf(
-            "     fill: avg %.2f ms / worst %.2f ms / block %.2f ms\n",
+            "     fill:   avg %.2f  ms / worst %.2f  ms / block %.2f ms\n",
             avg_fill_ms,
             worst_fill_ms,
             block_ms);
 
         std::printf(
-            "     MIDI: avg %.3f ms / worst %.3f ms / max %llu bytes per fill\n",
+            "     MIDI:   avg %.3f ms / worst  %.3f ms / max %llu bytes per fill\n",
             avg_midi_ms,
             worst_midi_ms,
             (unsigned long long)max_midi_bytes);
 
         std::printf(
-            "     render: avg %.2f ms / worst %.2f ms\n",
+            "     render: avg %.2f  ms / worst %.2f  ms\n",
             avg_render_ms,
             worst_render_ms);
 
